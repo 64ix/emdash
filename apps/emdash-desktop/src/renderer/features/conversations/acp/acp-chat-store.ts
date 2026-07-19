@@ -85,6 +85,7 @@ import {
   EMPTY_CHANGES_FOOTPRINT,
   type ChangesFootprint,
 } from './changes/acp-changes-footprint';
+import { permissionModeIconKind } from './permission-mode-icon-kind';
 
 export type {
   AcpPromptAttachment,
@@ -425,7 +426,11 @@ export class AcpChatStore {
     return Object.fromEntries(
       options.available.map((option) => [
         option.id,
-        { name: option.name, description: option.description },
+        {
+          name: option.name,
+          description: option.description,
+          iconKind: permissionModeIconKind(option.id),
+        },
       ])
     );
   }
