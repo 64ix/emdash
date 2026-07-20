@@ -5,7 +5,7 @@ import { log } from '@renderer/utils/logger';
 import { AcpChatStore } from './acp-chat-store';
 import type { AcpHistoryPagination } from './acp-history-pagination';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
-import { permissionModeIconKind } from './permission-mode-icon-kind';
+import { permissionModePresentation } from './permission-mode-presentation';
 
 // ── AcpChatStore.loadOlderHistory — bound view vs. unbound fallback ──────────
 //
@@ -1760,7 +1760,7 @@ describe('bindSessionTerminalOutputs', () => {
   });
 });
 
-describe('permissionModeIconKind', () => {
+describe('permissionModePresentation', () => {
   it.each([
     ['codex', 'read-only', 'ask'],
     ['codex', 'agent', 'approve'],
@@ -1774,15 +1774,31 @@ describe('permissionModeIconKind', () => {
     ['opencode', 'build', 'approve'],
     ['opencode', 'plan', 'plan'],
   ] as const)('maps the known %s harness mode %s', (providerId, modeId, expected) => {
-    expect(permissionModeIconKind(providerId, modeId)).toBe(expected);
+    expect(permissionModePresentation(providerId, modeId, 'Original')).toMatchObject({
+      iconKind: expected,
+    });
   });
 
   it('uses the approval icon for unknown future harness modes', () => {
-    expect(permissionModeIconKind('claude', 'custom')).toBe('approve');
+    expect(permissionModePresentation('claude', 'custom', 'Custom')).toEqual({
+      iconKind: 'approve',
+      name: 'Custom',
+    });
   });
 
   it('does not interpret mode IDs from another provider', () => {
-    expect(permissionModeIconKind('opencode', 'bypassPermissions')).toBe('approve');
-    expect(permissionModeIconKind('claude', 'agent-full-access')).toBe('approve');
+    expect(permissionModePresentation('opencode', 'bypassPermissions', 'Bypass').iconKind).toBe(
+      'approve'
+    );
+    expect(permissionModePresentation('claude', 'agent-full-access', 'Agent').iconKind).toBe(
+      'approve'
+    );
+  });
+
+  it.each([
+    ['build', 'Build'],
+    ['plan', 'Plan'],
+  ])('formats the OpenCode %s mode name as %s', (modeId, expected) => {
+    expect(permissionModePresentation('opencode', modeId, modeId).name).toBe(expected);
   });
 });
