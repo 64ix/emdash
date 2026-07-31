@@ -487,7 +487,6 @@ const BoardCard = observer(function BoardCard({
       </button>
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <Badge variant="outline">{task.status}</Badge>
           {linkedIssue && (
             <Badge variant="outline" title={linkedIssue.issue.title}>
               {linkedIssueBadgeText(linkedIssue)}
