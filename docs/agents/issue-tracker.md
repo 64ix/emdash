@@ -34,6 +34,24 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 Create a GitHub issue on `64ix/emdash`.
 
+## Task Marker
+
+When a skill publishes a **Spec** (`[Spec] <feature>`) or **Map**
+(`wayfinder:map`) issue for the task the current agent session is running in,
+append a final body line:
+
+```
+Emdash-Task: $EMDASH_TASK_ID
+```
+
+`EMDASH_TASK_ID` is present in the environment of any agent session emdash
+attaches to a task (PTY and ACP, local and SSH); echo it if you need to
+confirm it's set. The inbound sync reads this marker to attach the published
+issue to the right task's Linked Issue Role (Map or Spec) automatically —
+without it, the issue surfaces as an unlinked suggestion instead. Do not add
+the marker to Origin issues (bug reports / requests the idea came from) or to
+child ticket issues under a Map — only to the Spec or Map issue itself.
+
 ## When a skill says "fetch the relevant ticket"
 
 Run `gh issue view <number> --comments`.
