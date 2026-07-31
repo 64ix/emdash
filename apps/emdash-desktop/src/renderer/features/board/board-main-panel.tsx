@@ -445,7 +445,6 @@ const BoardCard = observer(function BoardCard({
       </button>
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <Badge variant="outline">{task.status}</Badge>
           {sessionCount > 0 && (
             <span className="flex items-center gap-0.5 text-[10px] text-foreground-muted">
               <MessageSquare className="size-3" />
