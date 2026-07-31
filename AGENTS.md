@@ -437,3 +437,42 @@ pnpm run test
 - [Updater risk notes](agents/risky-areas/updater.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Project README](README.md)
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues on the fork `64ix/emdash` (via the `gh` CLI; never on
+upstream `generalaction/emdash`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: one root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
+
+### Spec implementation runner
+
+Base branch **`fork-main`** — not `main`. `origin/HEAD` points at `main`, but that
+branch is a pristine mirror of `upstream/main` (see `FORK.md`); all fork work and
+PRs target `fork-main`. Validate a change from the worktree root with:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm exec nx run-many -t build --projects "packages/*"
+cd apps/emdash-desktop
+pnpm typecheck
+pnpm exec oxlint .
+pnpm exec vitest run --project node --project main-db --project migrations --project scripts
+```
+
+This mirrors `.github/workflows/fork-ci.yml`, plus the PTY integration tests: do
+**not** set `FORK_CI=1` locally — a real PTY is available, so those tests must run
+and pass. Format with `pnpm run format` from the repo root. Coding standards live
+in the "Code Style & Conventions" section of this file. Browser (Playwright) and
+Docker-SSH tests are infra-dependent and not part of the agent gate; report them
+`not-run` when the infrastructure is absent. Specs follow the conventions in
+`docs/agents/implement-spec.md`.
