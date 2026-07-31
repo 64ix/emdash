@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f3e40994-a68f-494e-b7fa-46a0447f764d",
-  "prevId": "6a2e9f47-4c8e-4fc0-bc92-1bc24e36e763",
+  "id": "7d82b568-0104-47bf-b7d5-baf3bf25b1a0",
+  "prevId": "f3e40994-a68f-494e-b7fa-46a0447f764d",
   "tables": {
     "app_secrets": {
       "name": "app_secrets",
@@ -1525,6 +1525,13 @@
         },
         "workflow_stage": {
           "name": "workflow_stage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "board_rank": {
+          "name": "board_rank",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

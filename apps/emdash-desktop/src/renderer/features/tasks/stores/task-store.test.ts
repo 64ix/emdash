@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { rpc } from '@renderer/lib/ipc';
 import type { Task } from '@shared/core/tasks/tasks';
-import { createUnprovisionedTask } from './task-store';
+import { createUnprovisionedTask, registeredTaskData } from './task-store';
 
 type MockViewModel = {
   initialize: ReturnType<typeof vi.fn>;
@@ -56,6 +57,10 @@ vi.mock('@renderer/features/conversations/stores/conversation-registry', () => (
   },
 }));
 
+vi.mock('@renderer/utils/logger', () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
 vi.mock('@renderer/lib/ipc', () => ({
   events: {
     on: vi.fn(() => () => {}),
@@ -64,6 +69,7 @@ vi.mock('@renderer/lib/ipc', () => ({
     tasks: {
       renameTask: vi.fn(),
       updateTaskStatus: vi.fn(),
+      updateTaskBoardPosition: vi.fn(),
       setTaskPinned: vi.fn(),
       updateLinkedIssue: vi.fn(),
       convertAutomationTask: vi.fn(),
@@ -158,5 +164,54 @@ describe('TaskStore frontend runtime lifecycle', () => {
     expect(mocks.viewModels[1].initialize).toHaveBeenCalledOnce();
     expect(store.draftComments).toBe(mocks.draftComments[1]);
     expect(store.state).toBe('provisioned');
+  });
+});
+
+describe('TaskStore.updateBoardPosition', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('optimistically applies the new stage and rank before the RPC resolves', async () => {
+    const task = makeTask({ workflowStage: 'idea', boardRank: undefined });
+    const store = createUnprovisionedTask(task);
+    let resolveRpc: () => void = () => {};
+    vi.mocked(rpc.tasks.updateTaskBoardPosition).mockReturnValue(
+      new Promise((resolve) => {
+        resolveRpc = () => resolve(undefined);
+      })
+    );
+
+    const pending = store.updateBoardPosition('spec', 'm');
+
+    expect(registeredTaskData(store)?.workflowStage).toBe('spec');
+    expect(registeredTaskData(store)?.boardRank).toBe('m');
+
+    resolveRpc();
+    await pending;
+
+    expect(rpc.tasks.updateTaskBoardPosition).toHaveBeenCalledWith('task-1', 'spec', 'm');
+  });
+
+  it('clears the workflow stage on the store when dropping into Unstaged', async () => {
+    const task = makeTask({ workflowStage: 'spec' });
+    const store = createUnprovisionedTask(task);
+    vi.mocked(rpc.tasks.updateTaskBoardPosition).mockResolvedValue(undefined);
+
+    await store.updateBoardPosition(null, 'm');
+
+    expect(registeredTaskData(store)?.workflowStage).toBeUndefined();
+    expect(registeredTaskData(store)?.boardRank).toBe('m');
+  });
+
+  it('rolls back stage and rank when the RPC call fails', async () => {
+    const task = makeTask({ workflowStage: 'idea', boardRank: 'a' });
+    const store = createUnprovisionedTask(task);
+    vi.mocked(rpc.tasks.updateTaskBoardPosition).mockRejectedValue(new Error('offline'));
+
+    await expect(store.updateBoardPosition('spec', 'm')).rejects.toThrow('offline');
+
+    expect(registeredTaskData(store)?.workflowStage).toBe('idea');
+    expect(registeredTaskData(store)?.boardRank).toBe('a');
   });
 });

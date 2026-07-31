@@ -126,6 +126,7 @@ export const tasks = sqliteTable(
     name: text('name').notNull(),
     status: text('status').notNull(),
     workflowStage: text('workflow_stage'), // feature workflow stage (idea → spec → PR); null = unstaged
+    boardRank: text('board_rank'), // manual Feature Board position within a column (fractional index); null = unranked
     sourceBranch: text('source_branch').$type<StoredBranch>(), // @deprecated — moved to workspaces.config (git.fromBranch)
     taskBranch: text('task_branch'), // @deprecated — use workspaces.config for provisioned branch identity
     linkedIssue: versionedJsonColumn(linkedIssue)('linked_issue'),
