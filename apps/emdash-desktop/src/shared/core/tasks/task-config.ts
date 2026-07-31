@@ -1,6 +1,6 @@
 import z from 'zod';
 import { defineVersionedSchema } from '@shared/lib/versioned-schema/versioned-schema';
-import { linkedIssue } from '../linked-issue';
+import { linkedIssueSchema } from '../linked-issue';
 import { taskLifecycleStatuses } from './tasks';
 
 const initialQueuePromptSchema = z.object({
@@ -11,7 +11,7 @@ const initialQueuePromptSchema = z.object({
 const v1Schema = z.object({
   version: z.literal('1'),
   name: z.string(),
-  linkedIssue: linkedIssue.asNested().optional(),
+  linkedIssue: linkedIssueSchema.optional(),
   initialConversation: z
     .object({
       id: z.string(),

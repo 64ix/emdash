@@ -14,7 +14,7 @@ export function mapTaskRowToTask(
     name: row.name,
     status: row.status as TaskLifecycleStatus,
     workflowStage: stage.success ? stage.data : undefined,
-    linkedIssue: row.linkedIssue ?? undefined,
+    linkedIssues: row.linkedIssues ?? undefined,
     archivedAt: row.archivedAt ?? undefined,
     lastInteractedAt: row.lastInteractedAt ?? undefined,
     createdAt: row.createdAt,

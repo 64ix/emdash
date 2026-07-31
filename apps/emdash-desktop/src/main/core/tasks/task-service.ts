@@ -11,7 +11,7 @@ import { tasks, workspaces } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { HookCore, type Hookable } from '@main/lib/hookable';
 import { log } from '@main/lib/logger';
-import type { LinkedIssue } from '@shared/core/linked-issue';
+import type { LinkedIssue, LinkedIssueRole } from '@shared/core/linked-issue';
 import {
   taskCreatedChannel,
   taskDeletedChannel,
@@ -36,7 +36,7 @@ import { getTasks } from './operations/getTasks';
 import { renameTask } from './operations/renameTask';
 import { restoreTask } from './operations/restoreTask';
 import { setTaskPinned } from './operations/setTaskPinned';
-import { updateLinkedIssue } from './operations/updateLinkedIssue';
+import { updateLinkedIssueRole } from './operations/updateLinkedIssueRole';
 import { updateTaskStatus } from './operations/updateTaskStatus';
 import { updateTaskWorkflowStage } from './operations/updateTaskWorkflowStage';
 import type { TeardownTaskError } from './provision-task-error';
@@ -219,8 +219,12 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
     return result;
   }
 
-  async updateLinkedIssue(taskId: string, issue?: LinkedIssue): Promise<void> {
-    const task = await updateLinkedIssue(taskId, issue);
+  async updateLinkedIssueRole(
+    taskId: string,
+    role: LinkedIssueRole,
+    issue: LinkedIssue | null
+  ): Promise<void> {
+    const task = await updateLinkedIssueRole(taskId, role, issue);
     if (task) this._hooks.callHookBackground('task:updated', task);
   }
 
