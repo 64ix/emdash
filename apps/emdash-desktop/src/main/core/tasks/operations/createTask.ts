@@ -3,6 +3,7 @@ import { err, ok, type Result } from '@emdash/shared';
 import { eq, sql } from 'drizzle-orm';
 import { agentHookService } from '@main/core/agent-hooks/agent-hook-service';
 import { isAppFocused } from '@main/core/agent-hooks/notification';
+import { maybeAutoTitleConversation } from '@main/core/conversations/maybeAutoTitleConversation';
 import { mapConversationRowToConversation } from '@main/core/conversations/utils';
 import { projectManager } from '@main/core/projects/project-manager';
 import { db, type DrizzleTx } from '@main/db/client';
@@ -194,17 +195,28 @@ export function commitCreateTask(
  * Builds the `CreateTaskSuccess` result and emits post-commit side-effect events.
  * Call this after the transaction that ran `commitCreateTask` has committed.
  */
-export function finalizeCreateTask(
+export async function finalizeCreateTask(
   prepared: PreparedCreateTask,
   taskRow: TaskRow,
   convRow: ConversationRow | undefined
-): CreateTaskSuccess {
+): Promise<CreateTaskSuccess> {
   const task = mapTaskRowToTask(taskRow, []);
 
   let initialConversation: Conversation | undefined;
   if (convRow) {
     initialConversation = mapConversationRowToConversation(convRow);
     events.emit(conversationCreatedChannel, { conversation: initialConversation });
+    const initialConfig = prepared.params.taskConfig.initialConversation;
+    const titlePrompt =
+      initialConversation.type === 'acp'
+        ? initialConversation.initialQueue?.[0]?.text
+        : initialConfig?.initialPrompt;
+    if (titlePrompt) {
+      const autoTitle = await maybeAutoTitleConversation(initialConversation.id, titlePrompt);
+      if (autoTitle.title) {
+        initialConversation = { ...initialConversation, title: autoTitle.title };
+      }
+    }
     emitInitialPtyPromptStarted(initialConversation, prepared);
   }
 
@@ -223,5 +235,5 @@ export async function createTask(
     ({ taskRow, convRow } = commitCreateTask(prepared.data, tx));
   });
 
-  return ok(finalizeCreateTask(prepared.data, taskRow, convRow));
+  return ok(await finalizeCreateTask(prepared.data, taskRow, convRow));
 }

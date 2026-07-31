@@ -2,6 +2,7 @@ import type { IDisposable, IInitializable } from '@emdash/shared';
 import { eq } from 'drizzle-orm';
 import { getPlugin } from '@main/core/agents/plugin-registry';
 import { conversationEvents } from '@main/core/conversations/conversation-events';
+import { maybeAutoTitleConversation } from '@main/core/conversations/maybeAutoTitleConversation';
 import { setSessionId } from '@main/core/conversations/set-session-id';
 import { touchConversation } from '@main/core/conversations/touchConversation';
 import { db } from '@main/db/client';
@@ -154,6 +155,9 @@ class AgentHookService implements IInitializable, IDisposable, Hookable<AgentHoo
       }
 
       const event = parsed.event;
+      if (event.type === 'start' && event.payload.prompt) {
+        await maybeAutoTitleConversation(event.conversationId, event.payload.prompt);
+      }
       const appFocused = isAppFocused();
       await maybeShowNotification(event, appFocused);
       this.emitAgentEvent(event, appFocused);

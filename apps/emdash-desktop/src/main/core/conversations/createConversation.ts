@@ -17,9 +17,10 @@ import { agentHookService } from '../agent-hooks/agent-hook-service';
 import { isAppFocused } from '../agent-hooks/notification';
 import { resolveTask } from '../projects/utils';
 import { conversationEvents } from './conversation-events';
+import { maybeAutoTitleConversation } from './maybeAutoTitleConversation';
 import { mapConversationRowToConversation } from './utils';
 
-type ConversationCreateDb = Pick<typeof db, 'delete' | 'insert' | 'select'>;
+type ConversationCreateDb = Pick<typeof db, 'delete' | 'insert' | 'select' | 'update'>;
 
 function emitInitialPromptStarted(
   conversation: Conversation,
@@ -92,7 +93,7 @@ export async function createConversation(
     })
     .returning();
 
-  const conversation = mapConversationRowToConversation(row);
+  let conversation = mapConversationRowToConversation(row);
 
   // ACP conversations start lazily on hydrateConversation — no PTY session here.
   if (conversationType !== 'acp') {
@@ -123,6 +124,11 @@ export async function createConversation(
 
   conversationEvents._emit('conversation:created', conversation);
   events.emit(conversationCreatedChannel, { conversation });
+  const titlePrompt = conversationType === 'acp' ? initialQueue?.[0]?.text : params.initialPrompt;
+  if (titlePrompt) {
+    const autoTitle = await maybeAutoTitleConversation(conversation.id, titlePrompt, database);
+    if (autoTitle.title) conversation = { ...conversation, title: autoTitle.title };
+  }
   emitInitialPromptStarted(conversation, params);
   telemetryService.capture('conversation_created', {
     provider: params.provider,

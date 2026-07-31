@@ -69,6 +69,18 @@ describe('buildCodexHookConfig', () => {
     expect(config).toContain('echo user-prompt');
     expect(config).toContain('notification_type');
     expect(config).toContain('session-start');
+    expect(config).toContain('UserPromptSubmit');
+    expect(config).toContain('X-Emdash-Event-Type: start');
+  });
+
+  it('preserves the prompt in canonical UserPromptSubmit events', () => {
+    const hooks = buildCodexHookConfig();
+
+    expect(hooks.parseHookEvent('start', { prompt: 'Trace the failing request' })).toMatchObject({
+      kind: 'status',
+      type: 'start',
+      prompt: 'Trace the failing request',
+    });
   });
 
   it('keeps legacy hooks.json when writing config.toml fails', async () => {

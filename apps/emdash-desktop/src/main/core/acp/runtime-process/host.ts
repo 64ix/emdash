@@ -9,6 +9,7 @@ import {
 import { lazyWorker, type WorkerHandle } from '@emdash/wire/worker';
 import { app, ipcMain, MessageChannelMain } from 'electron';
 import { appScope } from '@main/app/app-scope';
+import { maybeAutoTitleConversation } from '@main/core/conversations/maybeAutoTitleConversation';
 import { setSessionId } from '@main/core/conversations/set-session-id';
 import { providerOverrideSettings } from '@main/core/settings/provider-settings-service';
 import { log } from '@main/lib/logger';
@@ -32,8 +33,7 @@ const acpWorker = lazyWorker(
     },
   }),
   {
-    onSpawned: (handle) =>
-      installRendererWire(withSessionIdPersistence(withProviderEnv(handle.client))),
+    onSpawned: (handle) => installRendererWire(decorateAcpRuntimeClient(handle.client)),
   }
 );
 
@@ -54,7 +54,11 @@ export async function disposeAcpRuntimeProcess(): Promise<void> {
 }
 
 function decorateAcpRuntimeHandle(handle: WorkerHandle<AcpApiContract>): AcpRuntimeHandle {
-  return { ...handle, client: withSessionIdPersistence(withProviderEnv(handle.client)) };
+  return { ...handle, client: decorateAcpRuntimeClient(handle.client) };
+}
+
+function decorateAcpRuntimeClient(client: AcpRuntimeClient): AcpRuntimeClient {
+  return withConversationAutoTitle(withSessionIdPersistence(withProviderEnv(client)));
 }
 
 /**
@@ -93,6 +97,34 @@ function withSessionIdPersistence(client: AcpRuntimeClient): AcpRuntimeClient {
       const result = await client.resumeSession(input, meta);
       if (result.success) {
         await persistReturnedSessionId(input.input.conversationId, result.data.sessionId);
+      }
+      return result;
+    },
+  };
+}
+
+function withConversationAutoTitle(client: AcpRuntimeClient): AcpRuntimeClient {
+  return {
+    ...client,
+    startSession: async (input, meta) => {
+      const result = await client.startSession(input, meta);
+      const prompt = input.input.initialQueue?.[0]?.text;
+      if (result.success && prompt) {
+        await maybeAutoTitleConversation(input.input.conversationId, prompt);
+      }
+      return result;
+    },
+    sendPrompt: async (input, meta) => {
+      const result = await client.sendPrompt(input, meta);
+      if (result.success) {
+        await maybeAutoTitleConversation(input.conversationId, input.prompt.text);
+      }
+      return result;
+    },
+    queuePrompt: async (input, meta) => {
+      const result = await client.queuePrompt(input, meta);
+      if (result.success) {
+        await maybeAutoTitleConversation(input.conversationId, input.prompt.text);
       }
       return result;
     },

@@ -215,7 +215,7 @@ export async function executeTaskCreate(
       ({ taskRow, convRow } = commitCreateTask(prepared.data, tx));
     });
 
-    const createSuccess = finalizeCreateTask(prepared.data, taskRow, convRow);
+    const createSuccess = await finalizeCreateTask(prepared.data, taskRow, convRow);
     taskService.notifyTaskCreated(createSuccess.task, createTaskParams);
 
     const launching = await markRunLaunchingTask(run.id, Date.now());

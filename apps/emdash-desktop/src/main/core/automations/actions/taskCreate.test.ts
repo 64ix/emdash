@@ -145,7 +145,9 @@ describe('executeTaskCreate', () => {
     vi.mocked(projectManager.getProject).mockReturnValue({} as never);
     vi.mocked(prepareCreateTask).mockResolvedValue({ success: true, data: preparedData });
     vi.mocked(commitCreateTask).mockReturnValue({ taskRow: mockTaskRow, convRow: mockConvRow });
-    vi.mocked(finalizeCreateTask).mockReturnValue({ task: { id: 'task-generated-uuid' } } as never);
+    vi.mocked(finalizeCreateTask).mockResolvedValue({
+      task: { id: 'task-generated-uuid' },
+    } as never);
     vi.mocked(taskService.launch).mockResolvedValue({
       success: true,
       data: { path: '/tmp/task', workspaceId: 'workspace-1' },
