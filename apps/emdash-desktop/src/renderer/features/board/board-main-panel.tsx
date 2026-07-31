@@ -7,7 +7,10 @@ import {
   stageOf,
   type ColumnId,
 } from '@renderer/features/board/board-columns';
-import { getProjectStore, projectDisplayName } from '@renderer/features/projects/stores/project-selectors';
+import {
+  getProjectStore,
+  projectDisplayName,
+} from '@renderer/features/projects/stores/project-selectors';
 import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
