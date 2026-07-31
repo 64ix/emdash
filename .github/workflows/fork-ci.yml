@@ -14,8 +14,8 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    # No ELECTRON_SKIP_BINARY_DOWNLOAD here: the vitest 'node' project imports the
+    # electron module, which needs the real binary installed by its postinstall.
     steps:
       - uses: actions/checkout@v4
 
