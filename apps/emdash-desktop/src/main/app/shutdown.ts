@@ -4,6 +4,7 @@ import { disposeAcpRuntimeProcess } from '@main/core/acp/controller';
 import { disposeAgentConfigRuntimeProcess } from '@main/core/agent-config/controller';
 import { agentHookService } from '@main/core/agent-hooks/agent-hook-service';
 import { automationsService } from '@main/core/automations/automations-service';
+import { issuesSyncScheduler } from '@main/core/issues/inbound-sync/issues-sync-scheduler';
 import { remoteTmuxReaperService } from '@main/core/pty/remote-tmux-reaper-service';
 import { prSyncScheduler } from '@main/core/pull-requests/pr-sync-scheduler';
 import { stopResourceSampler } from '@main/core/resource-monitor/resource-sampler';
@@ -47,6 +48,7 @@ export async function runQuitCleanup(): Promise<void> {
   stopResourceSampler();
   updateService.dispose();
   prSyncScheduler.dispose();
+  issuesSyncScheduler.dispose();
   remoteTmuxReaperService.dispose();
 
   // critical phase

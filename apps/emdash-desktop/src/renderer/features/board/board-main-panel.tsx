@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
+import { useEffect } from 'react';
 import {
   adjacentStage,
   COLUMNS,
@@ -7,12 +8,14 @@ import {
   stageOf,
   type ColumnId,
 } from '@renderer/features/board/board-columns';
+import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import {
   getProjectStore,
   projectDisplayName,
 } from '@renderer/features/projects/stores/project-selectors';
 import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
+import { rpc } from '@renderer/lib/ipc';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import {
@@ -37,6 +40,13 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
 
+  // Runs an inbound issues sync pass on top of its periodic cadence whenever
+  // the Feature Board opens for a project (see ticket #8's "on board open"
+  // criterion). Additive/best-effort — failures are logged by the scheduler.
+  useEffect(() => {
+    void rpc.issues.syncIssuesNow(projectId);
+  }, [projectId]);
+
   if (!manager) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-foreground-muted">
@@ -58,6 +68,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
         <h1 className="text-sm font-medium">Feature board</h1>
         <span className="text-xs text-foreground-muted">{projectName}</span>
       </div>
+      <BoardLinkSuggestions projectId={projectId} />
       <div className="flex flex-1 gap-3 overflow-x-auto px-4 pb-4">
         {COLUMNS.map((column) => (
           <BoardColumn

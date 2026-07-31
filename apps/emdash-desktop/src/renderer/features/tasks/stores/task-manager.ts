@@ -14,14 +14,17 @@ import { events, rpc } from '@renderer/lib/ipc';
 import { viewStateCache } from '@renderer/lib/stores/view-state-cache';
 import type { Conversation } from '@shared/core/conversations/conversations';
 import { gitWorktreeUpdateChannel } from '@shared/core/git/events';
+import { setLinkedIssueRole } from '@shared/core/linked-issue';
 import { prSyncProgressChannel, prUpdatedChannel } from '@shared/core/pull-requests/prEvents';
 import {
   lifecycleScriptStatusChannel,
   taskCreatedChannel,
   taskDeletedChannel,
+  taskLinkedIssueRoleUpdatedChannel,
   taskProvisionProgressChannel,
   taskProvisionedChannel,
   taskStatusUpdatedChannel,
+  taskWorkflowStageUpdatedChannel,
 } from '@shared/core/tasks/taskEvents';
 import type {
   CreateTaskError,
@@ -135,6 +138,8 @@ export class TaskManagerStore {
   private _unsubStatusUpdated: (() => void) | null = null;
   private _unsubLifecycleScriptStatus: (() => void) | null = null;
   private _unsubProvisioned: (() => void) | null = null;
+  private _unsubWorkflowStageUpdated: (() => void) | null = null;
+  private _unsubLinkedIssueRoleUpdated: (() => void) | null = null;
   private _disposeRepositoryReaction: (() => void) | null = null;
 
   tasks = observable.map<string, TaskStore>();
@@ -177,6 +182,37 @@ export class TaskManagerStore {
         if (store && isProvisioned(store)) {
           runInAction(() => {
             store.data.status = status as TaskLifecycleStatus;
+          });
+        }
+      }
+    );
+
+    // Handles Workflow Stage / Linked Issue Role writes from any main-process
+    // caller (the inbound issues sync deriving facts from GitHub — ticket #8),
+    // not just renderer-initiated RPCs, mirroring the `taskProvisionedChannel`
+    // "regardless of which path" precedent above.
+    this._unsubWorkflowStageUpdated = events.on(
+      taskWorkflowStageUpdatedChannel,
+      ({ taskId, projectId: evtProjectId, stage }) => {
+        if (evtProjectId !== this.projectId) return;
+        const store = this.tasks.get(taskId);
+        if (store && isRegistered(store)) {
+          runInAction(() => {
+            (store.data as Task).workflowStage = stage ?? undefined;
+          });
+        }
+      }
+    );
+
+    this._unsubLinkedIssueRoleUpdated = events.on(
+      taskLinkedIssueRoleUpdatedChannel,
+      ({ taskId, projectId: evtProjectId, role, issue }) => {
+        if (evtProjectId !== this.projectId) return;
+        const store = this.tasks.get(taskId);
+        if (store && isRegistered(store)) {
+          runInAction(() => {
+            const task = store.data as Task;
+            task.linkedIssues = setLinkedIssueRole(task.linkedIssues, role, issue);
           });
         }
       }
@@ -700,6 +736,10 @@ export class TaskManagerStore {
     this._unsubLifecycleScriptStatus = null;
     this._unsubProvisioned?.();
     this._unsubProvisioned = null;
+    this._unsubWorkflowStageUpdated?.();
+    this._unsubWorkflowStageUpdated = null;
+    this._unsubLinkedIssueRoleUpdated?.();
+    this._unsubLinkedIssueRoleUpdated = null;
     this._disposeRepositoryReaction?.();
     this._disposeRepositoryReaction = null;
   }
