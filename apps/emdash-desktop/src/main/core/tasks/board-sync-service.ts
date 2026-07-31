@@ -239,7 +239,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
     if (currentStage === nextStage) return; // idempotent: no diff -> no write, no event
 
     await updateTaskWorkflowStage(taskId, nextStage);
-    events.emit(taskWorkflowStageUpdatedChannel, { taskId, projectId, workflowStage: nextStage });
+    events.emit(taskWorkflowStageUpdatedChannel, { taskId, projectId, stage: nextStage });
   }
 }
 

@@ -9,6 +9,7 @@ import {
   stageOf,
   type ColumnId,
 } from '@renderer/features/board/board-columns';
+import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import {
   getProjectStore,
   projectDisplayName,
@@ -40,10 +41,13 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
 
-  // Board open triggers an immediate PR-facts derivation pass; background derivation
-  // otherwise follows the existing PR sync cadence (see board-sync-service.ts).
+  // Board open triggers an immediate derivation pass (PR facts + inbound issues);
+  // background derivation otherwise follows the existing sync cadences
+  // (see board-sync-service.ts and issues-sync-scheduler.ts). Best-effort —
+  // failures are logged main-side.
   useEffect(() => {
     void rpc.tasks.syncBoardStages(projectId);
+    void rpc.issues.syncIssuesNow(projectId);
   }, [projectId]);
 
   if (!manager) {
@@ -68,6 +72,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
         <h1 className="text-sm font-medium">Feature board</h1>
         <span className="text-xs text-foreground-muted">{projectName}</span>
       </div>
+      <BoardLinkSuggestions projectId={projectId} />
       <div className="flex flex-1 gap-3 overflow-x-auto px-4 pb-4">
         {COLUMNS.map((column) => (
           <BoardColumn

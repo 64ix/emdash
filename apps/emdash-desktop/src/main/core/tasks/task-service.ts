@@ -27,6 +27,7 @@ import type {
   RenameTaskError,
   RenameTaskSuccess,
   Task,
+  WorkflowStage,
 } from '@shared/core/tasks/tasks';
 import { boardSyncService } from './board-sync-service';
 import { archiveTask } from './operations/archiveTask';
@@ -37,10 +38,9 @@ import { getTasks } from './operations/getTasks';
 import { renameTask } from './operations/renameTask';
 import { restoreTask } from './operations/restoreTask';
 import { setTaskPinned } from './operations/setTaskPinned';
-import { updateLinkedIssueRole } from './operations/updateLinkedIssueRole';
 import { updateTaskStatus } from './operations/updateTaskStatus';
-import { updateTaskWorkflowStage } from './operations/updateTaskWorkflowStage';
 import type { TeardownTaskError } from './provision-task-error';
+import { writeLinkedIssueRole, writeTaskWorkflowStage } from './task-fact-writes';
 import { taskSessionManager } from './task-session-manager';
 import { mapTaskRowToTask } from './utils/utils';
 
@@ -225,8 +225,17 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
     role: LinkedIssueRole,
     issue: LinkedIssue | null
   ): Promise<void> {
-    const task = await updateLinkedIssueRole(taskId, role, issue);
+    const task = await writeLinkedIssueRole(taskId, role, issue);
     if (task) this._hooks.callHookBackground('task:updated', task);
+  }
+
+  /**
+   * Sets a task's Workflow Stage. See `writeTaskWorkflowStage` for the shared
+   * write-and-notify behavior (used by both this RPC-facing path and the
+   * inbound issues sync).
+   */
+  async updateTaskWorkflowStage(taskId: string, stage: WorkflowStage | null): Promise<void> {
+    await writeTaskWorkflowStage(taskId, stage);
   }
 
   async convertAutomationTask(taskId: string): Promise<Task | null> {
@@ -249,7 +258,6 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
 
   // Operations with no hook — thin pass-throughs
   updateTaskStatus = updateTaskStatus;
-  updateTaskWorkflowStage = updateTaskWorkflowStage;
   setTaskPinned = setTaskPinned;
   getTasks = getTasks;
 }
