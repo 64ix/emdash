@@ -4,14 +4,18 @@ import { eq } from 'drizzle-orm';
 import { getProjectRemoteUrls } from '@main/core/pull-requests/project-remotes-service';
 import { createTask } from '@main/core/tasks/operations/createTask';
 import { writeTaskWorkflowStage } from '@main/core/tasks/task-fact-writes';
+import { taskService } from '@main/core/tasks/task-service';
 import { db } from '@main/db/client';
 import { projects } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import { ghostCardsUpdatedChannel } from '@shared/core/issues/issueEvents';
-import { taskCreatedChannel } from '@shared/core/tasks/taskEvents';
-import type { CreateTaskError, CreateTaskSuccess } from '@shared/core/tasks/tasks';
+import type {
+  CreateTaskError,
+  CreateTaskParams,
+  CreateTaskSuccess,
+} from '@shared/core/tasks/tasks';
 import { buildWorkspaceConfigFromPreset } from '@shared/core/workspaces/build-workspace-config-from-preset';
 import {
   getCachedGhostCards,
@@ -40,11 +44,15 @@ export async function getGhostCardsForProject(projectId: string): Promise<GhostC
  * resurfaces (an adopted ghost becomes a linked task, which the root-issue
  * filter already excludes going forward).
  *
- * Calls the `createTask` operation directly rather than `TaskService` to
- * avoid pulling in its much heavier project/workspace dependency graph for
+ * Calls the `createTask` operation directly rather than `TaskService.createTask`
+ * to avoid pulling in its much heavier project/workspace dependency graph for
  * this main-process-only flow, mirroring the reasoning in
- * `task-fact-writes.ts`. `taskCreatedChannel` is emitted manually so the
- * renderer's task list still picks up the new task immediately.
+ * `task-fact-writes.ts`. Still routes through `taskService.notifyTaskCreated`
+ * (the sanctioned hook for callers that commit a task insert outside of
+ * `TaskService.createTask` — see its doc comment) so the `task:created` hook
+ * fires for downstream listeners (search indexing, telemetry) exactly as it
+ * would for a task created through the create-task modal, not just the IPC
+ * event the renderer's task list needs.
  */
 export async function adoptGhostCard(
   projectId: string,
@@ -60,15 +68,17 @@ export async function adoptGhostCard(
     repositoryWorkspaceId: projectRow?.repositoryWorkspaceId ?? undefined,
   });
 
-  const result = await createTask({
+  const params: CreateTaskParams = {
     id: crypto.randomUUID(),
     projectId,
     taskConfig: { version: '1', name: ghostCard.issue.title, linkedIssue: ghostCard.issue },
     workspaceConfig,
-  });
+  };
+
+  const result = await createTask(params);
   if (!result.success) return result;
 
-  events.emit(taskCreatedChannel, { task: result.data.task });
+  taskService.notifyTaskCreated(result.data.task, params);
   await writeTaskWorkflowStage(result.data.task.id, 'idea');
   await _removeGhostCard(projectId, ghostCard);
 
