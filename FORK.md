@@ -44,6 +44,7 @@ Keep this list current — everything else we write must stay additive.
 | `apps/emdash-desktop/src/shared/telemetry.ts` | `FocusView` + `board_viewed` |
 | `apps/emdash-desktop/src/renderer/lib/stores/navigation-store.ts` | `viewEvents` map |
 | test DDL fixtures (`legacy-port/**/relational.test.ts`, `service.test.ts`, `createTask.test.ts`, `renameTask.test.ts`) | mirror the `tasks` DDL / row shape |
+| `apps/emdash-desktop/vitest.config.ts` | `FORK_CI` exclude for PTY integration tests |
 
 Additive (no conflict risk): `features/board/`, `operations/updateTaskWorkflowStage.ts`,
 `drizzle/0020_*.sql`.

@@ -44,9 +44,12 @@ jobs:
 
       - name: Tests (node, main-db, migrations, scripts)
         working-directory: apps/emdash-desktop
-        # local-pty integration tests need a real PTY; node-pty cannot spawn one on
-        # GitHub macOS runners (posix_spawnp failed). They still run locally.
+        env:
+          # Skips PTY integration tests (vitest.config.ts) — runners have no real PTY.
+          FORK_CI: '1'
+        # Generous test timeout: GitHub macOS runners are slow enough to trip
+        # timing-sensitive tests (e.g. ssh-git feed refresh) at the default 5s.
         run: >-
           pnpm exec vitest run
           --project node --project main-db --project migrations --project scripts
-          --exclude "**/local-pty.integration.test.ts"
+          --testTimeout 20000
