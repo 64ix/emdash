@@ -126,6 +126,7 @@ export const tasks = sqliteTable(
     name: text('name').notNull(),
     status: text('status').notNull(),
     workflowStage: text('workflow_stage'), // Feature Board workflow stage; null = Unstaged
+    boardRank: text('board_rank'), // manual Feature Board position within a column (fractional index); null = unranked
     sourceBranch: text('source_branch').$type<StoredBranch>(), // @deprecated — moved to workspaces.config (git.fromBranch)
     taskBranch: text('task_branch'), // @deprecated — use workspaces.config for provisioned branch identity
     // Role-keyed (Origin / Map / Spec); column name unchanged, only the stored shape evolved.

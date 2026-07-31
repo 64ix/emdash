@@ -84,6 +84,8 @@ export type Task = {
   status: TaskLifecycleStatus;
   /** Feature workflow stage; unset means the task predates the board or was never staged. */
   workflowStage?: WorkflowStage;
+  /** Manual Feature Board position within a column (fractional index); unset means unranked. */
+  boardRank?: string;
   createdAt: string;
   updatedAt: string;
   /** ISO timestamp: when lifecycle status last changed (current status entered). */

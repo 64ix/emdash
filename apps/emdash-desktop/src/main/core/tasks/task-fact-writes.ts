@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '@main/db/client';
 import { tasks } from '@main/db/schema';
 import { events } from '@main/lib/events';
@@ -9,22 +9,19 @@ import {
 } from '@shared/core/tasks/taskEvents';
 import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
 import { updateLinkedIssueRole } from './operations/updateLinkedIssueRole';
-import { updateTaskWorkflowStage } from './operations/updateTaskWorkflowStage';
 
 /**
- * Writes a task's Workflow Stage through the same operation layer used
- * everywhere else and, on an actual change, emits `taskWorkflowStageUpdatedChannel`
- * so every window observes it — regardless of whether the write came from a
- * renderer RPC call (board drag) or a main-process caller (the inbound issues
- * sync deriving a stage from GitHub facts — see ticket #8). A no-op write
- * (the task is already at `stage`) makes neither a DB write nor an event,
- * matching the "idempotent pass" criterion.
+ * Writes a task's Workflow Stage and, on an actual change, emits
+ * `taskWorkflowStageUpdatedChannel` so every window observes it — manual board
+ * drags persist through `updateTaskBoardPosition` instead; this path is for
+ * main-process fact writers (the inbound issues sync and `BoardSyncService`
+ * deriving stages from GitHub facts). A no-op write (the task is already at
+ * `stage`) makes neither a DB write nor an event, matching the "idempotent
+ * pass" criterion.
  *
- * Shared by `TaskService.updateTaskWorkflowStage` (the RPC-facing path), the
- * issues sync engine, and `BoardSyncService` (PR-derived stages), kept separate
- * from `TaskService` so main-process callers that only need to write task facts
- * don't pull in its much heavier dependency graph (project/workspace/session
- * managers).
+ * Kept separate from `TaskService` so main-process callers that only need to
+ * write task facts don't pull in its much heavier dependency graph
+ * (project/workspace/session managers).
  */
 export async function writeTaskWorkflowStage(
   taskId: string,
@@ -38,7 +35,10 @@ export async function writeTaskWorkflowStage(
   if (!row) throw new Error(`Task not found: ${taskId}`);
   if (row.workflowStage === stage) return;
 
-  await updateTaskWorkflowStage(taskId, stage);
+  await db
+    .update(tasks)
+    .set({ workflowStage: stage, updatedAt: sql`CURRENT_TIMESTAMP` })
+    .where(eq(tasks.id, taskId));
   events.emit(taskWorkflowStageUpdatedChannel, { taskId, projectId: row.projectId, stage });
 }
 

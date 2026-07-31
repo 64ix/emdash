@@ -219,19 +219,26 @@ export class TaskStore {
     }
   }
 
-  async updateWorkflowStage(stage: WorkflowStage | null): Promise<void> {
+  /**
+   * Persists a Feature Board drop: the new Workflow Stage (`null` clears it —
+   * an Unstaged drop) and Board Rank, written together in a single RPC call.
+   */
+  async updateBoardPosition(stage: WorkflowStage | null, rank: string): Promise<void> {
     if (this.state === 'unregistered') return;
     const task = registeredTaskData(this);
     if (!task) return;
     const previousStage = task.workflowStage;
+    const previousRank = task.boardRank;
     runInAction(() => {
       task.workflowStage = stage ?? undefined;
+      task.boardRank = rank;
     });
     try {
-      await rpc.tasks.updateTaskWorkflowStage(task.id, stage);
+      await rpc.tasks.updateTaskBoardPosition(task.id, stage, rank);
     } catch (e) {
       runInAction(() => {
         task.workflowStage = previousStage;
+        task.boardRank = previousRank;
       });
       log.error(e);
       throw e;

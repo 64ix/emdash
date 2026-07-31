@@ -21,6 +21,7 @@ function makeTaskRow(values: Partial<TaskRow>): TaskRow {
     name: values.name ?? 'old-title',
     status: values.status ?? 'in_progress',
     workflowStage: values.workflowStage ?? null,
+    boardRank: values.boardRank ?? null,
     sourceBranch: values.sourceBranch ?? null,
     taskBranch: values.taskBranch ?? null,
     linkedIssues: values.linkedIssues ?? null,

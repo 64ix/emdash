@@ -41,8 +41,8 @@ export const taskController = createRPCController({
   async updateTaskStatus(taskId: string, status: TaskLifecycleStatus) {
     return taskService.updateTaskStatus(taskId, status);
   },
-  async updateTaskWorkflowStage(taskId: string, stage: WorkflowStage | null) {
-    return taskService.updateTaskWorkflowStage(taskId, stage);
+  async updateTaskBoardPosition(taskId: string, stage: WorkflowStage | null, rank: string | null) {
+    return taskService.updateTaskBoardPosition(taskId, stage, rank);
   },
   async syncBoardStages(projectId: string) {
     return taskService.syncBoardStages(projectId);
