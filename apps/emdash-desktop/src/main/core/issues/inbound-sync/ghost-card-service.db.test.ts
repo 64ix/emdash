@@ -4,8 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDb } from '@main/db/client';
 import { projectRemotes, projects, tasks } from '@main/db/schema';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
-import { adoptGhostCard, getGhostCardsForProject, rejectGhostCard } from './ghost-card-service';
 import { getCachedGhostCards, setCachedGhostCardsIfChanged } from './ghost-card-store';
+
+// Imported dynamically after the fixture initializes mocks.db: the service's
+// task-service import graph reaches modules (encrypted-app-secrets-store) that
+// read the db at module load, which would throw under the mock otherwise.
+let adoptGhostCard: typeof import('./ghost-card-service').adoptGhostCard;
+let getGhostCardsForProject: typeof import('./ghost-card-service').getGhostCardsForProject;
+let rejectGhostCard: typeof import('./ghost-card-service').rejectGhostCard;
 
 const mocks = vi.hoisted(() => ({
   db: undefined as AppDb | undefined,
@@ -67,6 +73,9 @@ describe('ghost-card-service', () => {
     mocks.db = fixture.db;
     mocks.emit.mockClear();
     mocks.getProject.mockReturnValue({});
+    ({ adoptGhostCard, getGhostCardsForProject, rejectGhostCard } = await import(
+      './ghost-card-service'
+    ));
 
     await fixture.db.insert(projects).values({
       id: PROJECT_ID,
