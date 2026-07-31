@@ -1,0 +1,67 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: '0 7 * * 1' # Mondays 07:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fast-forward main from upstream
+        run: |
+          git remote add upstream https://github.com/generalaction/emdash.git
+          git fetch upstream main
+          git merge --ff-only upstream/main
+          git push origin main
+
+      - name: Check upstream activity on fork touchpoints
+        id: hotspots
+        run: |
+          git fetch origin fork-main
+          BASE=$(git merge-base origin/fork-main upstream/main)
+          # Paths from FORK.md "Core touchpoints" — keep in sync with that table.
+          HOTSPOTS=$(git log --oneline "$BASE"..upstream/main -- \
+            apps/emdash-desktop/src/main/db/schema.ts \
+            apps/emdash-desktop/src/shared/core/tasks/tasks.ts \
+            apps/emdash-desktop/src/main/core/tasks/ \
+            apps/emdash-desktop/src/renderer/features/tasks/stores/task-store.ts \
+            apps/emdash-desktop/src/renderer/app/view-registry.ts \
+            apps/emdash-desktop/src/renderer/features/projects/components/project-titlebar.tsx \
+            apps/emdash-desktop/src/shared/telemetry.ts \
+            apps/emdash-desktop/src/renderer/lib/stores/navigation-store.ts \
+            apps/emdash-desktop/drizzle/ \
+            || true)
+          BEHIND=$(git rev-list --count "$BASE"..upstream/main)
+          {
+            echo "behind=$BEHIND"
+            echo "hotspots<<EOF"
+            echo "$HOTSPOTS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open issue if touchpoints moved
+        if: steps.hotspots.outputs.hotspots != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOTSPOTS: ${{ steps.hotspots.outputs.hotspots }}
+          BEHIND: ${{ steps.hotspots.outputs.behind }}
+        run: |
+          TITLE="Upstream touched fork hotspots — rebase recommended"
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          BODY=$(printf 'fork-main is %s commits behind upstream/main.\n\nUpstream commits touching FORK.md touchpoints since merge-base:\n\n```\n%s\n```\n\nRebase checklist: FORK.md → migration numbering, touchpoint table.\n' "$BEHIND" "$HOTSPOTS")
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi

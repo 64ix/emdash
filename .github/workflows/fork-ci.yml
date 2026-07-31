@@ -1,0 +1,45 @@
+name: Fork CI
+
+on:
+  push:
+    branches: [fork-main]
+  pull_request:
+    branches: [fork-main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: fork-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm exec nx run-many -t build --projects "packages/*"
+
+      - name: Typecheck
+        working-directory: apps/emdash-desktop
+        run: pnpm typecheck
+
+      - name: Lint
+        working-directory: apps/emdash-desktop
+        run: pnpm exec oxlint .
+
+      - name: Tests (node, main-db, migrations, scripts)
+        working-directory: apps/emdash-desktop
+        run: pnpm exec vitest run --project node --project main-db --project migrations --project scripts

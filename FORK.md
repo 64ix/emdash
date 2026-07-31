@@ -1,15 +1,23 @@
-# Fork notes — 64ix/emdash (« cockpit »)
+# Fork notes — 64ix/emdash (« fork-main »)
 
 Fork of [generalaction/emdash](https://github.com/generalaction/emdash) carrying the
 feature-workflow kanban used by agent-cockpit. Specs and backlog live in the
 `agent-cockpit` repo (wayfinder → grill → spec → tickets flow); one feature = one
-spec = one PR onto `cockpit`.
+spec = one PR onto `fork-main`.
 
 ## Branch model
 
 - `main` — pristine mirror of `upstream/main`. Never commit here.
-- `cockpit` — default working branch: `main` + our commits. Rebase onto upstream
+- `fork-main` — default working branch: `main` + our commits. Rebase onto upstream
   release tags (`git fetch upstream --tags && git rebase <tag>`).
+
+## Automation
+
+- `.github/workflows/fork-ci.yml` — typecheck + lint + tests on push/PR to `fork-main`.
+  Run it after every upstream rebase before pushing.
+- `.github/workflows/upstream-sync.yml` — weekly: fast-forwards `main` from upstream and
+  opens/updates an issue when upstream commits touch the touchpoint files below.
+  Keep its path list in sync with the table below.
 
 ## What we add
 
