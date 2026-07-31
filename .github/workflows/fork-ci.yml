@@ -13,9 +13,11 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    # No ELECTRON_SKIP_BINARY_DOWNLOAD here: the vitest 'node' project imports the
+    # macOS runner: some tests hardcode darwin behavior (e.g. meta-key shortcuts in
+    # browser-webcontents-registry) and fail on linux; upstream CI never runs tests.
+    # No ELECTRON_SKIP_BINARY_DOWNLOAD: the vitest 'node' project imports the
     # electron module, which needs the real binary installed by its postinstall.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
