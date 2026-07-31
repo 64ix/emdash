@@ -47,11 +47,26 @@ A task's manually chosen position within a Feature Board column. Only ever
 set by an explicit user gesture (a drop); never written by the system.
 Tasks without a Board Rank sort after ranked ones, in their existing order.
 
+## Ghost Card
+
+A lightweight candidate card on the Feature Board for a root GitHub issue
+(not a Spec, not a sub-issue, not `wayfinder:*`) that no task references
+yet. Not a task: adopting it creates a real task with the issue as its
+Origin; rejecting it hides it. Nothing is persisted without adoption.
+
 ## Linked Issue Role
 
 The typed slot a GitHub issue occupies on a task. A task holds at most one
 issue per role: **Origin**, **Map**, **Spec**. A task may have no links at
 all — it is then purely local and GitHub has no authority over it.
+
+## Task Marker
+
+The `Emdash-Task: <task-id>` line an agent writes into the body of an
+issue it publishes (Spec, Map) for the task it is working in. The inbound
+sync reads the marker and sets the corresponding Linked Issue Role
+automatically. Orphan Spec/Map issues without a marker surface as
+link suggestions instead.
 
 ## Origin Issue
 
