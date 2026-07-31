@@ -22,9 +22,21 @@ vi.mock('@main/db/client', () => ({
 
 vi.mock('@main/lib/events', () => ({ events: { emit: mocks.emit } }));
 
-vi.mock('@main/lib/logger', () => ({
-  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
+vi.mock('@main/lib/logger', () => {
+  // task-service's import graph reaches app-scope, which derives scoped
+  // loggers via log.child(...) at module load — the mock must support it.
+  const makeLog = (): Record<string, unknown> => {
+    const log: Record<string, unknown> = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    log.child = vi.fn(() => makeLog());
+    return log;
+  };
+  return { log: makeLog() };
+});
 
 vi.mock('@main/core/projects/project-manager', () => ({
   projectManager: { getProject: mocks.getProject },
