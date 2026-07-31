@@ -740,8 +740,6 @@ export class TaskManagerStore {
     this._unsubLifecycleScriptStatus = null;
     this._unsubProvisioned?.();
     this._unsubProvisioned = null;
-    this._unsubWorkflowStageUpdated?.();
-    this._unsubWorkflowStageUpdated = null;
     this._unsubLinkedIssueRoleUpdated?.();
     this._unsubLinkedIssueRoleUpdated = null;
     this._disposeRepositoryReaction?.();
