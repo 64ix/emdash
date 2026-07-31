@@ -1,9 +1,13 @@
+import { eq } from 'drizzle-orm';
 import { getProjectRemoteUrls } from '@main/core/pull-requests/project-remotes-service';
 import { writeLinkedIssueRole, writeTaskWorkflowStage } from '@main/core/tasks/task-fact-writes';
+import { db } from '@main/db/client';
+import { tasks } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
 import { linkSuggestionsUpdatedChannel } from '@shared/core/issues/issueEvents';
 import type { LinkSuggestion } from '@shared/core/issues/link-suggestion';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { parseGitHubIssueUrl } from './github-issue-url';
 import {
   dismissLinkSuggestionUrl,
@@ -35,12 +39,14 @@ export async function acceptLinkSuggestion(
 ): Promise<void> {
   await writeLinkedIssueRole(taskId, suggestion.role, suggestion.issue);
 
+  // Read the task's real current stage so this immediate nudge respects the
+  // same "never regress a stage these facts can't prove" guard the sync
+  // engine applies — it must not fast-path a task that's already advanced
+  // past `spec`/`exploring` (e.g. `review`/`shipped`) back down.
+  const currentStage = await _getTaskWorkflowStage(taskId);
   const desiredStage = deriveWorkflowStageFromIssues({
-    // The caller doesn't know the task's current stage; `writeTaskWorkflowStage`
-    // itself no-ops when the desired stage already matches, so it's safe to
-    // derive optimistically here from an always-open suggestion (see
-    // `computeLinkSuggestions`) without an extra read.
-    currentStage: undefined,
+    currentStage,
+    // Suggestions are always sourced from open issues (see `computeLinkSuggestions`).
     specIssue: suggestion.role === 'spec' ? { state: 'open' } : undefined,
     mapIssue: suggestion.role === 'map' ? { state: 'open' } : undefined,
     hasMergedPullRequest: false,
@@ -50,6 +56,15 @@ export async function acceptLinkSuggestion(
   }
 
   await _removeSuggestion(projectId, suggestion);
+}
+
+async function _getTaskWorkflowStage(taskId: string): Promise<WorkflowStage | null> {
+  const [row] = await db
+    .select({ workflowStage: tasks.workflowStage })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  return (row?.workflowStage as WorkflowStage | null) ?? null;
 }
 
 /** Dismisses a link suggestion so a future sync pass never re-surfaces it. */
