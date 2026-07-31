@@ -1,3 +1,4 @@
+import { isShippedFaded } from '@shared/core/pull-requests/pr-workflow-derivation';
 import { workflowStages, type Task, type WorkflowStage } from '@shared/core/tasks/tasks';
 
 /** Column ids: every Workflow Stage, plus a leading bucket for Unstaged tasks. */
@@ -35,4 +36,20 @@ export function adjacentStage(current: ColumnId, delta: -1 | 1): WorkflowStage |
   const index = COLUMNS.indexOf(current) + delta;
   if (index < 0 || index >= COLUMNS.length) return null;
   return COLUMNS[index];
+}
+
+/**
+ * Shipped Fade (CONTEXT.md): `shipped` cards whose PR merged more than the fade
+ * window ago are hidden from the board — a display rule, not a stage change.
+ * Uses the most recently merged PR already loaded onto the task.
+ */
+export function isTaskShippedFaded(task: Task, now?: number): boolean {
+  if (task.workflowStage !== 'shipped') return false;
+
+  let latestMergedAt: string | null = null;
+  for (const pr of task.prs) {
+    if (pr.status !== 'merged' || !pr.mergedAt) continue;
+    if (!latestMergedAt || pr.mergedAt > latestMergedAt) latestMergedAt = pr.mergedAt;
+  }
+  return isShippedFaded(latestMergedAt, now);
 }

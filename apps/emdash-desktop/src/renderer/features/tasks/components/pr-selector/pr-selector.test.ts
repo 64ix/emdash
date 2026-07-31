@@ -177,6 +177,7 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
     reviewDecision: null,
     createdAt: '2026-05-30T00:00:00.000Z',
     updatedAt: '2026-05-30T00:00:00.000Z',
+    mergedAt: null,
     author: null,
     labels: [],
     assignees: [],

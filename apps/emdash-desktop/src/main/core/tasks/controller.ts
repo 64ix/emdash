@@ -44,6 +44,9 @@ export const taskController = createRPCController({
   async updateTaskWorkflowStage(taskId: string, stage: WorkflowStage | null) {
     return taskService.updateTaskWorkflowStage(taskId, stage);
   },
+  async syncBoardStages(projectId: string) {
+    return taskService.syncBoardStages(projectId);
+  },
   async setTaskPinned(taskId: string, isPinned: boolean) {
     return taskService.setTaskPinned(taskId, isPinned);
   },

@@ -22,6 +22,7 @@ import {
   taskProvisionProgressChannel,
   taskProvisionedChannel,
   taskStatusUpdatedChannel,
+  taskWorkflowStageUpdatedChannel,
 } from '@shared/core/tasks/taskEvents';
 import type {
   CreateTaskError,
@@ -133,6 +134,7 @@ export class TaskManagerStore {
   private _unsubGitWorktreeUpdate: (() => void) | null = null;
   private _unsubProvisionProgress: (() => void) | null = null;
   private _unsubStatusUpdated: (() => void) | null = null;
+  private _unsubWorkflowStageUpdated: (() => void) | null = null;
   private _unsubLifecycleScriptStatus: (() => void) | null = null;
   private _unsubProvisioned: (() => void) | null = null;
   private _disposeRepositoryReaction: (() => void) | null = null;
@@ -177,6 +179,19 @@ export class TaskManagerStore {
         if (store && isProvisioned(store)) {
           runInAction(() => {
             store.data.status = status as TaskLifecycleStatus;
+          });
+        }
+      }
+    );
+
+    this._unsubWorkflowStageUpdated = events.on(
+      taskWorkflowStageUpdatedChannel,
+      ({ taskId, projectId: evtProjectId, workflowStage }) => {
+        if (evtProjectId !== this.projectId) return;
+        const store = this.tasks.get(taskId);
+        if (store && isRegistered(store)) {
+          runInAction(() => {
+            store.data.workflowStage = workflowStage ?? undefined;
           });
         }
       }
@@ -696,6 +711,8 @@ export class TaskManagerStore {
     this._unsubProvisionProgress = null;
     this._unsubStatusUpdated?.();
     this._unsubStatusUpdated = null;
+    this._unsubWorkflowStageUpdated?.();
+    this._unsubWorkflowStageUpdated = null;
     this._unsubLifecycleScriptStatus?.();
     this._unsubLifecycleScriptStatus = null;
     this._unsubProvisioned?.();

@@ -38,6 +38,7 @@ import { reconcileResourceSampler } from './core/resource-monitor/resource-sampl
 import { searchService } from './core/search/search-service';
 import { workspaceFileIndexService } from './core/search/workspace-file-index-service';
 import { appSettingsService } from './core/settings/settings-service';
+import { boardSyncService } from './core/tasks/board-sync-service';
 import { updateService } from './core/updates/update-service';
 import { viewStateService } from './core/view-state/view-state-service';
 import { initializeDatabase } from './db/initialize';
@@ -145,6 +146,7 @@ void app.whenReady().then(async () => {
 
   projectSettingsService.initialize();
   prSyncScheduler.initialize();
+  boardSyncService.initialize();
   remoteTmuxReaperService.initialize();
   automationsService.start();
   appService.initialize();

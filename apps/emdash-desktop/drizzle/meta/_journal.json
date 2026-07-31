@@ -155,6 +155,13 @@
       "when": 1785506166019,
       "tag": "0021_workflow_stage_migration",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1785509378060,
+      "tag": "0022_round_king_bedlam",
+      "breakpoints": true
     }
   ]
 }

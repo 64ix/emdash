@@ -28,6 +28,7 @@ import type {
   RenameTaskSuccess,
   Task,
 } from '@shared/core/tasks/tasks';
+import { boardSyncService } from './board-sync-service';
 import { archiveTask } from './operations/archiveTask';
 import { createTask } from './operations/createTask';
 import { deleteTask } from './operations/deleteTask';
@@ -239,6 +240,11 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
     const task: Task = { ...mapTaskRowToTask(row), prs: [], conversations: {} };
     this._hooks.callHookBackground('task:updated', task);
     return task;
+  }
+
+  /** Feature Board open trigger: an immediate PR-facts derivation pass for the project. */
+  async syncBoardStages(projectId: string): Promise<void> {
+    await boardSyncService.syncProject(projectId);
   }
 
   // Operations with no hook — thin pass-throughs

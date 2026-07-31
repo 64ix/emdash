@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
-import { adjacentStage, COLUMNS, STAGE_LABELS, stageOf } from './board-columns';
+import { adjacentStage, COLUMNS, isTaskShippedFaded, STAGE_LABELS, stageOf } from './board-columns';
 
-function makeTask(workflowStage?: WorkflowStage): Task {
+function makeTask(workflowStage?: WorkflowStage, prs: PullRequest[] = []): Task {
   return {
     id: 'task-1',
     projectId: 'project-1',
@@ -13,9 +15,42 @@ function makeTask(workflowStage?: WorkflowStage): Task {
     updatedAt: '2026-01-01T00:00:00.000Z',
     statusChangedAt: '2026-01-01T00:00:00.000Z',
     isPinned: false,
-    prs: [],
+    prs,
     conversations: {},
     type: 'task',
+  };
+}
+
+function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
+  return {
+    url: 'https://github.com/acme/repo/pull/1',
+    provider: 'github',
+    repositoryUrl: 'https://github.com/acme/repo',
+    baseRefName: 'main',
+    baseRefOid: 'base',
+    headRepositoryUrl: 'https://github.com/acme/repo',
+    headRefName: 'feature',
+    headRefOid: 'head',
+    identifier: '#1',
+    title: 'Test PR',
+    description: null,
+    status: 'merged',
+    isDraft: false,
+    additions: null,
+    deletions: null,
+    changedFiles: null,
+    commitCount: null,
+    mergeableStatus: null,
+    mergeStateStatus: null,
+    reviewDecision: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    mergedAt: null,
+    author: null,
+    labels: [],
+    assignees: [],
+    checks: [],
+    ...overrides,
   };
 }
 
@@ -82,5 +117,41 @@ describe('adjacentStage', () => {
 
   it('returns null past the trailing edge (Triage)', () => {
     expect(adjacentStage('triage', 1)).toBeNull();
+  });
+});
+
+describe('isTaskShippedFaded', () => {
+  const now = new Date('2026-07-31T00:00:00.000Z').getTime();
+
+  it('is false for a non-shipped task, regardless of merged PRs', () => {
+    const oldMergedAt = new Date(now - SHIPPED_FADE_WINDOW_MS - 1000).toISOString();
+    const task = makeTask('review', [makePr({ status: 'merged', mergedAt: oldMergedAt })]);
+    expect(isTaskShippedFaded(task, now)).toBe(false);
+  });
+
+  it('is false for a shipped task with no merged PR loaded yet', () => {
+    expect(isTaskShippedFaded(makeTask('shipped', []), now)).toBe(false);
+  });
+
+  it('is false for a shipped task merged within the fade window', () => {
+    const recentMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS - 1000)).toISOString();
+    const task = makeTask('shipped', [makePr({ status: 'merged', mergedAt: recentMergedAt })]);
+    expect(isTaskShippedFaded(task, now)).toBe(false);
+  });
+
+  it('is true for a shipped task merged more than the fade window ago', () => {
+    const oldMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS + 1000)).toISOString();
+    const task = makeTask('shipped', [makePr({ status: 'merged', mergedAt: oldMergedAt })]);
+    expect(isTaskShippedFaded(task, now)).toBe(true);
+  });
+
+  it('uses the most recently merged PR when a task has more than one', () => {
+    const oldMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS + 1000)).toISOString();
+    const recentMergedAt = new Date(now - 1000).toISOString();
+    const task = makeTask('shipped', [
+      makePr({ url: 'https://github.com/acme/repo/pull/1', status: 'merged', mergedAt: oldMergedAt }),
+      makePr({ url: 'https://github.com/acme/repo/pull/2', status: 'merged', mergedAt: recentMergedAt }),
+    ]);
+    expect(isTaskShippedFaded(task, now)).toBe(false);
   });
 });

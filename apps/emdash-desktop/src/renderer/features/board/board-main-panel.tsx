@@ -1,8 +1,10 @@
 import { ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
+import { useEffect } from 'react';
 import {
   adjacentStage,
   COLUMNS,
+  isTaskShippedFaded,
   STAGE_LABELS,
   stageOf,
   type ColumnId,
@@ -13,6 +15,7 @@ import {
 } from '@renderer/features/projects/stores/project-selectors';
 import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
+import { rpc } from '@renderer/lib/ipc';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import {
@@ -37,6 +40,12 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
 
+  // Board open triggers an immediate PR-facts derivation pass; background derivation
+  // otherwise follows the existing PR sync cadence (see board-sync-service.ts).
+  useEffect(() => {
+    void rpc.tasks.syncBoardStages(projectId);
+  }, [projectId]);
+
   if (!manager) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-foreground-muted">
@@ -49,6 +58,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   for (const [, store] of manager.tasks) {
     const task = registeredTaskData(store);
     if (!task || task.archivedAt || task.type !== 'task') continue;
+    if (isTaskShippedFaded(task)) continue; // Shipped Fade: hidden from the board, stage intact
     byColumn.get(stageOf(task))?.push(store);
   }
 

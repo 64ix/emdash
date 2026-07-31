@@ -216,6 +216,9 @@ export const pullRequests = sqliteTable(
     description: text('description'),
     status: text('status').notNull().default('open'),
     isDraft: integer('is_draft'),
+    // When the PR was merged (GitHub `mergedAt`); null until merged. Drives Shipped Fade
+    // (CONTEXT.md) and the `shipped` workflow-stage derivation in board-sync-service.ts.
+    mergedAt: text('merged_at'),
 
     authorUserId: text('author_user_id').references(() => pullRequestUsers.userId, {
       onDelete: 'set null',

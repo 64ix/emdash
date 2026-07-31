@@ -92,6 +92,8 @@ export type PullRequest = {
   reviewDecision: string | null;
   createdAt: string;
   updatedAt: string;
+  /** ISO timestamp the PR was merged; null until merged. Drives Shipped Fade (CONTEXT.md). */
+  mergedAt: string | null;
   author: PullRequestUser | null;
   labels: Label[];
   assignees: PullRequestUser[];

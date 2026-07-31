@@ -1,5 +1,5 @@
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
-import type { Task } from '@shared/core/tasks/tasks';
+import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
 import { defineEvent } from '@shared/lib/ipc/events';
 
 export const taskCreatedChannel = defineEvent<{ task: Task }>('task:created');
@@ -14,6 +14,18 @@ export const taskStatusUpdatedChannel = defineEvent<{
   projectId: string;
   status: string;
 }>('task:status-updated');
+
+/**
+ * Fired whenever a task's Workflow Stage changes from a main-process actor that
+ * isn't the renderer's own optimistic update (the board sync service's derivation
+ * pass and the task-provisioned `implementing` hook — see board-sync-service.ts).
+ * Manual chevron moves apply optimistically in the renderer and don't need this.
+ */
+export const taskWorkflowStageUpdatedChannel = defineEvent<{
+  taskId: string;
+  projectId: string;
+  workflowStage: WorkflowStage | null;
+}>('task:workflow-stage-updated');
 
 export const taskPrUpdatedChannel = defineEvent<{
   taskId: string;

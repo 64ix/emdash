@@ -86,6 +86,7 @@ function makePullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
     reviewDecision: null,
     createdAt: '2026-05-10T00:00:00Z',
     updatedAt: '2026-05-12T00:00:00Z',
+    mergedAt: null,
     author: {
       userId: '1',
       userName: 'arnestrickmann',
