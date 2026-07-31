@@ -37,8 +37,8 @@ import { renameTask } from './operations/renameTask';
 import { restoreTask } from './operations/restoreTask';
 import { setTaskPinned } from './operations/setTaskPinned';
 import { updateLinkedIssue } from './operations/updateLinkedIssue';
+import { updateTaskBoardPosition } from './operations/updateTaskBoardPosition';
 import { updateTaskStatus } from './operations/updateTaskStatus';
-import { updateTaskWorkflowStage } from './operations/updateTaskWorkflowStage';
 import type { TeardownTaskError } from './provision-task-error';
 import { taskSessionManager } from './task-session-manager';
 import { mapTaskRowToTask } from './utils/utils';
@@ -239,7 +239,7 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
 
   // Operations with no hook — thin pass-throughs
   updateTaskStatus = updateTaskStatus;
-  updateTaskWorkflowStage = updateTaskWorkflowStage;
+  updateTaskBoardPosition = updateTaskBoardPosition;
   setTaskPinned = setTaskPinned;
   getTasks = getTasks;
 }

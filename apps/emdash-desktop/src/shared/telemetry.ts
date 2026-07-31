@@ -4,7 +4,7 @@ import type {
   AutomationRunTriggerKind,
 } from '@shared/core/automations/automation-run';
 import type { PullRequestMergeStrategy } from '@shared/core/pull-requests/pull-requests';
-import type { TaskLifecycleStatus } from '@shared/core/tasks/tasks';
+import type { TaskLifecycleStatus, WorkflowStage } from '@shared/core/tasks/tasks';
 import type { OpenInAppId } from '@shared/openInApps';
 
 type EmptyProps = Record<string, never>;
@@ -105,6 +105,13 @@ export type TelemetryEventProperties = {
   task_archived: EmptyProps;
   task_status_changed: { from_status: TaskLifecycleStatus; to_status: TaskLifecycleStatus };
   task_deleted: EmptyProps;
+
+  board_card_moved: {
+    from_stage: WorkflowStage | null;
+    to_stage: WorkflowStage | null;
+    /** True when the Workflow Stage is unchanged and only the Board Rank moved. */
+    reordered: boolean;
+  };
 
   conversation_created: { provider: AgentProviderId; is_first_in_task: boolean };
   conversation_deleted: EmptyProps;

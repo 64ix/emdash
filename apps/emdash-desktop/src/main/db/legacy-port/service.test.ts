@@ -47,6 +47,7 @@ function createAppDb(): Database.Database {
       name TEXT NOT NULL,
       status TEXT NOT NULL,
       workflow_stage TEXT,
+      board_rank TEXT,
       source_branch TEXT,
       task_branch TEXT,
       linked_issue TEXT,
