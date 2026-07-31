@@ -57,11 +57,29 @@ export const taskLifecycleStatuses = z.enum([
 
 export type TaskLifecycleStatus = z.infer<typeof taskLifecycleStatuses>;
 
+/**
+ * Feature workflow stages (idea → spec → PR pipeline). Orthogonal to
+ * `TaskLifecycleStatus`, which drives internal task/workspace logic.
+ */
+export const workflowStages = z.enum([
+  'idea',
+  'grilled',
+  'spec',
+  'tickets',
+  'implementing',
+  'pr',
+  'shipped',
+]);
+
+export type WorkflowStage = z.infer<typeof workflowStages>;
+
 export type Task = {
   id: string;
   projectId: string;
   name: string;
   status: TaskLifecycleStatus;
+  /** Feature workflow stage; unset means the task predates the board or was never staged. */
+  workflowStage?: WorkflowStage;
   createdAt: string;
   updatedAt: string;
   /** ISO timestamp: when lifecycle status last changed (current status entered). */

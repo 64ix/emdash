@@ -1,4 +1,4 @@
-import { ChevronDown, Ellipsis, ExternalLink, GithubIcon, Globe, Trash2 } from 'lucide-react';
+import { ChevronDown, Ellipsis, ExternalLink, GithubIcon, Globe, Kanban, Trash2 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import {
@@ -55,6 +55,13 @@ const MountedProjectTitlebarLeft = observer(function ProjectTitlebarLeft({
           <Ellipsis className="size-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent className="min-w-40">
+          <DropdownMenuItem
+            className="flex items-center gap-2"
+            onClick={() => navigate('board', { projectId })}
+          >
+            <Kanban className="size-4" />
+            Feature Board
+          </DropdownMenuItem>
           <DropdownMenuItem
             className="flex items-center gap-2 text-foreground-destructive"
             onClick={() => {

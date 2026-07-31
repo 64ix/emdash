@@ -11,6 +11,7 @@ import type {
   RenameTaskSuccess,
   Task,
   TaskLifecycleStatus,
+  WorkflowStage,
 } from '@shared/core/tasks/tasks';
 import type { TaskViewSnapshot } from '@shared/view-state';
 import { workspaceRegistry } from './workspace-registry';
@@ -209,6 +210,25 @@ export class TaskStore {
       });
       return result;
     } catch (e) {
+      log.error(e);
+      throw e;
+    }
+  }
+
+  async updateWorkflowStage(stage: WorkflowStage | null): Promise<void> {
+    if (this.state === 'unregistered') return;
+    const task = registeredTaskData(this);
+    if (!task) return;
+    const previousStage = task.workflowStage;
+    runInAction(() => {
+      task.workflowStage = stage ?? undefined;
+    });
+    try {
+      await rpc.tasks.updateTaskWorkflowStage(task.id, stage);
+    } catch (e) {
+      runInAction(() => {
+        task.workflowStage = previousStage;
+      });
       log.error(e);
       throw e;
     }

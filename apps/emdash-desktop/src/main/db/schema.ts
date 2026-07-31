@@ -125,6 +125,7 @@ export const tasks = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     status: text('status').notNull(),
+    workflowStage: text('workflow_stage'), // feature workflow stage (idea → spec → PR); null = unstaged
     sourceBranch: text('source_branch').$type<StoredBranch>(), // @deprecated — moved to workspaces.config (git.fromBranch)
     taskBranch: text('task_branch'), // @deprecated — use workspaces.config for provisioned branch identity
     linkedIssue: versionedJsonColumn(linkedIssue)('linked_issue'),

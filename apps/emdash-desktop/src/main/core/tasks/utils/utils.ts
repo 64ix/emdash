@@ -1,17 +1,19 @@
 import type { TaskRow } from '@main/db/schema';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
-import type { Task, TaskLifecycleStatus } from '@shared/core/tasks/tasks';
+import { workflowStages, type Task, type TaskLifecycleStatus } from '@shared/core/tasks/tasks';
 
 export function mapTaskRowToTask(
   row: TaskRow,
   prs: PullRequest[] = [],
   conversations: Record<string, number> = {}
 ): Task {
+  const stage = workflowStages.safeParse(row.workflowStage);
   return {
     id: row.id,
     projectId: row.projectId,
     name: row.name,
     status: row.status as TaskLifecycleStatus,
+    workflowStage: stage.success ? stage.data : undefined,
     linkedIssue: row.linkedIssue ?? undefined,
     archivedAt: row.archivedAt ?? undefined,
     lastInteractedAt: row.lastInteractedAt ?? undefined,

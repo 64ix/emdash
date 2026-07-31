@@ -3,6 +3,7 @@ import type {
   CreateTaskParams,
   DeleteTaskOptions,
   TaskLifecycleStatus,
+  WorkflowStage,
 } from '@shared/core/tasks/tasks';
 import { createRPCController } from '@shared/lib/ipc/rpc';
 import { generateTaskName } from './name-generation/generateTaskName';
@@ -39,6 +40,9 @@ export const taskController = createRPCController({
   },
   async updateTaskStatus(taskId: string, status: TaskLifecycleStatus) {
     return taskService.updateTaskStatus(taskId, status);
+  },
+  async updateTaskWorkflowStage(taskId: string, stage: WorkflowStage | null) {
+    return taskService.updateTaskWorkflowStage(taskId, stage);
   },
   async setTaskPinned(taskId: string, isPinned: boolean) {
     return taskService.setTaskPinned(taskId, isPinned);
