@@ -143,7 +143,7 @@ describe('BoardSyncService', () => {
       expect(await stageOf(fixture.db, 'task-review')).toBe('review');
       expect(mocks.emit).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'task:workflow-stage-updated' }),
-        expect.objectContaining({ taskId: 'task-review', workflowStage: 'review' })
+        expect.objectContaining({ taskId: 'task-review', stage: 'review' })
       );
     });
 
