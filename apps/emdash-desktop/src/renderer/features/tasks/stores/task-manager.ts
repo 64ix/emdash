@@ -139,7 +139,6 @@ export class TaskManagerStore {
   private _unsubWorkflowStageUpdated: (() => void) | null = null;
   private _unsubLifecycleScriptStatus: (() => void) | null = null;
   private _unsubProvisioned: (() => void) | null = null;
-  private _unsubWorkflowStageUpdated: (() => void) | null = null;
   private _unsubLinkedIssueRoleUpdated: (() => void) | null = null;
   private _disposeRepositoryReaction: (() => void) | null = null;
 
