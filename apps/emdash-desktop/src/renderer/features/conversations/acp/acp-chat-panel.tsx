@@ -48,7 +48,11 @@ import { isHeicLikeFile, isUnstableDropPath } from '@renderer/lib/pty/terminal-i
 import { useAgents } from '@renderer/lib/stores/use-agents';
 import { Button } from '@renderer/lib/ui/button';
 import { log } from '@renderer/utils/logger';
-import { linkedIssueMentionName, type LinkedIssue } from '@shared/core/linked-issue';
+import {
+  linkedIssueMentionName,
+  mostAdvancedLinkedIssue,
+  type LinkedIssue,
+} from '@shared/core/linked-issue';
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
@@ -431,7 +435,9 @@ const ComposerForStore = observer(function ComposerForStore({
     () => asProvisioned(getTaskStore(store.projectId, store.taskId))?.workspaceId
   );
   const linkedIssue = useObserver(
-    () => getRegisteredTaskData(store.projectId, store.taskId)?.linkedIssue
+    () =>
+      mostAdvancedLinkedIssue(getRegisteredTaskData(store.projectId, store.taskId)?.linkedIssues)
+        ?.issue
   );
   const issueProviderContext = useObserver(() => {
     const mounted = asMounted(getProjectStore(store.projectId));

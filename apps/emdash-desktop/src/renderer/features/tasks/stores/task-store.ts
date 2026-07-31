@@ -5,7 +5,11 @@ import type { GitRepositoryStore } from '@renderer/features/projects/stores/git-
 import { DraftCommentsStore } from '@renderer/features/tasks/diff-view/stores/draft-comments-store';
 import { rpc } from '@renderer/lib/ipc';
 import { log } from '@renderer/utils/logger';
-import type { LinkedIssue } from '@shared/core/linked-issue';
+import {
+  setLinkedIssueRole,
+  type LinkedIssue,
+  type LinkedIssueRole,
+} from '@shared/core/linked-issue';
 import type {
   RenameTaskError,
   RenameTaskSuccess,
@@ -273,19 +277,20 @@ export class TaskStore {
     }
   }
 
-  async updateLinkedIssue(issue?: LinkedIssue): Promise<void> {
+  async updateLinkedIssueRole(role: LinkedIssueRole, issue: LinkedIssue | null): Promise<void> {
     if (this.state === 'unregistered') return;
     const task = registeredTaskData(this);
     if (!task) return;
-    const previousIssue = task.linkedIssue;
+    const previousRoles = task.linkedIssues;
+    const nextRoles = setLinkedIssueRole(previousRoles, role, issue);
+    runInAction(() => {
+      task.linkedIssues = nextRoles;
+    });
     try {
-      await rpc.tasks.updateLinkedIssue(task.id, issue);
-      runInAction(() => {
-        task.linkedIssue = issue;
-      });
+      await rpc.tasks.updateLinkedIssueRole(task.id, role, issue);
     } catch (e) {
       runInAction(() => {
-        task.linkedIssue = previousIssue;
+        task.linkedIssues = previousRoles;
       });
       console.error(e);
       throw e;

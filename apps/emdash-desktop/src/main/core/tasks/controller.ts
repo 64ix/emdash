@@ -1,4 +1,4 @@
-import type { LinkedIssue } from '@shared/core/linked-issue';
+import type { LinkedIssue, LinkedIssueRole } from '@shared/core/linked-issue';
 import type {
   CreateTaskParams,
   DeleteTaskOptions,
@@ -35,8 +35,8 @@ export const taskController = createRPCController({
   async renameTask(projectId: string, taskId: string, newName: string) {
     return taskService.renameTask(projectId, taskId, newName);
   },
-  async updateLinkedIssue(taskId: string, issue?: LinkedIssue) {
-    return taskService.updateLinkedIssue(taskId, issue);
+  async updateLinkedIssueRole(taskId: string, role: LinkedIssueRole, issue: LinkedIssue | null) {
+    return taskService.updateLinkedIssueRole(taskId, role, issue);
   },
   async updateTaskStatus(taskId: string, status: TaskLifecycleStatus) {
     return taskService.updateTaskStatus(taskId, status);

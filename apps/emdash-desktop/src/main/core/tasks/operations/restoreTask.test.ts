@@ -29,7 +29,7 @@ describe('restoreTask', () => {
         projectId: 'project-1',
         name: 'Task 1',
         status: 'done',
-        linkedIssue: null,
+        linkedIssues: null,
         archivedAt: null,
         lastInteractedAt: null,
         createdAt: '2026-01-01T00:00:00.000Z',

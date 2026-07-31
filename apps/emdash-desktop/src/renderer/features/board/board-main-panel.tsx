@@ -15,6 +15,20 @@ import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-select
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
+import {
+  linkedIssueDisplayIdentifier,
+  linkedIssueRoleLabels,
+  mostAdvancedLinkedIssue,
+  type LinkedIssue,
+  type LinkedIssueRole,
+} from '@shared/core/linked-issue';
+
+/** "Spec #123" (or just "Spec" when the issue has no identifier) for the most-advanced-link badge. */
+function linkedIssueBadgeText(link: { role: LinkedIssueRole; issue: LinkedIssue }): string {
+  const label = linkedIssueRoleLabels[link.role];
+  const identifier = linkedIssueDisplayIdentifier(link.issue);
+  return identifier ? `${label} ${identifier}` : label;
+}
 
 export const BoardMainPanel = observer(function BoardMainPanel() {
   const {
@@ -96,6 +110,7 @@ const BoardCard = observer(function BoardCard({
   if (!task) return null;
 
   const sessionCount = Object.values(store.conversationStats).reduce((a, b) => a + b, 0);
+  const linkedIssue = mostAdvancedLinkedIssue(task.linkedIssues);
 
   const move = (delta: -1 | 1) => {
     const next = adjacentStage(column, delta);
@@ -114,6 +129,11 @@ const BoardCard = observer(function BoardCard({
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <Badge variant="outline">{task.status}</Badge>
+          {linkedIssue && (
+            <Badge variant="outline" title={linkedIssue.issue.title}>
+              {linkedIssueBadgeText(linkedIssue)}
+            </Badge>
+          )}
           {sessionCount > 0 && (
             <span className="flex items-center gap-0.5 text-[10px] text-foreground-muted">
               <MessageSquare className="size-3" />

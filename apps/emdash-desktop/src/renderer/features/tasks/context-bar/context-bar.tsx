@@ -20,6 +20,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from '@renderer/lib/ui/context-menu';
+import { mostAdvancedLinkedIssue } from '@shared/core/linked-issue';
 import { AddContextPopover } from '../context-bar/add-context-popover';
 import { buildTaskContextActions, type ContextAction } from '../context-bar/context-actions';
 
@@ -50,9 +51,10 @@ export const ContextBar = observer(function ContextBar({
   const hasConversation = conversations.conversations.size > 0;
   const [menuOpen, setMenuOpen] = useState(false);
 
+  const linkedIssue = mostAdvancedLinkedIssue(task?.linkedIssues)?.issue;
   const actions = useMemo(
-    () => buildTaskContextActions(task?.linkedIssue, draftComments?.comments ?? [], promptLibrary),
-    [task?.linkedIssue, draftComments?.comments, promptLibrary]
+    () => buildTaskContextActions(linkedIssue, draftComments?.comments ?? [], promptLibrary),
+    [linkedIssue, draftComments?.comments, promptLibrary]
   );
 
   const isActivePane = taskView.paneLayout.activePaneId === paneId;
