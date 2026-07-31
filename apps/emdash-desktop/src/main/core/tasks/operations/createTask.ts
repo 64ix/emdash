@@ -205,7 +205,6 @@ export async function finalizeCreateTask(
   let initialConversation: Conversation | undefined;
   if (convRow) {
     initialConversation = mapConversationRowToConversation(convRow);
-    events.emit(conversationCreatedChannel, { conversation: initialConversation });
     const initialConfig = prepared.params.taskConfig.initialConversation;
     const titlePrompt =
       initialConversation.type === 'acp'
@@ -217,6 +216,7 @@ export async function finalizeCreateTask(
         initialConversation = { ...initialConversation, title: autoTitle.title };
       }
     }
+    events.emit(conversationCreatedChannel, { conversation: initialConversation });
     emitInitialPtyPromptStarted(initialConversation, prepared);
   }
 

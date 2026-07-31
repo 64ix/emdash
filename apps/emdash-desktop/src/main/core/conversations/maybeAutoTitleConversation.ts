@@ -3,6 +3,7 @@ import { db } from '@main/db/client';
 import { conversations } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
+import { parseDefaultConversationTitleIndex } from '@shared/core/conversations/conversation-title';
 import { conversationChangedChannel } from '@shared/core/conversations/conversationEvents';
 import { conversationEvents } from './conversation-events';
 
@@ -15,11 +16,6 @@ export type AutoTitleResult = {
   applied: boolean;
   title?: string;
 };
-
-function isDefaultConversationTitle(title: string, providerId: string): boolean {
-  const escapedProviderId = providerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^${escapedProviderId} \\(([1-9]\\d*)\\)$`, 'i').test(title);
-}
 
 export function deriveConversationTitle(prompt: string): string | null {
   const firstLine = prompt.split(/\r?\n/).find((line) => line.trim());
@@ -59,7 +55,10 @@ export async function maybeAutoTitleConversation(
       .where(eq(conversations.id, conversationId))
       .limit(1);
 
-    if (!existing?.providerId || !isDefaultConversationTitle(existing.title, existing.providerId)) {
+    if (
+      !existing?.providerId ||
+      parseDefaultConversationTitleIndex(existing.title, existing.providerId) === null
+    ) {
       return { applied: false, title: existing?.title };
     }
 

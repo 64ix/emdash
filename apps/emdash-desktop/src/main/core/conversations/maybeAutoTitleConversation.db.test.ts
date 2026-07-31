@@ -109,6 +109,20 @@ describe('maybeAutoTitleConversation', () => {
     expect(renamed).not.toHaveBeenCalled();
   });
 
+  it('uses the same strict placeholder pattern as display formatting', async () => {
+    insertConversation('Claude (9007199254740993)');
+
+    const result = await maybeAutoTitleConversation(
+      'conversation-1',
+      'Do not overwrite this custom-looking title',
+      fixture.db
+    );
+
+    expect(result).toEqual({ applied: false, title: 'Claude (9007199254740993)' });
+    expect(storedTitle()).toBe('Claude (9007199254740993)');
+    expect(renamed).not.toHaveBeenCalled();
+  });
+
   it('applies at most once when later prompts arrive', async () => {
     insertConversation();
 

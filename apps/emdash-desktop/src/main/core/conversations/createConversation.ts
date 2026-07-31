@@ -95,6 +95,12 @@ export async function createConversation(
 
   let conversation = mapConversationRowToConversation(row);
 
+  const titlePrompt = conversationType === 'acp' ? initialQueue?.[0]?.text : params.initialPrompt;
+  if (titlePrompt) {
+    const autoTitle = await maybeAutoTitleConversation(conversation.id, titlePrompt, database);
+    if (autoTitle.title) conversation = { ...conversation, title: autoTitle.title };
+  }
+
   // ACP conversations start lazily on hydrateConversation — no PTY session here.
   if (conversationType !== 'acp') {
     const task = resolveTask(params.projectId, params.taskId);
@@ -124,11 +130,6 @@ export async function createConversation(
 
   conversationEvents._emit('conversation:created', conversation);
   events.emit(conversationCreatedChannel, { conversation });
-  const titlePrompt = conversationType === 'acp' ? initialQueue?.[0]?.text : params.initialPrompt;
-  if (titlePrompt) {
-    const autoTitle = await maybeAutoTitleConversation(conversation.id, titlePrompt, database);
-    if (autoTitle.title) conversation = { ...conversation, title: autoTitle.title };
-  }
   emitInitialPromptStarted(conversation, params);
   telemetryService.capture('conversation_created', {
     provider: params.provider,
