@@ -1,6 +1,8 @@
-import { err } from '@emdash/shared';
+import { err, type Result } from '@emdash/shared';
 import { projectManager } from '@main/core/projects/project-manager';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkSuggestion } from '@shared/core/issues/link-suggestion';
+import type { CreateTaskError, CreateTaskSuccess } from '@shared/core/tasks/tasks';
 import type {
   ConnectionStatus,
   ConnectionStatusMap,
@@ -9,6 +11,11 @@ import type {
   IssueProviderType,
 } from '@shared/issue-providers';
 import { createRPCController } from '@shared/lib/ipc/rpc';
+import {
+  adoptGhostCard,
+  getGhostCardsForProject,
+  rejectGhostCard,
+} from './inbound-sync/ghost-card-service';
 import { issuesSyncScheduler } from './inbound-sync/issues-sync-scheduler';
 import {
   acceptLinkSuggestion,
@@ -201,5 +208,22 @@ export const issueController = createRPCController({
   /** Triggers an inbound issues sync pass on demand — used when the renderer opens the Feature Board. */
   syncIssuesNow: async (projectId: string): Promise<void> => {
     return issuesSyncScheduler.syncNow(projectId);
+  },
+
+  // ── Ghost Cards (ticket #9) ───────────────────────────────────────────────
+
+  getGhostCards: async (projectId: string): Promise<GhostCard[]> => {
+    return getGhostCardsForProject(projectId);
+  },
+
+  adoptGhostCard: async (
+    projectId: string,
+    ghostCard: GhostCard
+  ): Promise<Result<CreateTaskSuccess, CreateTaskError>> => {
+    return adoptGhostCard(projectId, ghostCard);
+  },
+
+  rejectGhostCard: async (projectId: string, ghostCard: GhostCard): Promise<void> => {
+    return rejectGhostCard(projectId, ghostCard);
   },
 });

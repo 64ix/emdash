@@ -43,7 +43,12 @@ describe('IssuesSyncScheduler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(issuesSyncEngine.sync).mockResolvedValue(
-      ok({ stageChanges: 0, roleAttachments: 0, suggestionsChanged: false })
+      ok({
+        stageChanges: 0,
+        roleAttachments: 0,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
     );
   });
 

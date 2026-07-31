@@ -4,11 +4,15 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppDb } from '@main/db/client';
 import { projects, pullRequests, tasks, workspaces } from '@main/db/schema';
-import { linkSuggestionsUpdatedChannel } from '@shared/core/issues/issueEvents';
+import {
+  ghostCardsUpdatedChannel,
+  linkSuggestionsUpdatedChannel,
+} from '@shared/core/issues/issueEvents';
 import {
   taskLinkedIssueRoleUpdatedChannel,
   taskWorkflowStageUpdatedChannel,
 } from '@shared/core/tasks/taskEvents';
+import { getCachedGhostCards, rejectGhostCardUrl } from './ghost-card-store';
 import type { GitHubIssuesClient, RemoteIssue } from './github-issues-client';
 import { IssuesSyncEngine } from './issues-sync-engine';
 import { dismissLinkSuggestionUrl, getCachedSuggestions } from './link-suggestions-store';
@@ -43,7 +47,8 @@ class FakeGitHubIssuesClient implements GitHubIssuesClient {
   constructor(
     private readonly issuesByNumber: Map<number, RemoteIssue>,
     private readonly mapIssues: RemoteIssue[] = [],
-    private readonly specIssues: RemoteIssue[] = []
+    private readonly specIssues: RemoteIssue[] = [],
+    private readonly rootIssues: RemoteIssue[] = []
   ) {}
 
   async getIssue(_repo: unknown, number: number): Promise<RemoteIssue | null> {
@@ -54,6 +59,9 @@ class FakeGitHubIssuesClient implements GitHubIssuesClient {
   }
   async listSpecIssues(): Promise<RemoteIssue[]> {
     return this.specIssues;
+  }
+  async listOpenRootIssues(): Promise<RemoteIssue[]> {
+    return this.rootIssues;
   }
 }
 
@@ -121,7 +129,14 @@ describe('IssuesSyncEngine', () => {
 
     const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
 
-    expect(result).toEqual(ok({ stageChanges: 1, roleAttachments: 1, suggestionsChanged: false }));
+    expect(result).toEqual(
+      ok({
+        stageChanges: 1,
+        roleAttachments: 1,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
 
     const [row] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'));
     expect(row?.linkedIssues?.spec?.url).toBe(issue.url);
@@ -151,7 +166,14 @@ describe('IssuesSyncEngine', () => {
 
     const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
 
-    expect(result).toEqual(ok({ stageChanges: 1, roleAttachments: 1, suggestionsChanged: false }));
+    expect(result).toEqual(
+      ok({
+        stageChanges: 1,
+        roleAttachments: 1,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
 
     const [row] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'));
     expect(row?.linkedIssues?.map?.url).toBe(issue.url);
@@ -170,7 +192,14 @@ describe('IssuesSyncEngine', () => {
 
     const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
 
-    expect(result).toEqual(ok({ stageChanges: 0, roleAttachments: 0, suggestionsChanged: false }));
+    expect(result).toEqual(
+      ok({
+        stageChanges: 0,
+        roleAttachments: 0,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
     expect(await getCachedSuggestions(PROJECT_ID, REPOSITORY_URL)).toEqual([]);
   });
 
@@ -185,7 +214,14 @@ describe('IssuesSyncEngine', () => {
     const client = new FakeGitHubIssuesClient(new Map(), [], [issue]);
 
     const first = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
-    expect(first).toEqual(ok({ stageChanges: 0, roleAttachments: 0, suggestionsChanged: true }));
+    expect(first).toEqual(
+      ok({
+        stageChanges: 0,
+        roleAttachments: 0,
+        suggestionsChanged: true,
+        ghostCardsChanged: false,
+      })
+    );
     expect(await getCachedSuggestions(PROJECT_ID, REPOSITORY_URL)).toEqual([
       { id: issue.url, role: 'spec', issue: expect.objectContaining({ url: issue.url }) },
     ]);
@@ -198,7 +234,14 @@ describe('IssuesSyncEngine', () => {
     mocks.emit.mockClear();
 
     const second = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
-    expect(second).toEqual(ok({ stageChanges: 0, roleAttachments: 0, suggestionsChanged: true }));
+    expect(second).toEqual(
+      ok({
+        stageChanges: 0,
+        roleAttachments: 0,
+        suggestionsChanged: true,
+        ghostCardsChanged: false,
+      })
+    );
     expect(await getCachedSuggestions(PROJECT_ID, REPOSITORY_URL)).toEqual([]);
   });
 
@@ -221,7 +264,14 @@ describe('IssuesSyncEngine', () => {
 
     const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
 
-    expect(result).toEqual(ok({ stageChanges: 1, roleAttachments: 0, suggestionsChanged: false }));
+    expect(result).toEqual(
+      ok({
+        stageChanges: 1,
+        roleAttachments: 0,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
     const [row] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'));
     expect(row?.workflowStage).toBe('triage');
   });
@@ -262,7 +312,14 @@ describe('IssuesSyncEngine', () => {
 
     const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
 
-    expect(result).toEqual(ok({ stageChanges: 0, roleAttachments: 0, suggestionsChanged: false }));
+    expect(result).toEqual(
+      ok({
+        stageChanges: 0,
+        roleAttachments: 0,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
     const [row] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'));
     expect(row?.workflowStage).toBe('shipped');
     expect(mocks.emit).not.toHaveBeenCalledWith(taskWorkflowStageUpdatedChannel, expect.anything());
@@ -287,7 +344,14 @@ describe('IssuesSyncEngine', () => {
 
     const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
 
-    expect(result).toEqual(ok({ stageChanges: 0, roleAttachments: 0, suggestionsChanged: false }));
+    expect(result).toEqual(
+      ok({
+        stageChanges: 0,
+        roleAttachments: 0,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
     const [row] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'));
     expect(row?.workflowStage).toBe('triage');
   });
@@ -305,12 +369,148 @@ describe('IssuesSyncEngine', () => {
     const engine = makeEngine(client);
 
     const first = await engine.sync(PROJECT_ID, REPOSITORY_URL);
-    expect(first).toEqual(ok({ stageChanges: 1, roleAttachments: 1, suggestionsChanged: false }));
+    expect(first).toEqual(
+      ok({
+        stageChanges: 1,
+        roleAttachments: 1,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
 
     mocks.emit.mockClear();
     const second = await engine.sync(PROJECT_ID, REPOSITORY_URL);
 
-    expect(second).toEqual(ok({ stageChanges: 0, roleAttachments: 0, suggestionsChanged: false }));
+    expect(second).toEqual(
+      ok({
+        stageChanges: 0,
+        roleAttachments: 0,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
     expect(mocks.emit).not.toHaveBeenCalled();
+  });
+
+  describe('Ghost Cards (ticket #9)', () => {
+    function makeRootIssue(overrides: Partial<RemoteIssue> = {}): RemoteIssue {
+      return makeIssue({
+        number: 40,
+        url: `${REPOSITORY_URL}/issues/40`,
+        title: 'Fix the login bug',
+        labels: [],
+        body: null,
+        state: 'open',
+        ...overrides,
+      });
+    }
+
+    it('surfaces a plain open root issue with no shape and no marker as a Ghost Card', async () => {
+      const issue = makeRootIssue();
+      const client = new FakeGitHubIssuesClient(new Map(), [], [], [issue]);
+
+      const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
+
+      expect(result).toEqual(
+        ok({
+          stageChanges: 0,
+          roleAttachments: 0,
+          suggestionsChanged: false,
+          ghostCardsChanged: true,
+        })
+      );
+      expect(await getCachedGhostCards(PROJECT_ID, REPOSITORY_URL)).toEqual([
+        { id: issue.url, issue: expect.objectContaining({ url: issue.url, title: issue.title }) },
+      ]);
+      expect(mocks.emit).toHaveBeenCalledWith(
+        ghostCardsUpdatedChannel,
+        expect.objectContaining({ projectId: PROJECT_ID, repositoryUrl: REPOSITORY_URL })
+      );
+    });
+
+    it('excludes a [Spec]-titled issue', async () => {
+      const issue = makeRootIssue({ title: '[Spec] Some feature' });
+      const client = new FakeGitHubIssuesClient(new Map(), [], [], [issue]);
+
+      const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
+
+      expect(result.success && result.data.ghostCardsChanged).toBe(false);
+      expect(await getCachedGhostCards(PROJECT_ID, REPOSITORY_URL)).toEqual([]);
+    });
+
+    it('excludes any wayfinder:*-labelled issue, not just wayfinder:map', async () => {
+      const issue = makeRootIssue({ labels: ['wayfinder:research'] });
+      const client = new FakeGitHubIssuesClient(new Map(), [], [], [issue]);
+
+      await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
+
+      expect(await getCachedGhostCards(PROJECT_ID, REPOSITORY_URL)).toEqual([]);
+    });
+
+    it('excludes an issue carrying a Task Marker, even one pointing at an unknown task', async () => {
+      const issue = makeRootIssue({ body: 'Emdash-Task: does-not-exist' });
+      const client = new FakeGitHubIssuesClient(new Map(), [], [], [issue]);
+
+      await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
+
+      expect(await getCachedGhostCards(PROJECT_ID, REPOSITORY_URL)).toEqual([]);
+    });
+
+    it('excludes an issue already referenced by a task (Origin role)', async () => {
+      const issue = makeRootIssue();
+      await insertTask({
+        linkedIssues: {
+          version: '1',
+          origin: {
+            provider: 'github',
+            identifier: '#40',
+            title: issue.title,
+            url: issue.url,
+            status: 'open',
+          },
+        },
+      });
+      const client = new FakeGitHubIssuesClient(new Map(), [], [], [issue]);
+
+      await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
+
+      expect(await getCachedGhostCards(PROJECT_ID, REPOSITORY_URL)).toEqual([]);
+    });
+
+    it('never resurfaces a rejected Ghost Card on a later sync pass', async () => {
+      const issue = makeRootIssue();
+      const client = new FakeGitHubIssuesClient(new Map(), [], [], [issue]);
+      const engine = makeEngine(client);
+
+      const first = await engine.sync(PROJECT_ID, REPOSITORY_URL);
+      expect(first.success && first.data.ghostCardsChanged).toBe(true);
+
+      await rejectGhostCardUrl(PROJECT_ID, REPOSITORY_URL, issue.url);
+      mocks.emit.mockClear();
+
+      const second = await engine.sync(PROJECT_ID, REPOSITORY_URL);
+      expect(second).toEqual(
+        ok({
+          stageChanges: 0,
+          roleAttachments: 0,
+          suggestionsChanged: false,
+          ghostCardsChanged: true,
+        })
+      );
+      expect(await getCachedGhostCards(PROJECT_ID, REPOSITORY_URL)).toEqual([]);
+    });
+
+    it('is idempotent: an unchanged set of root issues produces no cache write and no event on a second pass', async () => {
+      const issue = makeRootIssue();
+      const client = new FakeGitHubIssuesClient(new Map(), [], [], [issue]);
+      const engine = makeEngine(client);
+
+      await engine.sync(PROJECT_ID, REPOSITORY_URL);
+      mocks.emit.mockClear();
+
+      const second = await engine.sync(PROJECT_ID, REPOSITORY_URL);
+      expect(second.success && second.data.ghostCardsChanged).toBe(false);
+      expect(mocks.emit).not.toHaveBeenCalledWith(ghostCardsUpdatedChannel, expect.anything());
+    });
   });
 });

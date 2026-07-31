@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classifyIssueShape, isMapShapedIssue, isSpecShapedIssue } from './issue-shape';
+import {
+  classifyIssueShape,
+  isMapShapedIssue,
+  isSpecShapedIssue,
+  isWayfinderLabeled,
+} from './issue-shape';
 
 describe('isSpecShapedIssue', () => {
   it('matches a title starting with [Spec]', () => {
@@ -30,6 +35,24 @@ describe('isMapShapedIssue', () => {
 
   it('does not match with no labels', () => {
     expect(isMapShapedIssue([])).toBe(false);
+  });
+});
+
+describe('isWayfinderLabeled', () => {
+  it('matches wayfinder:map', () => {
+    expect(isWayfinderLabeled(['wayfinder:map'])).toBe(true);
+  });
+
+  it('matches any other wayfinder:* label', () => {
+    expect(isWayfinderLabeled(['wayfinder:research', 'other'])).toBe(true);
+  });
+
+  it('does not match a label that merely contains "wayfinder"', () => {
+    expect(isWayfinderLabeled(['not-wayfinder:map'])).toBe(false);
+  });
+
+  it('does not match with no labels', () => {
+    expect(isWayfinderLabeled([])).toBe(false);
   });
 });
 

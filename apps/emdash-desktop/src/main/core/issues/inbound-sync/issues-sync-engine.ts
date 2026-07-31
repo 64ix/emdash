@@ -7,9 +7,14 @@ import { db } from '@main/db/client';
 import { pullRequests, tasks, workspaces } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
-import { linkSuggestionsUpdatedChannel } from '@shared/core/issues/issueEvents';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
+import {
+  ghostCardsUpdatedChannel,
+  linkSuggestionsUpdatedChannel,
+} from '@shared/core/issues/issueEvents';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { parseRepositoryRefResult } from '@shared/repository-ref';
+import { getRejectedIssueUrls, setCachedGhostCardsIfChanged } from './ghost-card-store';
 import { parseGitHubIssueUrl } from './github-issue-url';
 import {
   getGitHubIssuesClient,
@@ -24,6 +29,7 @@ import {
   type SuggestionCandidate,
 } from './link-suggestions';
 import { getDismissedIssueUrls, setCachedSuggestionsIfChanged } from './link-suggestions-store';
+import { isRootIssueCandidate } from './root-issue';
 import { deriveWorkflowStageFromIssues, type IssueStateFact } from './stage-derivation';
 
 export type IssuesSyncAuthContext = Pick<GitHubApiAuthContext, 'accountId'>;
@@ -35,6 +41,8 @@ export type IssuesSyncSummary = {
   roleAttachments: number;
   /** Whether the cached link-suggestions snapshot changed. */
   suggestionsChanged: boolean;
+  /** Whether the cached Ghost Card candidate snapshot changed (ticket #9). */
+  ghostCardsChanged: boolean;
 };
 
 export type IssuesSyncEngineError =
@@ -79,6 +87,7 @@ export class IssuesSyncEngine {
       stageChanges: 0,
       roleAttachments: 0,
       suggestionsChanged: false,
+      ghostCardsChanged: false,
     };
 
     const rows = await db
@@ -104,6 +113,10 @@ export class IssuesSyncEngine {
     const tasksById = new Map<string, (typeof rows)[number]>();
     const taskFacts = new Map<string, TaskFacts>();
     const linkedIssueUrls = new Set<string>();
+    // Every role (Origin included) — used by the Ghost Card "referenced by no
+    // task" exclusion, broader than `linkedIssueUrls` (Spec/Map only, used by
+    // link suggestions).
+    const allLinkedIssueUrls = new Set<string>();
 
     for (const row of rows) {
       tasksById.set(row.id, row);
@@ -112,10 +125,14 @@ export class IssuesSyncEngine {
         branchName: row.workspaceId ? (branchByWorkspaceId.get(row.workspaceId) ?? null) : null,
       });
 
+      const originUrl = row.linkedIssues?.origin?.url;
       const specUrl = row.linkedIssues?.spec?.url;
       const mapUrl = row.linkedIssues?.map?.url;
       if (specUrl) linkedIssueUrls.add(specUrl);
       if (mapUrl) linkedIssueUrls.add(mapUrl);
+      if (originUrl) allLinkedIssueUrls.add(originUrl);
+      if (specUrl) allLinkedIssueUrls.add(specUrl);
+      if (mapUrl) allLinkedIssueUrls.add(mapUrl);
     }
 
     // Refresh already-linked Spec/Map issues (for this repository) so stage
@@ -226,6 +243,33 @@ export class IssuesSyncEngine {
         projectId,
         repositoryUrl: repository.data.repositoryUrl,
         suggestions,
+      });
+    }
+
+    // Compute + cache Ghost Cards (ticket #9): open root issues — not
+    // Spec/wayfinder-shaped, no Task Marker, no sub-issue parent, referenced
+    // by no task's Linked Issue Role — that haven't been rejected already.
+    const rootIssues = await client.data.listOpenRootIssues(repository.data);
+    const rejectedGhostUrls = await getRejectedIssueUrls(projectId, repository.data.repositoryUrl);
+    const ghostCards: GhostCard[] = [];
+    for (const issue of rootIssues) {
+      if (issue.state !== 'open') continue;
+      if (!isRootIssueCandidate(issue)) continue;
+      if (allLinkedIssueUrls.has(issue.url)) continue;
+      if (rejectedGhostUrls.has(issue.url)) continue;
+      ghostCards.push({ id: issue.url, issue: remoteIssueToLinkedIssue(issue) });
+    }
+    const ghostCardsChanged = await setCachedGhostCardsIfChanged(
+      projectId,
+      repository.data.repositoryUrl,
+      ghostCards
+    );
+    summary.ghostCardsChanged = ghostCardsChanged;
+    if (ghostCardsChanged) {
+      events.emit(ghostCardsUpdatedChannel, {
+        projectId,
+        repositoryUrl: repository.data.repositoryUrl,
+        ghostCards,
       });
     }
 

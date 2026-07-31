@@ -1,6 +1,7 @@
 /** See docs/adr/0003-board-stages-derived-not-declared.md and CONTEXT.md ("Spec", "Map"). */
 const SPEC_TITLE_PREFIX = '[Spec]';
 const MAP_LABEL = 'wayfinder:map';
+const WAYFINDER_LABEL_PREFIX = 'wayfinder:';
 
 /** Spec-shaped: title starts with `[Spec]`. */
 export function isSpecShapedIssue(title: string): boolean {
@@ -10,6 +11,15 @@ export function isSpecShapedIssue(title: string): boolean {
 /** Map-shaped: labelled `wayfinder:map`. */
 export function isMapShapedIssue(labels: readonly string[]): boolean {
   return labels.includes(MAP_LABEL);
+}
+
+/**
+ * Labelled with any `wayfinder:*` label — broader than the `wayfinder:map`
+ * Map shape. Used by the Ghost Card root-issue filter (ticket #9), which
+ * excludes every Wayfinder-tracked issue, not just Map issues specifically.
+ */
+export function isWayfinderLabeled(labels: readonly string[]): boolean {
+  return labels.some((label) => label.startsWith(WAYFINDER_LABEL_PREFIX));
 }
 
 export type IssueShape = 'spec' | 'map' | null;

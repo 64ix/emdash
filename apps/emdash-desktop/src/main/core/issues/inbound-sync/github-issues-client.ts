@@ -31,6 +31,13 @@ export interface GitHubIssuesClient {
   listMapIssues(repo: RepositoryRef): Promise<RemoteIssue[]>;
   /** Lists Spec-shaped candidate issues (open + closed) via a title search for `[Spec]`. */
   listSpecIssues(repo: RepositoryRef): Promise<RemoteIssue[]>;
+  /**
+   * Lists open issues that are not sub-issues of another issue (Ghost Card
+   * candidates — ticket #9). Shape filtering (not `[Spec]`, not
+   * `wayfinder:*`, no Task Marker) and "already linked to a task" exclusion
+   * happen in `IssuesSyncEngine`, not here.
+   */
+  listOpenRootIssues(repo: RepositoryRef): Promise<RemoteIssue[]>;
 }
 
 const PER_PAGE = 100;
@@ -53,6 +60,34 @@ function toRemoteIssue(issue: {
     labels: issue.labels.map((label) => (typeof label === 'string' ? label : (label.name ?? ''))),
     updatedAt: issue.updated_at,
   };
+}
+
+/**
+ * Whether an issue is itself a sub-issue of another (has a parent) via the
+ * REST "sub-issues" feature (ticket #9's root-issue filter). Defensive: any
+ * error other than "no parent" (404) is treated as "no parent" too, since
+ * older GitHub Enterprise instances or reduced-scope tokens may not expose
+ * this endpoint at all — a lookup failure shouldn't block the whole sync pass.
+ */
+async function hasParentIssue(
+  octokit: Octokit,
+  repo: RepositoryRef,
+  issueNumber: number
+): Promise<boolean> {
+  try {
+    await withRetry(() =>
+      githubRateLimiter.acquire().then(() =>
+        octokit.rest.issues.getParent({
+          owner: repo.owner,
+          repo: repo.repo,
+          issue_number: issueNumber,
+        })
+      )
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createClientFromOctokit(octokit: Octokit): GitHubIssuesClient {
@@ -102,6 +137,26 @@ function createClientFromOctokit(octokit: Octokit): GitHubIssuesClient {
         .filter((issue) => !issue.pull_request)
         .map(toRemoteIssue)
         .filter((issue) => issue.title.trimStart().startsWith('[Spec]'));
+    },
+
+    async listOpenRootIssues(repo) {
+      const { data } = await withRetry(() =>
+        githubRateLimiter.acquire().then(() =>
+          octokit.rest.issues.listForRepo({
+            owner: repo.owner,
+            repo: repo.repo,
+            state: 'open',
+            per_page: PER_PAGE,
+          })
+        )
+      );
+      const candidates = data.filter((issue) => !issue.pull_request).map(toRemoteIssue);
+
+      const rootIssues: RemoteIssue[] = [];
+      for (const issue of candidates) {
+        if (!(await hasParentIssue(octokit, repo, issue.number))) rootIssues.push(issue);
+      }
+      return rootIssues;
     },
   };
 }

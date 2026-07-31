@@ -10,6 +10,7 @@ import {
   type ColumnId,
 } from '@renderer/features/board/board-columns';
 import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
+import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
 import {
   getProjectStore,
   projectDisplayName,
@@ -19,6 +20,7 @@ import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/sto
 import { rpc } from '@renderer/lib/ipc';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
 import {
   linkedIssueDisplayIdentifier,
   linkedIssueRoleLabels,
@@ -40,6 +42,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   } = useParams('board');
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
+  const { ghostCards, adopt: adoptGhostCard, reject: rejectGhostCard } = useGhostCards(projectId);
 
   // Board open triggers an immediate derivation pass (PR facts + inbound issues);
   // background derivation otherwise follows the existing sync cadences
@@ -80,6 +83,11 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
             column={column}
             stores={byColumn.get(column) ?? []}
             projectId={projectId}
+            // Ghost Cards (ticket #9) are not tasks — they only ever live in
+            // the `idea` column, alongside real idea-stage tasks.
+            ghostCards={column === 'idea' ? ghostCards : undefined}
+            onAdoptGhostCard={adoptGhostCard}
+            onRejectGhostCard={rejectGhostCard}
           />
         ))}
       </div>
@@ -91,20 +99,36 @@ const BoardColumn = observer(function BoardColumn({
   column,
   stores,
   projectId,
+  ghostCards,
+  onAdoptGhostCard,
+  onRejectGhostCard,
 }: {
   column: ColumnId;
   stores: TaskStore[];
   projectId: string;
+  ghostCards?: GhostCard[];
+  onAdoptGhostCard: (ghostCard: GhostCard) => void;
+  onRejectGhostCard: (ghostCard: GhostCard) => void;
 }) {
+  const cardCount = stores.length + (ghostCards?.length ?? 0);
+
   return (
     <div className="flex w-56 shrink-0 flex-col rounded-lg border border-border bg-background-2/40">
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-medium text-foreground-muted">{STAGE_LABELS[column]}</span>
-        <Badge variant="secondary">{stores.length}</Badge>
+        <Badge variant="secondary">{cardCount}</Badge>
       </div>
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
         {stores.map((store) => (
           <BoardCard key={store.data.id} store={store} column={column} projectId={projectId} />
+        ))}
+        {ghostCards?.map((ghostCard) => (
+          <GhostCardView
+            key={ghostCard.id}
+            ghostCard={ghostCard}
+            onAdopt={() => onAdoptGhostCard(ghostCard)}
+            onReject={() => onRejectGhostCard(ghostCard)}
+          />
         ))}
       </div>
     </div>
