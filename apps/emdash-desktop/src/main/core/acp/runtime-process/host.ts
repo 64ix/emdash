@@ -13,6 +13,7 @@ import { setSessionId } from '@main/core/conversations/set-session-id';
 import { providerOverrideSettings } from '@main/core/settings/provider-settings-service';
 import { log } from '@main/lib/logger';
 import { desktopWorkerPath } from '@main/worker-manifest';
+import { buildAcpSessionEnv } from './acp-session-env';
 
 const ACP_WIRE_CHANNEL = 'acp-wire';
 
@@ -59,10 +60,11 @@ function decorateAcpRuntimeHandle(handle: WorkerHandle<AcpApiContract>): AcpRunt
 
 /**
  * Injects the user's per-provider environment variables (configured in Settings and
- * stored in the app DB) into ACP session-start inputs. The ACP runtime worker has no
- * DB access, so this main-process choke point resolves the config and threads it to
- * the provider spawn. Any env on the incoming (renderer-facing) input is discarded and
- * replaced, so the spawn environment can only come from trusted main-process settings.
+ * stored in the app DB), plus the task-scoped EMDASH_TASK_ID marker, into ACP
+ * session-start inputs. The ACP runtime worker has no DB access, so this main-process
+ * choke point resolves the config and threads it to the provider spawn. Any env on the
+ * incoming (renderer-facing) input is discarded and replaced, so the spawn environment
+ * can only come from trusted main-process settings and state — see `buildAcpSessionEnv`.
  */
 function withProviderEnv(client: AcpRuntimeClient): AcpRuntimeClient {
   const enrich = async <T extends { input: AcpStartInputWire }>(input: T): Promise<T> => {
@@ -70,7 +72,13 @@ function withProviderEnv(client: AcpRuntimeClient): AcpRuntimeClient {
     // Spawn env must originate solely from the trusted main-process settings. Overwrite
     // (never merge) any env supplied by the renderer-facing caller so the renderer cannot
     // inject variables such as PATH/HOME/proxy vars into provider process spawning.
-    return { ...input, input: { ...input.input, env: providerConfig?.env } };
+    return {
+      ...input,
+      input: {
+        ...input.input,
+        env: buildAcpSessionEnv(input.input.taskId, providerConfig?.env),
+      },
+    };
   };
   return {
     ...client,
