@@ -13,9 +13,8 @@ import {
   type PrWorkflowFact,
 } from '@shared/core/pull-requests/pr-workflow-derivation';
 import { prSyncProgressChannel } from '@shared/core/pull-requests/prEvents';
-import { taskWorkflowStageUpdatedChannel } from '@shared/core/tasks/taskEvents';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
-import { updateTaskWorkflowStage } from './operations/updateTaskWorkflowStage';
+import { writeTaskWorkflowStage } from './task-fact-writes';
 
 type SpecLinkedTaskRow = {
   id: string;
@@ -117,7 +116,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
       const derived = derivePrStage(matches);
       if (!derived) continue; // no PR fact for this task — never touched on the periodic pass
 
-      await this._applyStage(task.id, task.projectId, task.workflowStage, derived);
+      await writeTaskWorkflowStage(task.id, derived);
     }
   }
 
@@ -157,7 +156,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
     const nextStage: WorkflowStage =
       derived === 'review' || derived === 'shipped' ? derived : 'implementing';
 
-    await this._applyStage(row.id, row.projectId, row.workflowStage, nextStage);
+    await writeTaskWorkflowStage(row.id, nextStage);
   }
 
   private async _repositoryUrlsForProject(projectId: string): Promise<string[]> {
@@ -227,19 +226,6 @@ export class BoardSyncService implements IInitializable, IDisposable {
       status: row.status as PrWorkflowFact['status'],
       description: row.description ?? null,
     }));
-  }
-
-  /** Writes through the existing task update path only on a real diff, and emits only then. */
-  private async _applyStage(
-    taskId: string,
-    projectId: string,
-    currentStage: string | null,
-    nextStage: WorkflowStage
-  ): Promise<void> {
-    if (currentStage === nextStage) return; // idempotent: no diff -> no write, no event
-
-    await updateTaskWorkflowStage(taskId, nextStage);
-    events.emit(taskWorkflowStageUpdatedChannel, { taskId, projectId, stage: nextStage });
   }
 }
 

@@ -20,10 +20,11 @@ import { updateTaskWorkflowStage } from './operations/updateTaskWorkflowStage';
  * (the task is already at `stage`) makes neither a DB write nor an event,
  * matching the "idempotent pass" criterion.
  *
- * Shared by `TaskService.updateTaskWorkflowStage` (the RPC-facing path) and the
- * issues sync engine, kept separate from `TaskService` so main-process
- * callers that only need to write task facts don't pull in its much heavier
- * dependency graph (project/workspace/session managers).
+ * Shared by `TaskService.updateTaskWorkflowStage` (the RPC-facing path), the
+ * issues sync engine, and `BoardSyncService` (PR-derived stages), kept separate
+ * from `TaskService` so main-process callers that only need to write task facts
+ * don't pull in its much heavier dependency graph (project/workspace/session
+ * managers).
  */
 export async function writeTaskWorkflowStage(
   taskId: string,
