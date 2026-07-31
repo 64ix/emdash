@@ -1,38 +1,17 @@
 import { ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
+import {
+  adjacentStage,
+  COLUMNS,
+  STAGE_LABELS,
+  stageOf,
+  type ColumnId,
+} from '@renderer/features/board/board-columns';
 import { getProjectStore, projectDisplayName } from '@renderer/features/projects/stores/project-selectors';
 import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
-import { workflowStages, type Task, type WorkflowStage } from '@shared/core/tasks/tasks';
-
-/** Column ids: every workflow stage, plus a leading bucket for unstaged tasks. */
-type ColumnId = WorkflowStage | 'unstaged';
-
-const STAGE_LABELS: Record<ColumnId, string> = {
-  unstaged: 'Unstaged',
-  idea: 'Idea',
-  grilled: 'Grilled',
-  spec: 'Spec',
-  tickets: 'Tickets',
-  implementing: 'Implementing',
-  pr: 'PR',
-  shipped: 'Shipped',
-};
-
-const COLUMNS: ColumnId[] = ['unstaged', ...workflowStages.options];
-
-function stageOf(task: Task): ColumnId {
-  return task.workflowStage ?? 'unstaged';
-}
-
-/** The stage reached by moving one column left/right; null when already at the edge. */
-function adjacentStage(current: ColumnId, delta: -1 | 1): WorkflowStage | 'unstaged' | null {
-  const index = COLUMNS.indexOf(current) + delta;
-  if (index < 0 || index >= COLUMNS.length) return null;
-  return COLUMNS[index];
-}
 
 export const BoardMainPanel = observer(function BoardMainPanel() {
   const {

@@ -58,17 +58,21 @@ export const taskLifecycleStatuses = z.enum([
 export type TaskLifecycleStatus = z.infer<typeof taskLifecycleStatuses>;
 
 /**
- * Feature workflow stages (idea → spec → PR pipeline). Orthogonal to
- * `TaskLifecycleStatus`, which drives internal task/workspace logic.
+ * Feature workflow stages: the Feature Board pipeline
+ * `idea → exploring → spec → implementing → review → shipped`, plus the
+ * out-of-flow `triage` stage. Orthogonal to `TaskLifecycleStatus`, which
+ * drives internal task/workspace logic. See CONTEXT.md ("Workflow Stage")
+ * and docs/adr/0003-board-stages-derived-not-declared.md for the stage
+ * authority model.
  */
 export const workflowStages = z.enum([
   'idea',
-  'grilled',
+  'exploring',
   'spec',
-  'tickets',
   'implementing',
-  'pr',
+  'review',
   'shipped',
+  'triage',
 ]);
 
 export type WorkflowStage = z.infer<typeof workflowStages>;
