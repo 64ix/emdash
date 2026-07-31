@@ -1,6 +1,9 @@
 import { ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { getProjectStore, projectDisplayName } from '@renderer/features/projects/stores/project-selectors';
+import {
+  getProjectStore,
+  projectDisplayName,
+} from '@renderer/features/projects/stores/project-selectors';
 import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
