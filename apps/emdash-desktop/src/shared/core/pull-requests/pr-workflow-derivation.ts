@@ -21,7 +21,9 @@ export type PrDerivedStage = 'review' | 'shipped' | 'triage';
 export const SHIPPED_FADE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** Parses a GitHub-style issue identifier (`"#42"`, `"42"`) into its numeric issue number. */
-export function parseIssueNumberFromIdentifier(identifier: string | null | undefined): number | null {
+export function parseIssueNumberFromIdentifier(
+  identifier: string | null | undefined
+): number | null {
   if (!identifier) return null;
   const match = /^#?(\d+)$/.exec(identifier.trim());
   if (!match) return null;

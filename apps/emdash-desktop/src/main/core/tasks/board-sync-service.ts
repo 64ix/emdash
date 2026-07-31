@@ -6,13 +6,13 @@ import { db } from '@main/db/client';
 import { projectRemotes, pullRequests, tasks, workspaces } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
-import { prSyncProgressChannel } from '@shared/core/pull-requests/prEvents';
 import {
   derivePrStage,
   findSpecMatchingPrs,
   parseIssueNumberFromIdentifier,
   type PrWorkflowFact,
 } from '@shared/core/pull-requests/pr-workflow-derivation';
+import { prSyncProgressChannel } from '@shared/core/pull-requests/prEvents';
 import { taskWorkflowStageUpdatedChannel } from '@shared/core/tasks/taskEvents';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { updateTaskWorkflowStage } from './operations/updateTaskWorkflowStage';
@@ -51,7 +51,10 @@ export class BoardSyncService implements IInitializable, IDisposable {
   initialize(): void {
     this._unsubProvisioned = taskSessionManager.hooks.on('task:provisioned', ({ taskId }) => {
       void this.applyProvisionedStage(taskId).catch((error) => {
-        log.error('BoardSyncService: applyProvisionedStage failed', { taskId, error: String(error) });
+        log.error('BoardSyncService: applyProvisionedStage failed', {
+          taskId,
+          error: String(error),
+        });
       });
     });
 

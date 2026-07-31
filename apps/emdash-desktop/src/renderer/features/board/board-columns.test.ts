@@ -149,8 +149,16 @@ describe('isTaskShippedFaded', () => {
     const oldMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS + 1000)).toISOString();
     const recentMergedAt = new Date(now - 1000).toISOString();
     const task = makeTask('shipped', [
-      makePr({ url: 'https://github.com/acme/repo/pull/1', status: 'merged', mergedAt: oldMergedAt }),
-      makePr({ url: 'https://github.com/acme/repo/pull/2', status: 'merged', mergedAt: recentMergedAt }),
+      makePr({
+        url: 'https://github.com/acme/repo/pull/1',
+        status: 'merged',
+        mergedAt: oldMergedAt,
+      }),
+      makePr({
+        url: 'https://github.com/acme/repo/pull/2',
+        status: 'merged',
+        mergedAt: recentMergedAt,
+      }),
     ]);
     expect(isTaskShippedFaded(task, now)).toBe(false);
   });
