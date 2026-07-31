@@ -44,4 +44,9 @@ jobs:
 
       - name: Tests (node, main-db, migrations, scripts)
         working-directory: apps/emdash-desktop
-        run: pnpm exec vitest run --project node --project main-db --project migrations --project scripts
+        # local-pty integration tests need a real PTY; node-pty cannot spawn one on
+        # GitHub macOS runners (posix_spawnp failed). They still run locally.
+        run: >-
+          pnpm exec vitest run
+          --project node --project main-db --project migrations --project scripts
+          --exclude "**/local-pty.integration.test.ts"
