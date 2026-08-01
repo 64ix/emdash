@@ -19,6 +19,7 @@ import {
 import { issuesSyncScheduler } from './inbound-sync/issues-sync-scheduler';
 import {
   acceptLinkSuggestion,
+  adoptLinkSuggestion,
   dismissLinkSuggestion,
   getLinkSuggestionsForProject,
 } from './inbound-sync/link-suggestions-service';
@@ -199,6 +200,14 @@ export const issueController = createRPCController({
     suggestion: LinkSuggestion
   ): Promise<void> => {
     return acceptLinkSuggestion(projectId, taskId, suggestion);
+  },
+
+  /** Adopts a suggestion into a task of its own, for an issue no existing task covers. */
+  adoptLinkSuggestion: async (
+    projectId: string,
+    suggestion: LinkSuggestion
+  ): Promise<Result<CreateTaskSuccess, CreateTaskError>> => {
+    return adoptLinkSuggestion(projectId, suggestion);
   },
 
   dismissLinkSuggestion: async (projectId: string, suggestion: LinkSuggestion): Promise<void> => {

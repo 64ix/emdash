@@ -4,6 +4,7 @@ import {
   isMapShapedIssue,
   isSpecShapedIssue,
   isWayfinderLabeled,
+  stripSpecTitlePrefix,
 } from './issue-shape';
 
 describe('isSpecShapedIssue', () => {
@@ -21,6 +22,22 @@ describe('isSpecShapedIssue', () => {
 
   it('does not match a plain title', () => {
     expect(isSpecShapedIssue('Fix the login bug')).toBe(false);
+  });
+});
+
+describe('stripSpecTitlePrefix', () => {
+  it('strips the [Spec] prefix', () => {
+    expect(stripSpecTitlePrefix('[Spec] GitHub-derived Feature Board')).toBe(
+      'GitHub-derived Feature Board'
+    );
+  });
+
+  it('trims a title it does not strip', () => {
+    expect(stripSpecTitlePrefix('  Fix the login bug  ')).toBe('Fix the login bug');
+  });
+
+  it('keeps the title when stripping would leave nothing', () => {
+    expect(stripSpecTitlePrefix('[Spec]')).toBe('[Spec]');
   });
 });
 

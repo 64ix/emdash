@@ -55,6 +55,16 @@ yet. Not a task: adopting it creates a real task with the issue as its
 Origin; rejecting it hides it. Nothing is persisted without adoption.
 Sourced from the [Issue Tracker Repository](#issue-tracker-repository) only.
 
+## Link Suggestion
+
+An orphan Spec- or Map-shaped GitHub issue — no [Task Marker](#task-marker),
+no task linking it — surfaced above the Feature Board with three answers:
+**attach** it to an existing task, **adopt** it into a task of its own (the
+issue came from elsewhere and no task covers it), or **dismiss** it. Adoption
+sets the issue in its suggested [Linked Issue Role](#linked-issue-role), never
+as Origin, and lands the card in the stage that fact implies. Sourced from the
+[Issue Tracker Repository](#issue-tracker-repository) only.
+
 ## Issue Tracker Repository
 
 The single GitHub repository a project reads inbound issues from: the one

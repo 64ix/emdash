@@ -1,3 +1,4 @@
+import type { Result } from '@emdash/shared';
 import { eq } from 'drizzle-orm';
 import { writeLinkedIssueRole, writeTaskWorkflowStage } from '@main/core/tasks/task-fact-writes';
 import { db } from '@main/db/client';
@@ -6,8 +7,10 @@ import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
 import { linkSuggestionsUpdatedChannel } from '@shared/core/issues/issueEvents';
 import type { LinkSuggestion } from '@shared/core/issues/link-suggestion';
-import type { WorkflowStage } from '@shared/core/tasks/tasks';
+import type { CreateTaskError, CreateTaskSuccess, WorkflowStage } from '@shared/core/tasks/tasks';
+import { adoptIssueAsTask } from './adopt-issue-task';
 import { parseGitHubIssueUrl } from './github-issue-url';
+import { stripSpecTitlePrefix } from './issue-shape';
 import { getIssueTrackerRepositoryUrl } from './issue-tracker-repository';
 import {
   dismissLinkSuggestionUrl,
@@ -68,6 +71,45 @@ async function _getTaskWorkflowStage(taskId: string): Promise<WorkflowStage | nu
     .where(eq(tasks.id, taskId))
     .limit(1);
   return (row?.workflowStage as WorkflowStage | null) ?? null;
+}
+
+/**
+ * Adopts a link suggestion: the orphan issue turns out to describe work no
+ * existing task covers ("it came from elsewhere"), so instead of attaching it
+ * to one of the project's tasks it gets a task of its own, with the issue in
+ * its suggested Spec/Map role rather than as Origin.
+ *
+ * The new card's stage comes from the same derivation the sync pass uses on
+ * the same fact (docs/adr/0003) — open Spec → `spec`, open Map → `exploring` —
+ * not from a declaration, so an adopted suggestion lands exactly where the
+ * next sync pass would have put it anyway.
+ */
+export async function adoptLinkSuggestion(
+  projectId: string,
+  suggestion: LinkSuggestion
+): Promise<Result<CreateTaskSuccess, CreateTaskError>> {
+  const stage = deriveWorkflowStageFromIssues({
+    // A task that does not exist yet has no stage to regress, so this is the
+    // issue fact alone: `spec` for a Spec suggestion, `exploring` for a Map one.
+    currentStage: null,
+    // Suggestions are always sourced from open issues (see `computeLinkSuggestions`).
+    specIssue: suggestion.role === 'spec' ? { state: 'open' } : undefined,
+    mapIssue: suggestion.role === 'map' ? { state: 'open' } : undefined,
+    hasMergedPullRequest: false,
+  });
+
+  const result = await adoptIssueAsTask({
+    projectId,
+    issue: suggestion.issue,
+    role: suggestion.role,
+    stage,
+    name: stripSpecTitlePrefix(suggestion.issue.title),
+  });
+  if (!result.success) return result;
+
+  await _removeSuggestion(projectId, suggestion);
+
+  return result;
 }
 
 /** Dismisses a link suggestion so a future sync pass never re-surfaces it. */

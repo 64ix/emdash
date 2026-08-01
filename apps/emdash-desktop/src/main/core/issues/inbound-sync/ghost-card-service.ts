@@ -1,21 +1,10 @@
-import crypto from 'node:crypto';
 import type { Result } from '@emdash/shared';
-import { eq } from 'drizzle-orm';
-import { createTask } from '@main/core/tasks/operations/createTask';
-import { writeTaskWorkflowStage } from '@main/core/tasks/task-fact-writes';
-import { taskService } from '@main/core/tasks/task-service';
-import { db } from '@main/db/client';
-import { projects } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import { ghostCardsUpdatedChannel } from '@shared/core/issues/issueEvents';
-import type {
-  CreateTaskError,
-  CreateTaskParams,
-  CreateTaskSuccess,
-} from '@shared/core/tasks/tasks';
-import { buildWorkspaceConfigFromPreset } from '@shared/core/workspaces/build-workspace-config-from-preset';
+import type { CreateTaskError, CreateTaskSuccess } from '@shared/core/tasks/tasks';
+import { adoptIssueAsTask } from './adopt-issue-task';
 import {
   getCachedGhostCards,
   rejectGhostCardUrl,
@@ -38,55 +27,24 @@ export async function getGhostCardsForProject(projectId: string): Promise<GhostC
 
 /**
  * Adopts a Ghost Card (ticket #9, CONTEXT.md "Ghost Card"): creates a real
- * task through the existing `createTask` operation with the issue set as
- * Origin, reusing the project's repository workspace so no worktree gets
- * provisioned (mirrors the `repo-root` workspace preset already used
- * elsewhere for lightweight tasks — see `buildWorkspaceConfigFromPreset`).
- * Lands the task in the `idea` stage — a declaration, not a GitHub fact (see
- * docs/adr/0003) — and removes the card from the cache so it never
- * resurfaces (an adopted ghost becomes a linked task, which the root-issue
- * filter already excludes going forward).
- *
- * Calls the `createTask` operation directly rather than `TaskService.createTask`
- * to avoid pulling in its much heavier project/workspace dependency graph for
- * this main-process-only flow, mirroring the reasoning in
- * `task-fact-writes.ts`. Still routes through `taskService.notifyTaskCreated`
- * (the sanctioned hook for callers that commit a task insert outside of
- * `TaskService.createTask` — see its doc comment) so the `task:created` hook
- * fires for downstream listeners (search indexing, telemetry) exactly as it
- * would for a task created through the create-task modal, not just the IPC
- * event the renderer's task list needs.
+ * task with the issue set as Origin (see `adoptIssueAsTask`), lands it in the
+ * `idea` stage — a declaration, not a GitHub fact (see docs/adr/0003) — and
+ * removes the card from the cache so it never resurfaces (an adopted ghost
+ * becomes a linked task, which the root-issue filter already excludes going
+ * forward).
  */
 export async function adoptGhostCard(
   projectId: string,
   ghostCard: GhostCard
 ): Promise<Result<CreateTaskSuccess, CreateTaskError>> {
-  const [projectRow] = await db
-    .select({ repositoryWorkspaceId: projects.repositoryWorkspaceId })
-    .from(projects)
-    .where(eq(projects.id, projectId))
-    .limit(1);
-
-  const workspaceConfig = buildWorkspaceConfigFromPreset('repo-root', {
-    repositoryWorkspaceId: projectRow?.repositoryWorkspaceId ?? undefined,
-  });
-
-  const params: CreateTaskParams = {
-    id: crypto.randomUUID(),
+  const result = await adoptIssueAsTask({
     projectId,
-    taskConfig: { version: '1', name: ghostCard.issue.title, linkedIssue: ghostCard.issue },
-    workspaceConfig,
-  };
-
-  const result = await createTask(params);
+    issue: ghostCard.issue,
+    role: 'origin',
+    stage: 'idea',
+  });
   if (!result.success) return result;
 
-  // Persist the `idea` stage before announcing the task so the created event
-  // already carries it — otherwise the card first renders in Unstaged and only
-  // jumps to Idea when the follow-up stage event lands (or never, if that
-  // event is missed).
-  await writeTaskWorkflowStage(result.data.task.id, 'idea');
-  taskService.notifyTaskCreated({ ...result.data.task, workflowStage: 'idea' }, params);
   await _removeGhostCard(projectId, ghostCard);
 
   return result;

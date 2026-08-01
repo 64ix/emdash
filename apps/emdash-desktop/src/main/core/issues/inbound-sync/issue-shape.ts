@@ -8,6 +8,18 @@ export function isSpecShapedIssue(title: string): boolean {
   return title.trimStart().startsWith(SPEC_TITLE_PREFIX);
 }
 
+/**
+ * `[Spec] Feature Board drag-and-drop` → `Feature Board drag-and-drop`: the
+ * name of the task a Spec issue belongs to is the feature, not the spec.
+ * Returns the title unchanged when stripping would leave nothing.
+ */
+export function stripSpecTitlePrefix(title: string): string {
+  const trimmed = title.trim();
+  if (!isSpecShapedIssue(trimmed)) return trimmed;
+  const stripped = trimmed.slice(SPEC_TITLE_PREFIX.length).trim();
+  return stripped || trimmed;
+}
+
 /** Map-shaped: labelled `wayfinder:map`. */
 export function isMapShapedIssue(labels: readonly string[]): boolean {
   return labels.includes(MAP_LABEL);

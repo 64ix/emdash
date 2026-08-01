@@ -13,8 +13,10 @@ import type { Task } from '@shared/core/tasks/tasks';
 /**
  * "Attach to a task?" surface for orphan Spec/Map-shaped GitHub issues (no
  * Task Marker, no task linking them yet — see ticket #8 and CONTEXT.md
- * "Task Marker"). Modest by design: a compact list above the board columns,
- * refreshed on every inbound issues sync pass.
+ * "Task Marker"). Each row offers the three answers: attach it to an existing
+ * task, adopt it into a task of its own (the issue came from elsewhere and no
+ * task covers it), or dismiss it. Modest by design: a compact list above the
+ * board columns, refreshed on every inbound issues sync pass.
  */
 export const BoardLinkSuggestions = observer(function BoardLinkSuggestions({
   projectId,
@@ -51,16 +53,40 @@ export const BoardLinkSuggestions = observer(function BoardLinkSuggestions({
         .filter((task): task is Task => !!task && !task.archivedAt && task.type === 'task')
     : [];
 
+  const removeSuggestion = (suggestion: LinkSuggestion) =>
+    setSuggestions((current) => current.filter((s) => s.id !== suggestion.id));
+
+  // Invoked from fire-and-forget click handlers, so failures are handled here:
+  // the row only disappears once the RPC succeeded, and an error never escapes
+  // as an unhandled rejection.
   const handleAccept = async (suggestion: LinkSuggestion) => {
     const taskId = selectedTaskId[suggestion.id];
     if (!taskId) return;
-    await rpc.issues.acceptLinkSuggestion(projectId, taskId, suggestion);
-    setSuggestions((current) => current.filter((s) => s.id !== suggestion.id));
+    try {
+      await rpc.issues.acceptLinkSuggestion(projectId, taskId, suggestion);
+      removeSuggestion(suggestion);
+    } catch (e) {
+      console.error('Failed to attach link suggestion', e);
+    }
+  };
+
+  /** The issue describes work no existing task covers: give it a task of its own. */
+  const handleAdopt = async (suggestion: LinkSuggestion) => {
+    try {
+      const result = await rpc.issues.adoptLinkSuggestion(projectId, suggestion);
+      if (result.success) removeSuggestion(suggestion);
+    } catch (e) {
+      console.error('Failed to adopt link suggestion', e);
+    }
   };
 
   const handleDismiss = async (suggestion: LinkSuggestion) => {
-    await rpc.issues.dismissLinkSuggestion(projectId, suggestion);
-    setSuggestions((current) => current.filter((s) => s.id !== suggestion.id));
+    try {
+      await rpc.issues.dismissLinkSuggestion(projectId, suggestion);
+      removeSuggestion(suggestion);
+    } catch (e) {
+      console.error('Failed to dismiss link suggestion', e);
+    }
   };
 
   return (
@@ -95,6 +121,14 @@ export const BoardLinkSuggestions = observer(function BoardLinkSuggestions({
               onClick={() => void handleAccept(suggestion)}
             >
               Attach
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              title={`Create a new task from "${suggestion.issue.title}"`}
+              onClick={() => void handleAdopt(suggestion)}
+            >
+              Adopt
             </Button>
             <Button size="xs" variant="ghost" onClick={() => void handleDismiss(suggestion)}>
               Dismiss
