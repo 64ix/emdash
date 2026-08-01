@@ -24,6 +24,11 @@ export default defineConfig({
     },
   },
   build: {
+    // In watch mode (`dev` script) dist/ must never be wiped at startup: the
+    // Electron app's root dev task starts in parallel and resolves this
+    // package from dist/, so an empty window between clean and re-emit
+    // crashes it at boot (ERR_MODULE_NOT_FOUND). One-shot builds still clean.
+    emptyOutDir: !process.argv.includes('--watch'),
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.tsx'),

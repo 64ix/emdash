@@ -11,7 +11,7 @@ import {
   type LiveModelDef,
   type LiveModelProvider,
 } from '@emdash/wire';
-import type { WorkspaceAcpRuntimeClient } from '../acp/host';
+import type { WorkspaceAcpRuntimeClient } from '../acp/host.ts';
 
 export type WorkspaceWireControllerDeps = {
   appVersion?: string;

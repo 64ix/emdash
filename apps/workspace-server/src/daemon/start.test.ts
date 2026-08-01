@@ -2,8 +2,8 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { daemonPaths } from './paths';
-import { startDaemon, type SpawnDaemon } from './start';
+import { daemonPaths } from './paths.ts';
+import { startDaemon, type SpawnDaemon } from './start.ts';
 
 const health = {
   status: 'ok' as const,

@@ -2,9 +2,9 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createWorkspaceWireController } from '../api/controller';
-import { serveSocket, type SocketServeHandle } from '../wire/serve-socket';
-import { probeDaemon } from './probe';
+import { createWorkspaceWireController } from '../api/controller.ts';
+import { serveSocket, type SocketServeHandle } from '../wire/serve-socket.ts';
+import { probeDaemon } from './probe.ts';
 
 const handles: SocketServeHandle[] = [];
 

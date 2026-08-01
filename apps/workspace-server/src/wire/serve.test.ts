@@ -6,9 +6,9 @@ import { PassThrough } from 'node:stream';
 import { PROTOCOL_VERSION, workspaceWireContract } from '@emdash/core/workspace-server';
 import { client as createClient, connect, streamTransport } from '@emdash/wire';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createWorkspaceWireController } from '../api/controller';
-import { serveSocket, type SocketServeHandle } from './serve-socket';
-import { serveStdio } from './serve-stdio';
+import { createWorkspaceWireController } from '../api/controller.ts';
+import { serveSocket, type SocketServeHandle } from './serve-socket.ts';
+import { serveStdio } from './serve-stdio.ts';
 
 const handles: SocketServeHandle[] = [];
 const disposers: Array<() => void> = [];
