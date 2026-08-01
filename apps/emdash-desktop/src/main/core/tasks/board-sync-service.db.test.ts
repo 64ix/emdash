@@ -313,6 +313,28 @@ describe('BoardSyncService', () => {
       expect(await stageOf(fixture.db, 'task-provision-leaves-triage')).toBe('implementing');
     });
 
+    it('never downgrades a review/shipped task when no PR fact currently matches', async () => {
+      // e.g. re-provisioning a shipped task right after app start, before the
+      // repository's PR rows have been synced — review/shipped are
+      // GitHub-proven stages a transiently absent PR fact must not undo.
+      await insertTask(fixture.db, {
+        id: 'task-provision-shipped',
+        workflowStage: 'shipped',
+        linkedIssues: specLink('#203'),
+      });
+      await insertTask(fixture.db, {
+        id: 'task-provision-review',
+        workflowStage: 'review',
+        linkedIssues: specLink('#204'),
+      });
+
+      await service.applyProvisionedStage('task-provision-shipped');
+      await service.applyProvisionedStage('task-provision-review');
+
+      expect(await stageOf(fixture.db, 'task-provision-shipped')).toBe('shipped');
+      expect(await stageOf(fixture.db, 'task-provision-review')).toBe('review');
+    });
+
     it('never auto-moves a link-less task', async () => {
       await insertTask(fixture.db, { id: 'task-provision-linkless', linkedIssues: null });
 

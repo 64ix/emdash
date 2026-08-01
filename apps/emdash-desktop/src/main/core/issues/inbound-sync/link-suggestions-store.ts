@@ -14,8 +14,21 @@ function dismissedKey(projectId: string, repositoryUrl: string): string {
   return `dismissed:${projectId}:${repositoryUrl}`;
 }
 
+/**
+ * Comparison key for change detection, excluding `issue.fetchedAt` — a fresh
+ * timestamp `remoteIssueToLinkedIssue` stamps on every sync pass, which would
+ * otherwise make every pass look "changed" even when the underlying GitHub
+ * state didn't move at all (mirrors `ghost-card-store.ts`).
+ */
+function comparableSuggestion(suggestion: LinkSuggestion): unknown {
+  const { fetchedAt: _fetchedAt, ...issueWithoutFetchedAt } = suggestion.issue;
+  return { id: suggestion.id, role: suggestion.role, issue: issueWithoutFetchedAt };
+}
+
 function sortedJson(list: LinkSuggestion[]): string {
-  return JSON.stringify([...list].sort((a, b) => a.id.localeCompare(b.id)));
+  return JSON.stringify(
+    [...list].sort((a, b) => a.id.localeCompare(b.id)).map(comparableSuggestion)
+  );
 }
 
 export async function getCachedSuggestions(

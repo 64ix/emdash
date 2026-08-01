@@ -21,8 +21,9 @@ export const taskStatusUpdatedChannel = defineEvent<{
  * path — the board sync service's PR-facts derivation pass, the
  * task-provisioned `implementing` hook (see board-sync-service.ts), and the
  * inbound issues sync deriving a stage from GitHub facts (see
- * task-fact-writes.ts). Renderer-initiated chevron moves apply optimistically
- * in the originating window; this lets every window observe the change too.
+ * task-fact-writes.ts). Renderer-initiated manual moves (board drag-and-drop)
+ * apply optimistically in the originating window; this lets every window
+ * observe main-process-derived changes too.
  */
 export const taskWorkflowStageUpdatedChannel = defineEvent<{
   taskId: string;

@@ -116,7 +116,12 @@ export class BoardSyncService implements IInitializable, IDisposable {
       const derived = derivePrStage(matches);
       if (!derived) continue; // no PR fact for this task — never touched on the periodic pass
 
-      await writeTaskWorkflowStage(task.id, derived);
+      // expectedCurrentStage: drop the write if the stage moved since the
+      // snapshot above (e.g. a manual drag into `triage` mid-pass) — the
+      // derivation is stale and a user gesture must win over the periodic pass.
+      await writeTaskWorkflowStage(task.id, derived, {
+        expectedCurrentStage: (task.workflowStage as WorkflowStage | null) ?? null,
+      });
     }
   }
 
@@ -153,8 +158,16 @@ export class BoardSyncService implements IInitializable, IDisposable {
     const matches = findSpecMatchingPrs(prFacts, { specIssueNumber, taskBranch });
     const derived = derivePrStage(matches);
 
+    // A current `review`/`shipped` stage is a GitHub-proven fact; the transient
+    // absence of a matching PR row (PR facts not yet synced, renamed branch)
+    // must not downgrade it to `implementing` on re-provisioning.
+    const currentStage = row.workflowStage as WorkflowStage | null;
     const nextStage: WorkflowStage =
-      derived === 'review' || derived === 'shipped' ? derived : 'implementing';
+      derived === 'review' || derived === 'shipped'
+        ? derived
+        : currentStage === 'review' || currentStage === 'shipped'
+          ? currentStage
+          : 'implementing';
 
     await writeTaskWorkflowStage(row.id, nextStage);
   }

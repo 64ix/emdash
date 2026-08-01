@@ -78,8 +78,12 @@ export async function adoptGhostCard(
   const result = await createTask(params);
   if (!result.success) return result;
 
-  taskService.notifyTaskCreated(result.data.task, params);
+  // Persist the `idea` stage before announcing the task so the created event
+  // already carries it — otherwise the card first renders in Unstaged and only
+  // jumps to Idea when the follow-up stage event lands (or never, if that
+  // event is missed).
   await writeTaskWorkflowStage(result.data.task.id, 'idea');
+  taskService.notifyTaskCreated({ ...result.data.task, workflowStage: 'idea' }, params);
   await _removeGhostCard(projectId, ghostCard);
 
   return result;

@@ -22,7 +22,9 @@ export function parseGitHubIssueUrl(url: string): ParsedGitHubIssueUrl | null {
   }
 
   const segments = parsed.pathname.split('/').filter(Boolean);
-  const issuesIndex = segments.indexOf('issues');
+  // lastIndexOf, not indexOf: an owner or repo literally named "issues"
+  // (e.g. /foo/issues/issues/42) would otherwise match the wrong segment.
+  const issuesIndex = segments.lastIndexOf('issues');
   if (issuesIndex < 2) return null;
 
   const owner = segments[issuesIndex - 2];

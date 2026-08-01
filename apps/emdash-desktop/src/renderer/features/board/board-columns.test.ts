@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
-import { adjacentStage, COLUMNS, isTaskShippedFaded, STAGE_LABELS, stageOf } from './board-columns';
+import { isTaskShippedFaded, STAGE_LABELS } from './board-columns';
+import { COLUMNS, stageOf } from './board-ordering';
 
 function makeTask(workflowStage?: WorkflowStage, prs: PullRequest[] = []): Task {
   return {
@@ -91,32 +92,6 @@ describe('stageOf', () => {
   it('returns the task workflow stage when set', () => {
     expect(stageOf(makeTask('spec'))).toBe('spec');
     expect(stageOf(makeTask('triage'))).toBe('triage');
-  });
-});
-
-describe('adjacentStage', () => {
-  it('walks the pipeline forward one column at a time', () => {
-    expect(adjacentStage('unstaged', 1)).toBe('idea');
-    expect(adjacentStage('idea', 1)).toBe('exploring');
-    expect(adjacentStage('exploring', 1)).toBe('spec');
-    expect(adjacentStage('spec', 1)).toBe('implementing');
-    expect(adjacentStage('implementing', 1)).toBe('review');
-    expect(adjacentStage('review', 1)).toBe('shipped');
-    expect(adjacentStage('shipped', 1)).toBe('triage');
-  });
-
-  it('walks the pipeline backward one column at a time', () => {
-    expect(adjacentStage('triage', -1)).toBe('shipped');
-    expect(adjacentStage('shipped', -1)).toBe('review');
-    expect(adjacentStage('idea', -1)).toBe('unstaged');
-  });
-
-  it('returns null past the leading edge (Unstaged)', () => {
-    expect(adjacentStage('unstaged', -1)).toBeNull();
-  });
-
-  it('returns null past the trailing edge (Triage)', () => {
-    expect(adjacentStage('triage', 1)).toBeNull();
   });
 });
 

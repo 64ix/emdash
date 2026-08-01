@@ -94,6 +94,35 @@ describe('deriveWorkflowStageFromIssues', () => {
     ).toBeNull();
   });
 
+  it('never drags a PR-proven review/shipped task into triage when the Spec closes', () => {
+    // e.g. "Closes #N" auto-closes the Spec before the merged PR row is synced
+    // locally — review/shipped are PR-fact stages a closed Spec cannot outrank.
+    expect(
+      deriveWorkflowStageFromIssues({
+        currentStage: 'review',
+        specIssue: { state: 'closed' },
+        hasMergedPullRequest: false,
+      })
+    ).toBeNull();
+    expect(
+      deriveWorkflowStageFromIssues({
+        currentStage: 'shipped',
+        specIssue: { state: 'closed' },
+        hasMergedPullRequest: false,
+      })
+    ).toBeNull();
+  });
+
+  it('still derives triage from a mid-flight stage when the Spec closes without a merged PR', () => {
+    expect(
+      deriveWorkflowStageFromIssues({
+        currentStage: 'implementing',
+        specIssue: { state: 'closed' },
+        hasMergedPullRequest: false,
+      })
+    ).toBe('triage');
+  });
+
   it('returns null when neither issue fact applies', () => {
     expect(
       deriveWorkflowStageFromIssues({

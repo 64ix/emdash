@@ -1,4 +1,4 @@
-import type { WorkflowStage } from '@shared/core/tasks/tasks';
+import { workflowStages, type WorkflowStage } from '@shared/core/tasks/tasks';
 
 /** The one fact this module needs about a linked Spec/Map issue: is it open? */
 export type IssueStateFact = { state: 'open' | 'closed' };
@@ -14,18 +14,15 @@ export type StageDerivationInput = {
 };
 
 /**
- * Pipeline order used to decide whether an issues-derived stage would
- * *advance* a task rather than regress it. `triage` is excluded — it is an
- * out-of-flow stage handled by its own guard below, not part of this order.
+ * Pipeline rank used to decide whether an issues-derived stage would
+ * *advance* a task rather than regress it, derived from the canonical
+ * `workflowStages` enum order so the two can't drift. `triage` trails the
+ * enum as the out-of-flow stage and is handled by its own guards below,
+ * never through this ranking.
  */
-const STAGE_ORDER: Record<Exclude<WorkflowStage, 'triage'>, number> = {
-  idea: 0,
-  exploring: 1,
-  spec: 2,
-  implementing: 3,
-  review: 4,
-  shipped: 5,
-};
+function stageRank(stage: WorkflowStage): number {
+  return workflowStages.options.indexOf(stage);
+}
 
 function canAdvanceTo(
   current: WorkflowStage | null | undefined,
@@ -33,7 +30,7 @@ function canAdvanceTo(
 ): boolean {
   if (!current) return true;
   if (current === 'triage') return false;
-  return STAGE_ORDER[current] <= STAGE_ORDER[desired];
+  return stageRank(current) <= stageRank(desired);
 }
 
 /**
@@ -61,6 +58,11 @@ export function deriveWorkflowStageFromIssues(input: StageDerivationInput): Work
     }
     // Spec closed mid-flight: only the "no merged PR" fact is ours to prove.
     // A merged PR is a stronger fact owned by PR-fact derivation (ticket #7).
+    // `review`/`shipped` are PR-proven stages issue facts can't outrank
+    // (the invariant documented above): a closed Spec must never drag a task
+    // whose PR is open or merged back into `triage` — e.g. the common
+    // "Closes #N" auto-close racing ahead of the local PR-row sync.
+    if (currentStage === 'review' || currentStage === 'shipped') return null;
     return hasMergedPullRequest ? null : 'triage';
   }
 

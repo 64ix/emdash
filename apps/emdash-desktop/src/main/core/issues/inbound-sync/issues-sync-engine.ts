@@ -12,6 +12,11 @@ import {
   ghostCardsUpdatedChannel,
   linkSuggestionsUpdatedChannel,
 } from '@shared/core/issues/issueEvents';
+import {
+  findSpecMatchingPrs,
+  parseIssueNumberFromIdentifier,
+  type PrWorkflowFact,
+} from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { parseRepositoryRefResult } from '@shared/repository-ref';
 import { getRejectedIssueUrls, setCachedGhostCardsIfChanged } from './ghost-card-store';
@@ -52,6 +57,7 @@ export type IssuesSyncEngineError =
 type TaskFacts = {
   currentStage: WorkflowStage | null;
   branchName: string | null;
+  specIssueNumber: number | null;
   specFact?: IssueStateFact;
   mapFact?: IssueStateFact;
 };
@@ -123,6 +129,7 @@ export class IssuesSyncEngine {
       taskFacts.set(row.id, {
         currentStage: (row.workflowStage as WorkflowStage | null) ?? null,
         branchName: row.workspaceId ? (branchByWorkspaceId.get(row.workspaceId) ?? null) : null,
+        specIssueNumber: parseIssueNumberFromIdentifier(row.linkedIssues?.spec?.identifier),
       });
 
       const originUrl = row.linkedIssues?.origin?.url;
@@ -137,21 +144,22 @@ export class IssuesSyncEngine {
 
     // Refresh already-linked Spec/Map issues (for this repository) so stage
     // derivation reflects their current state even if they've fallen out of
-    // the shape-candidate search below (e.g. an edited title).
-    for (const row of rows) {
-      const facts = taskFacts.get(row.id)!;
-      const specUrl = row.linkedIssues?.spec?.url;
-      const mapUrl = row.linkedIssues?.map?.url;
+    // the shape-candidate search below (e.g. an edited title). Lookups are
+    // independent, so they run together — githubRateLimiter bounds the burst.
+    await Promise.all(
+      rows.map(async (row) => {
+        const facts = taskFacts.get(row.id)!;
+        const specUrl = row.linkedIssues?.spec?.url;
+        const mapUrl = row.linkedIssues?.map?.url;
 
-      if (specUrl) {
-        const remote = await this._refreshLinkedIssue(client.data, repository.data, specUrl);
-        if (remote) facts.specFact = { state: remote.state };
-      }
-      if (mapUrl) {
-        const remote = await this._refreshLinkedIssue(client.data, repository.data, mapUrl);
-        if (remote) facts.mapFact = { state: remote.state };
-      }
-    }
+        const [specRemote, mapRemote] = await Promise.all([
+          specUrl ? this._refreshLinkedIssue(client.data, repository.data, specUrl) : null,
+          mapUrl ? this._refreshLinkedIssue(client.data, repository.data, mapUrl) : null,
+        ]);
+        if (specRemote) facts.specFact = { state: specRemote.state };
+        if (mapRemote) facts.mapFact = { state: mapRemote.state };
+      })
+    );
 
     // Discover Spec/Map-shaped candidates for Task Marker attachment and
     // suggestion sourcing.
@@ -183,8 +191,12 @@ export class IssuesSyncEngine {
           }
           const facts = taskFacts.get(markerTaskId)!;
           const fact: IssueStateFact = { state: issue.state };
-          if (role === 'spec') facts.specFact = fact;
-          else facts.mapFact = fact;
+          if (role === 'spec') {
+            facts.specFact = fact;
+            facts.specIssueNumber = issue.number;
+          } else {
+            facts.mapFact = fact;
+          }
         } else {
           log.debug('IssuesSyncEngine: Task Marker points at an unknown task, ignoring', {
             projectId,
@@ -198,15 +210,27 @@ export class IssuesSyncEngine {
     }
 
     // Derive Workflow Stage for every task we can prove something about.
+    // Merged-PR facts are fetched once per repository and matched with the
+    // same `findSpecMatchingPrs` authority `BoardSyncService` uses (spec
+    // number in body/branch, task branch as fallback) — a branch-name-only
+    // lookup would miss merged PRs from renamed branches or torn-down
+    // workspaces and wrongly sink tasks into `triage`.
+    const needsMergedPrFacts = [...taskFacts.values()].some(
+      (facts) => facts.specFact?.state === 'closed'
+    );
+    const mergedPrFacts = needsMergedPrFacts
+      ? await this._mergedPrFactsForRepository(repository.data.repositoryUrl)
+      : [];
+
     for (const [taskId, facts] of taskFacts) {
       if (!facts.specFact && !facts.mapFact) continue;
 
       const hasMergedPullRequest =
-        facts.specFact?.state === 'closed' && facts.branchName
-          ? await this._hasMergedPullRequestForBranch(
-              repository.data.repositoryUrl,
-              facts.branchName
-            )
+        facts.specFact?.state === 'closed'
+          ? findSpecMatchingPrs(mergedPrFacts, {
+              specIssueNumber: facts.specIssueNumber,
+              taskBranch: facts.branchName,
+            }).length > 0
           : false;
 
       const desired = deriveWorkflowStageFromIssues({
@@ -217,8 +241,13 @@ export class IssuesSyncEngine {
       });
 
       if (desired && desired !== facts.currentStage) {
-        await writeTaskWorkflowStage(taskId, desired);
-        summary.stageChanges += 1;
+        // expectedCurrentStage: drop the write when the stage moved since the
+        // snapshot (e.g. a manual drag into `triage` while this pass was
+        // awaiting GitHub) — a user gesture must win over a stale derivation.
+        const wrote = await writeTaskWorkflowStage(taskId, desired, {
+          expectedCurrentStage: facts.currentStage,
+        });
+        if (wrote) summary.stageChanges += 1;
       }
     }
 
@@ -282,26 +311,33 @@ export class IssuesSyncEngine {
     issueUrl: string
   ): Promise<RemoteIssue | null> {
     const parsed = parseGitHubIssueUrl(issueUrl);
-    if (!parsed || parsed.repository.repositoryUrl !== repository.repositoryUrl) return null;
+    // Case-insensitive: GitHub owner/repo paths are case-insensitive but
+    // `parseRepositoryRef` preserves the slug's original casing, so a stored
+    // link URL cased differently from the resolved remote must still match.
+    if (
+      !parsed ||
+      parsed.repository.repositoryUrl.toLowerCase() !== repository.repositoryUrl.toLowerCase()
+    ) {
+      return null;
+    }
     return client.getIssue(repository, parsed.number);
   }
 
-  private async _hasMergedPullRequestForBranch(
-    repositoryUrl: string,
-    branchName: string
-  ): Promise<boolean> {
+  /** Merged-PR facts for a repository, in the shape `findSpecMatchingPrs` matches on. */
+  private async _mergedPrFactsForRepository(repositoryUrl: string): Promise<PrWorkflowFact[]> {
     const rows = await db
-      .select({ url: pullRequests.url })
+      .select({
+        headRefName: pullRequests.headRefName,
+        status: pullRequests.status,
+        description: pullRequests.description,
+      })
       .from(pullRequests)
-      .where(
-        and(
-          eq(pullRequests.repositoryUrl, repositoryUrl),
-          eq(pullRequests.headRefName, branchName),
-          eq(pullRequests.status, 'merged')
-        )
-      )
-      .limit(1);
-    return rows.length > 0;
+      .where(and(eq(pullRequests.repositoryUrl, repositoryUrl), eq(pullRequests.status, 'merged')));
+    return rows.map((row) => ({
+      headRefName: row.headRefName,
+      status: row.status as PrWorkflowFact['status'],
+      description: row.description ?? null,
+    }));
   }
 }
 

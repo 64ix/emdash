@@ -64,10 +64,11 @@ function toRemoteIssue(issue: {
 
 /**
  * Whether an issue is itself a sub-issue of another (has a parent) via the
- * REST "sub-issues" feature (ticket #9's root-issue filter). Defensive: any
- * error other than "no parent" (404) is treated as "no parent" too, since
- * older GitHub Enterprise instances or reduced-scope tokens may not expose
- * this endpoint at all — a lookup failure shouldn't block the whole sync pass.
+ * REST "sub-issues" feature (ticket #9's root-issue filter). Only a 404 means
+ * "no parent". Any other failure (rate limit, 5xx, reduced-scope token, older
+ * GitHub Enterprise without the endpoint) is inconclusive, so it conservatively
+ * reports "has a parent" — a transient error must never surface a real
+ * sub-issue as a Ghost Card; the candidate just waits for the next pass.
  */
 async function hasParentIssue(
   octokit: Octokit,
@@ -85,8 +86,9 @@ async function hasParentIssue(
       )
     );
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as { status?: number })?.status === 404) return false;
+    return true;
   }
 }
 
@@ -152,11 +154,12 @@ function createClientFromOctokit(octokit: Octokit): GitHubIssuesClient {
       );
       const candidates = data.filter((issue) => !issue.pull_request).map(toRemoteIssue);
 
-      const rootIssues: RemoteIssue[] = [];
-      for (const issue of candidates) {
-        if (!(await hasParentIssue(octokit, repo, issue.number))) rootIssues.push(issue);
-      }
-      return rootIssues;
+      // Independent lookups; concurrency is bounded by githubRateLimiter, so
+      // firing them together avoids N serialized round-trips per pass.
+      const hasParent = await Promise.all(
+        candidates.map((issue) => hasParentIssue(octokit, repo, issue.number))
+      );
+      return candidates.filter((_, index) => !hasParent[index]);
     },
   };
 }

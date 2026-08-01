@@ -32,17 +32,29 @@ export function useGhostCards(projectId: string) {
     };
   }, [projectId]);
 
+  // Callers invoke these from fire-and-forget click handlers, so failures are
+  // handled here: the card is only removed locally once the RPC succeeded, and
+  // an error never escapes as an unhandled rejection.
   const adopt = async (ghostCard: GhostCard) => {
-    const result = await rpc.issues.adoptGhostCard(projectId, ghostCard);
-    if (result.success) {
-      setGhostCards((current) => current.filter((c) => c.id !== ghostCard.id));
+    try {
+      const result = await rpc.issues.adoptGhostCard(projectId, ghostCard);
+      if (result.success) {
+        setGhostCards((current) => current.filter((c) => c.id !== ghostCard.id));
+      }
+      return result;
+    } catch (e) {
+      console.error('Failed to adopt ghost card', e);
+      return undefined;
     }
-    return result;
   };
 
   const reject = async (ghostCard: GhostCard) => {
-    await rpc.issues.rejectGhostCard(projectId, ghostCard);
-    setGhostCards((current) => current.filter((c) => c.id !== ghostCard.id));
+    try {
+      await rpc.issues.rejectGhostCard(projectId, ghostCard);
+      setGhostCards((current) => current.filter((c) => c.id !== ghostCard.id));
+    } catch (e) {
+      console.error('Failed to reject ghost card', e);
+    }
   };
 
   return { ghostCards, adopt, reject };

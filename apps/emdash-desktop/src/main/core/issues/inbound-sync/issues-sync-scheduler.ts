@@ -37,12 +37,15 @@ export class IssuesSyncScheduler implements IInitializable, IDisposable {
   async onProjectMounted(projectId: string): Promise<void> {
     const remoteUrls = await this._syncAndGetGitHubRemotes(projectId);
     this._projectRemoteUrls.set(projectId, remoteUrls);
-    if (remoteUrls.length === 0) return;
-
     await this._syncRemotes(projectId, remoteUrls);
+
+    // The interval re-reads (and refreshes) the remote list on every tick —
+    // remotes added or removed while the project stays mounted must be picked
+    // up without a remount. Installed even when no GitHub remote exists yet,
+    // for the same reason.
     this._clearInterval(projectId);
     const handle = setInterval(() => {
-      void this._syncRemotes(projectId, remoteUrls);
+      void this._refreshRemotesAndSync(projectId);
     }, SYNC_INTERVAL_MS);
     this._intervals.set(projectId, handle);
   }
@@ -54,8 +57,19 @@ export class IssuesSyncScheduler implements IInitializable, IDisposable {
 
   /** Triggered when the renderer opens the Feature Board for a project — additive to the periodic cadence. */
   async syncNow(projectId: string): Promise<void> {
-    const remoteUrls =
-      this._projectRemoteUrls.get(projectId) ?? (await this._syncAndGetGitHubRemotes(projectId));
+    // A cached empty list is not proof of "no remotes" (the project may have
+    // gained a GitHub remote since mount) — re-resolve in that case too.
+    const cached = this._projectRemoteUrls.get(projectId);
+    if (cached && cached.length > 0) {
+      await this._syncRemotes(projectId, cached);
+      return;
+    }
+    await this._refreshRemotesAndSync(projectId);
+  }
+
+  private async _refreshRemotesAndSync(projectId: string): Promise<void> {
+    const remoteUrls = await this._syncAndGetGitHubRemotes(projectId);
+    this._projectRemoteUrls.set(projectId, remoteUrls);
     await this._syncRemotes(projectId, remoteUrls);
   }
 

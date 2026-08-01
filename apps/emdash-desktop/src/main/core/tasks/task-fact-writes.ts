@@ -22,24 +22,36 @@ import { updateLinkedIssueRole } from './operations/updateLinkedIssueRole';
  * Kept separate from `TaskService` so main-process callers that only need to
  * write task facts don't pull in its much heavier dependency graph
  * (project/workspace/session managers).
+ *
+ * Sync passes derive stages from a snapshot read seconds earlier (GitHub
+ * round-trips happen in between), so they pass `expectedCurrentStage`: if the
+ * task's stage moved in the meantime — e.g. the user dragged the card into
+ * `triage` mid-pass — the derivation is stale and the write is dropped
+ * instead of clobbering the user's gesture. A missing task is likewise a
+ * benign race (hard-deleted mid-pass), not an error to abort the pass on.
+ *
+ * Returns whether a stage change was actually written.
  */
 export async function writeTaskWorkflowStage(
   taskId: string,
-  stage: WorkflowStage | null
-): Promise<void> {
+  stage: WorkflowStage | null,
+  options?: { expectedCurrentStage: WorkflowStage | null }
+): Promise<boolean> {
   const [row] = await db
     .select({ projectId: tasks.projectId, workflowStage: tasks.workflowStage })
     .from(tasks)
     .where(eq(tasks.id, taskId))
     .limit(1);
-  if (!row) throw new Error(`Task not found: ${taskId}`);
-  if (row.workflowStage === stage) return;
+  if (!row) return false;
+  if (row.workflowStage === stage) return false;
+  if (options && row.workflowStage !== options.expectedCurrentStage) return false;
 
   await db
     .update(tasks)
     .set({ workflowStage: stage, updatedAt: sql`CURRENT_TIMESTAMP` })
     .where(eq(tasks.id, taskId));
   events.emit(taskWorkflowStageUpdatedChannel, { taskId, projectId: row.projectId, stage });
+  return true;
 }
 
 /**
@@ -54,13 +66,15 @@ export async function writeLinkedIssueRole(
   role: LinkedIssueRole,
   issue: LinkedIssue | null
 ): Promise<Task | undefined> {
-  const task = await updateLinkedIssueRole(taskId, role, issue);
-  if (!task) return undefined;
-  events.emit(taskLinkedIssueRoleUpdatedChannel, {
-    taskId: task.id,
-    projectId: task.projectId,
-    role,
-    issue,
-  });
-  return task;
+  const result = await updateLinkedIssueRole(taskId, role, issue);
+  if (!result) return undefined;
+  if (result.changed) {
+    events.emit(taskLinkedIssueRoleUpdatedChannel, {
+      taskId: result.task.id,
+      projectId: result.task.projectId,
+      role,
+      issue,
+    });
+  }
+  return result.task;
 }
