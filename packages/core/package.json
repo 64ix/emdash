@@ -112,7 +112,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "dev": "tsdown --watch",
+    "dev": "tsdown --watch --no-clean",
     "build": "tsdown",
     "test": "vitest run",
     "lint": "sh -c 'root=$(cd ../.. && pwd); cd \"$root/apps/emdash-desktop\" && pnpm exec oxlint --config .oxlintrc.json \"$root/packages/core\"'",

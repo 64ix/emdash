@@ -29,7 +29,7 @@
     }
   },
   "scripts": {
-    "dev": "tsdown --watch",
+    "dev": "tsdown --watch --no-clean",
     "build": "tsdown",
     "test": "vitest run",
     "test:watch": "vitest",

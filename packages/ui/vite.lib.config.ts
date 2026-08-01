@@ -30,6 +30,11 @@ export default defineConfig({
     }),
   ],
   build: {
+    // In watch mode (`dev` script) dist/ must never be wiped at startup: the
+    // Electron app's root dev task starts in parallel and resolves this
+    // package from dist/, so an empty window between clean and re-emit
+    // breaks consumers until the watcher re-emits. One-shot builds still clean.
+    emptyOutDir: !process.argv.includes('--watch'),
     lib: {
       entry: {
         react: resolve(__dirname, 'src/react/index.ts'),
