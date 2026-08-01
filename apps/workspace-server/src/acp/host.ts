@@ -2,8 +2,8 @@ import { dirname, join } from 'node:path';
 import { acpApiContract, type AcpApiContract } from '@emdash/core/acp';
 import { type ContractClient } from '@emdash/wire/api';
 import { spawnWorker, type WorkerHandle } from '@emdash/wire/worker';
-import { daemonPaths } from '../daemon/paths';
-import { workspaceWorkerPath } from '../worker-manifest';
+import { daemonPaths } from '../daemon/paths.ts';
+import { workspaceWorkerPath } from '../worker-manifest.ts';
 
 export type WorkspaceAcpRuntimeClient = ContractClient<AcpApiContract>;
 

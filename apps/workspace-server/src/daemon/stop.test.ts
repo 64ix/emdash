@@ -2,9 +2,9 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { daemonPaths } from './paths';
-import { writePidFile } from './pid-file';
-import { stopDaemon } from './stop';
+import { daemonPaths } from './paths.ts';
+import { writePidFile } from './pid-file.ts';
+import { stopDaemon } from './stop.ts';
 
 const health = {
   status: 'ok' as const,

@@ -1,7 +1,7 @@
 import { err, ok, type Result } from '@emdash/shared';
-import { daemonPaths, type DaemonPaths } from './paths';
-import { isProcessAlive, readPidFile, removePidFile, type ProcessSignaler } from './pid-file';
-import { probeDaemon, type DaemonHealth, type DaemonProbeError } from './probe';
+import { daemonPaths, type DaemonPaths } from './paths.ts';
+import { isProcessAlive, readPidFile, removePidFile, type ProcessSignaler } from './pid-file.ts';
+import { probeDaemon, type DaemonHealth, type DaemonProbeError } from './probe.ts';
 
 export type StopDaemonResult = {
   status: 'not-running' | 'stopped';

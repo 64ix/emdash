@@ -5,7 +5,7 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import { dirname } from 'node:path';
 import type { Controller, WireTransport } from '@emdash/wire';
 import { createWireSessionHub, streamTransport } from '@emdash/wire';
-import { DEFAULT_WORKSPACE_SERVER_SOCKET_PATH } from '../daemon/paths';
+import { DEFAULT_WORKSPACE_SERVER_SOCKET_PATH } from '../daemon/paths.ts';
 
 export type SocketServeOptions = {
   socketPath?: string;

@@ -1,6 +1,6 @@
 import { err, ok, type Result } from '@emdash/shared';
-import { daemonPaths, type DaemonPaths } from './paths';
-import { probeDaemon, type DaemonHealth } from './probe';
+import { daemonPaths, type DaemonPaths } from './paths.ts';
+import { probeDaemon, type DaemonHealth } from './probe.ts';
 
 export type DaemonStatus = {
   status: 'running';

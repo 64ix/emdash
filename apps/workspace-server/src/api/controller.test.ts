@@ -3,8 +3,8 @@ import { PROTOCOL_VERSION, workspaceWireContract } from '@emdash/core/workspace-
 import { ok } from '@emdash/shared';
 import { client as createClient, connect, serve, streamTransport } from '@emdash/wire';
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkspaceAcpRuntimeClient } from '../acp/host';
-import { createWorkspaceWireController } from './controller';
+import type { WorkspaceAcpRuntimeClient } from '../acp/host.ts';
+import { createWorkspaceWireController } from './controller.ts';
 
 describe('createWorkspaceWireController', () => {
   it('forwards ACP procedures to the mounted runtime client', async () => {
