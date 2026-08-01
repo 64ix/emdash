@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   db: undefined as AppDb | undefined,
   emit: vi.fn(),
   getProject: vi.fn(),
+  resolveRepository: vi.fn(),
 }));
 
 vi.mock('@main/db/client', () => ({
@@ -49,20 +50,25 @@ vi.mock('@main/core/projects/project-manager', () => ({
   projectManager: { getProject: mocks.getProject },
 }));
 
+vi.mock('@main/core/github/services/github-repository-resolver', () => ({
+  githubRepositoryResolver: { resolve: mocks.resolveRepository },
+}));
+
 const PROJECT_ID = 'project-1';
 const REPOSITORY_URL = 'https://github.com/acme/repo';
+/** A fork's upstream tracker — cached, but never ours to surface. */
+const UPSTREAM_REPOSITORY_URL = 'https://github.com/upstream-org/repo';
 
-function makeGhostCard(overrides: Partial<GhostCard> = {}): GhostCard {
+function makeGhostCard(repositoryUrl = REPOSITORY_URL, number = 40): GhostCard {
   return {
-    id: `${REPOSITORY_URL}/issues/40`,
+    id: `${repositoryUrl}/issues/${number}`,
     issue: {
       provider: 'github',
-      identifier: '#40',
+      identifier: `#${number}`,
       title: 'Fix the login bug',
-      url: `${REPOSITORY_URL}/issues/40`,
+      url: `${repositoryUrl}/issues/${number}`,
       status: 'open',
     },
-    ...overrides,
   };
 }
 
@@ -73,7 +79,30 @@ describe('ghost-card-service', () => {
     fixture = await openFixture('empty');
     mocks.db = fixture.db;
     mocks.emit.mockClear();
-    mocks.getProject.mockReturnValue({});
+    // A fork checkout: our tracker on `origin`, somebody else's on `upstream`.
+    mocks.getProject.mockReturnValue({
+      gitRepository: {
+        getRemotes: vi.fn().mockResolvedValue([
+          { name: 'origin', url: `${REPOSITORY_URL}.git` },
+          { name: 'upstream', url: `${UPSTREAM_REPOSITORY_URL}.git` },
+        ]),
+        getBaseRemote: vi.fn().mockResolvedValue('origin'),
+      },
+    });
+    mocks.resolveRepository.mockImplementation((url: string) => {
+      const nameWithOwner = url.replace('https://github.com/', '').replace(/\.git$/, '');
+      const [owner, repo] = nameWithOwner.split('/');
+      return Promise.resolve({
+        success: true,
+        data: {
+          host: 'github.com',
+          repositoryUrl: `https://github.com/${nameWithOwner}`,
+          nameWithOwner,
+          owner,
+          repo,
+        },
+      });
+    });
     ({ adoptGhostCard, getGhostCardsForProject, rejectGhostCard } =
       await import('./ghost-card-service'));
 
@@ -83,9 +112,10 @@ describe('ghost-card-service', () => {
       path: '/repo',
       repositoryWorkspaceId: 'ws-repo-1',
     });
-    await fixture.db
-      .insert(projectRemotes)
-      .values({ projectId: PROJECT_ID, remoteName: 'origin', remoteUrl: REPOSITORY_URL });
+    await fixture.db.insert(projectRemotes).values([
+      { projectId: PROJECT_ID, remoteName: 'origin', remoteUrl: REPOSITORY_URL },
+      { projectId: PROJECT_ID, remoteName: 'upstream', remoteUrl: UPSTREAM_REPOSITORY_URL },
+    ]);
   });
 
   afterEach(() => {
@@ -99,6 +129,27 @@ describe('ghost-card-service', () => {
 
     expect(await getGhostCardsForProject(PROJECT_ID)).toEqual([ghostCard]);
     expect(await fixture.db.select().from(tasks)).toEqual([]);
+  });
+
+  it('surfaces only the base remote tracker, never a fork upstream', async () => {
+    const ours = makeGhostCard();
+    const theirs = makeGhostCard(UPSTREAM_REPOSITORY_URL, 1234);
+    await setCachedGhostCardsIfChanged(PROJECT_ID, REPOSITORY_URL, [ours]);
+    await setCachedGhostCardsIfChanged(PROJECT_ID, UPSTREAM_REPOSITORY_URL, [theirs]);
+
+    expect(await getGhostCardsForProject(PROJECT_ID)).toEqual([ours]);
+  });
+
+  it('surfaces nothing when the project has no resolvable GitHub tracker', async () => {
+    mocks.getProject.mockReturnValue({
+      gitRepository: {
+        getRemotes: vi.fn().mockResolvedValue([]),
+        getBaseRemote: vi.fn().mockResolvedValue('origin'),
+      },
+    });
+    await setCachedGhostCardsIfChanged(PROJECT_ID, REPOSITORY_URL, [makeGhostCard()]);
+
+    expect(await getGhostCardsForProject(PROJECT_ID)).toEqual([]);
   });
 
   it('adopts a Ghost Card: creates a task with Origin set, lands it in idea, and removes the card', async () => {

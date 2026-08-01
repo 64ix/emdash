@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import type { Result } from '@emdash/shared';
 import { eq } from 'drizzle-orm';
-import { getProjectRemoteUrls } from '@main/core/pull-requests/project-remotes-service';
 import { createTask } from '@main/core/tasks/operations/createTask';
 import { writeTaskWorkflowStage } from '@main/core/tasks/task-fact-writes';
 import { taskService } from '@main/core/tasks/task-service';
@@ -23,14 +22,18 @@ import {
   setCachedGhostCardsIfChanged,
 } from './ghost-card-store';
 import { parseGitHubIssueUrl } from './github-issue-url';
+import { getIssueTrackerRepositoryUrl } from './issue-tracker-repository';
 
-/** All cached Ghost Cards across every GitHub remote configured for a project. */
+/**
+ * Cached Ghost Cards for the project's issue tracker — the single repository
+ * behind its base remote, never the whole remote list (see
+ * `getIssueTrackerRepositoryUrl`): a fork's upstream issues are not board
+ * candidates.
+ */
 export async function getGhostCardsForProject(projectId: string): Promise<GhostCard[]> {
-  const repositoryUrls = await getProjectRemoteUrls(projectId);
-  const perRepository = await Promise.all(
-    repositoryUrls.map((repositoryUrl) => getCachedGhostCards(projectId, repositoryUrl))
-  );
-  return perRepository.flat();
+  const repositoryUrl = await getIssueTrackerRepositoryUrl(projectId);
+  if (!repositoryUrl) return [];
+  return getCachedGhostCards(projectId, repositoryUrl);
 }
 
 /**

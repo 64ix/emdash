@@ -14,6 +14,8 @@ import { setCachedSuggestionsIfChanged } from './link-suggestions-store';
 const mocks = vi.hoisted(() => ({
   db: undefined as AppDb | undefined,
   emit: vi.fn(),
+  getProject: vi.fn(),
+  resolveRepository: vi.fn(),
 }));
 
 vi.mock('@main/db/client', () => ({
@@ -29,21 +31,30 @@ vi.mock('@main/lib/logger', () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock('@main/core/projects/project-manager', () => ({
+  projectManager: { getProject: mocks.getProject },
+}));
+
+vi.mock('@main/core/github/services/github-repository-resolver', () => ({
+  githubRepositoryResolver: { resolve: mocks.resolveRepository },
+}));
+
 const PROJECT_ID = 'project-1';
 const REPOSITORY_URL = 'https://github.com/acme/repo';
+/** A fork's upstream tracker — cached, but never ours to suggest links from. */
+const UPSTREAM_REPOSITORY_URL = 'https://github.com/upstream-org/repo';
 
-function makeSuggestion(overrides: Partial<LinkSuggestion> = {}): LinkSuggestion {
+function makeSuggestion(repositoryUrl = REPOSITORY_URL, number = 1): LinkSuggestion {
   return {
-    id: `${REPOSITORY_URL}/issues/1`,
+    id: `${repositoryUrl}/issues/${number}`,
     role: 'spec',
     issue: {
       provider: 'github',
-      identifier: '#1',
+      identifier: `#${number}`,
       title: '[Spec] Feature',
-      url: `${REPOSITORY_URL}/issues/1`,
+      url: `${repositoryUrl}/issues/${number}`,
       status: 'open',
     },
-    ...overrides,
   };
 }
 
@@ -54,11 +65,36 @@ describe('link-suggestions-service', () => {
     fixture = await openFixture('empty');
     mocks.db = fixture.db;
     mocks.emit.mockClear();
+    // A fork checkout: our tracker on `origin`, somebody else's on `upstream`.
+    mocks.getProject.mockReturnValue({
+      gitRepository: {
+        getRemotes: vi.fn().mockResolvedValue([
+          { name: 'origin', url: `${REPOSITORY_URL}.git` },
+          { name: 'upstream', url: `${UPSTREAM_REPOSITORY_URL}.git` },
+        ]),
+        getBaseRemote: vi.fn().mockResolvedValue('origin'),
+      },
+    });
+    mocks.resolveRepository.mockImplementation((url: string) => {
+      const nameWithOwner = url.replace('https://github.com/', '').replace(/\.git$/, '');
+      const [owner, repo] = nameWithOwner.split('/');
+      return Promise.resolve({
+        success: true,
+        data: {
+          host: 'github.com',
+          repositoryUrl: `https://github.com/${nameWithOwner}`,
+          nameWithOwner,
+          owner,
+          repo,
+        },
+      });
+    });
 
     await fixture.db.insert(projects).values({ id: PROJECT_ID, name: 'Project', path: '/repo' });
-    await fixture.db
-      .insert(projectRemotes)
-      .values({ projectId: PROJECT_ID, remoteName: 'origin', remoteUrl: REPOSITORY_URL });
+    await fixture.db.insert(projectRemotes).values([
+      { projectId: PROJECT_ID, remoteName: 'origin', remoteUrl: REPOSITORY_URL },
+      { projectId: PROJECT_ID, remoteName: 'upstream', remoteUrl: UPSTREAM_REPOSITORY_URL },
+    ]);
   });
 
   afterEach(() => {
@@ -106,5 +142,14 @@ describe('link-suggestions-service', () => {
     await dismissLinkSuggestion(PROJECT_ID, suggestion);
 
     expect(await getLinkSuggestionsForProject(PROJECT_ID)).toEqual([]);
+  });
+
+  it('surfaces only the base remote tracker, never a fork upstream', async () => {
+    const ours = makeSuggestion();
+    const theirs = makeSuggestion(UPSTREAM_REPOSITORY_URL, 99);
+    await setCachedSuggestionsIfChanged(PROJECT_ID, REPOSITORY_URL, [ours]);
+    await setCachedSuggestionsIfChanged(PROJECT_ID, UPSTREAM_REPOSITORY_URL, [theirs]);
+
+    expect(await getLinkSuggestionsForProject(PROJECT_ID)).toEqual([ours]);
   });
 });

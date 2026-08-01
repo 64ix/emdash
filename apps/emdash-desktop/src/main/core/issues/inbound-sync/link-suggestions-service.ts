@@ -1,5 +1,4 @@
 import { eq } from 'drizzle-orm';
-import { getProjectRemoteUrls } from '@main/core/pull-requests/project-remotes-service';
 import { writeLinkedIssueRole, writeTaskWorkflowStage } from '@main/core/tasks/task-fact-writes';
 import { db } from '@main/db/client';
 import { tasks } from '@main/db/schema';
@@ -9,6 +8,7 @@ import { linkSuggestionsUpdatedChannel } from '@shared/core/issues/issueEvents';
 import type { LinkSuggestion } from '@shared/core/issues/link-suggestion';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { parseGitHubIssueUrl } from './github-issue-url';
+import { getIssueTrackerRepositoryUrl } from './issue-tracker-repository';
 import {
   dismissLinkSuggestionUrl,
   getCachedSuggestions,
@@ -16,13 +16,16 @@ import {
 } from './link-suggestions-store';
 import { deriveWorkflowStageFromIssues } from './stage-derivation';
 
-/** All cached link suggestions across every GitHub remote configured for a project. */
+/**
+ * Cached link suggestions for the project's issue tracker — the single
+ * repository behind its base remote, never the whole remote list (see
+ * `getIssueTrackerRepositoryUrl`): a fork's upstream `[Spec]` issues are not
+ * ours to link.
+ */
 export async function getLinkSuggestionsForProject(projectId: string): Promise<LinkSuggestion[]> {
-  const repositoryUrls = await getProjectRemoteUrls(projectId);
-  const perRepository = await Promise.all(
-    repositoryUrls.map((repositoryUrl) => getCachedSuggestions(projectId, repositoryUrl))
-  );
-  return perRepository.flat();
+  const repositoryUrl = await getIssueTrackerRepositoryUrl(projectId);
+  if (!repositoryUrl) return [];
+  return getCachedSuggestions(projectId, repositoryUrl);
 }
 
 /**
