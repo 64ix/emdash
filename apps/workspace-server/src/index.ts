@@ -1,20 +1,20 @@
 import { workspaceWireContract } from '@emdash/core/workspace-server';
 import { initProcessLogging } from '@emdash/shared/logger/node';
 import { withValidation, type ValidatePolicy } from '@emdash/wire';
-import { spawnAcpWorkspaceRuntimeProcess } from './acp/host';
-import { createWorkspaceWireController } from './api/controller';
+import { spawnAcpWorkspaceRuntimeProcess } from './acp/host.ts';
+import { createWorkspaceWireController } from './api/controller.ts';
 import {
   formatWorkspaceServerConfigError,
   loadWorkspaceServerConfig,
   type WorkspaceServerConfig,
-} from './config';
-import { daemonPaths } from './daemon/paths';
-import { removePidFile, writePidFile } from './daemon/pid-file';
-import { startDaemon } from './daemon/start';
-import { statusDaemon } from './daemon/status';
-import { stopDaemon } from './daemon/stop';
-import { serveSocket } from './wire/serve-socket';
-import { serveStdio } from './wire/serve-stdio';
+} from './config.ts';
+import { daemonPaths } from './daemon/paths.ts';
+import { removePidFile, writePidFile } from './daemon/pid-file.ts';
+import { startDaemon } from './daemon/start.ts';
+import { statusDaemon } from './daemon/status.ts';
+import { stopDaemon } from './daemon/stop.ts';
+import { serveSocket } from './wire/serve-socket.ts';
+import { serveStdio } from './wire/serve-stdio.ts';
 
 type Disposable = {
   dispose(): void | Promise<void>;

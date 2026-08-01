@@ -2,10 +2,10 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { unlink } from 'node:fs/promises';
 import { open } from 'node:fs/promises';
 import { err, ok, type Result } from '@emdash/shared';
-import { withFileLock } from './lock';
-import { daemonPaths, type DaemonPaths } from './paths';
-import { isProcessAlive, readPidFile, removePidFile, type ProcessSignaler } from './pid-file';
-import { probeDaemon, type DaemonHealth, type DaemonProbeError } from './probe';
+import { withFileLock } from './lock.ts';
+import { daemonPaths, type DaemonPaths } from './paths.ts';
+import { isProcessAlive, readPidFile, removePidFile, type ProcessSignaler } from './pid-file.ts';
+import { probeDaemon, type DaemonHealth, type DaemonProbeError } from './probe.ts';
 
 export type StartDaemonResult = {
   status: 'already-running' | 'started';

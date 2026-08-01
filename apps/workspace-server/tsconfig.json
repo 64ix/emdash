@@ -3,6 +3,9 @@
   "compilerOptions": {
     "target": "ES2022",
     "noEmit": true,
+    // Relative imports carry explicit .ts extensions so `node
+    // --experimental-strip-types` (the dev script) can resolve them.
+    "allowImportingTsExtensions": true,
     "lib": ["ES2022"],
     "types": ["node"],
     "paths": {

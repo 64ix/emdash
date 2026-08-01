@@ -4,7 +4,7 @@ import {
   loadWorkspaceServerConfig,
   type WorkspaceServerConfig,
   type WorkspaceServerConfigError,
-} from './config';
+} from './config.ts';
 
 describe('loadWorkspaceServerConfig', () => {
   it('defaults to the serve command over stdio', () => {
