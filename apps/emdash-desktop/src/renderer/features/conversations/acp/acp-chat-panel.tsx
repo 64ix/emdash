@@ -56,6 +56,7 @@ import {
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
+import { failedSubmissionPreview } from './acp-submission-recovery';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -220,6 +221,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Inverse of `buildPromptAttachments` — restores a failed submission's
+ *  attachments into the composer's editable attachment state. */
+function toComposerAttachment(attachment: AcpPromptAttachment): ComposerAttachment {
+  return {
+    id: attachment.ref.id,
+    name: attachment.ref.name ?? 'image',
+    kind: 'image',
+    previewUrl: attachment.previewUrl,
+    mimeType: attachment.ref.mimeType,
+  };
+}
+
 // ── Composer for a single store ────────────────────────────────────────────────
 //
 // Keyed by conversationId in the parent so that drafts, focus, and editor state
@@ -310,6 +323,31 @@ const ComposerForStore = observer(function ComposerForStore({
       store.queuePrompt(value, promptAttachments, hiddenContext);
     },
     [store, buildPromptAttachments, buildHiddenIssueContext]
+  );
+
+  const handleRetryFailedSubmission = useCallback(
+    (localId: string) => {
+      store.retryFailedSubmission(localId);
+    },
+    [store]
+  );
+
+  const handleEditFailedSubmission = useCallback(
+    (localId: string) => {
+      const snapshot = store.editFailedSubmission(localId);
+      if (!snapshot) return;
+      editorApiRef.current?.setText(snapshot.text);
+      setAttachments(snapshot.attachments.map(toComposerAttachment));
+      editorApiRef.current?.focus();
+    },
+    [store]
+  );
+
+  const handleDiscardFailedSubmission = useCallback(
+    (localId: string) => {
+      store.discardFailedSubmission(localId);
+    },
+    [store]
   );
 
   const handleStop = useCallback(() => {
@@ -587,6 +625,52 @@ const ComposerForStore = observer(function ComposerForStore({
   return createPortal(
     <>
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileInputChange} />
+      {store.failedSubmissions.length > 0 && (
+        <div
+          role="list"
+          aria-label="Messages that failed to send"
+          className="mb-2 flex flex-col gap-1.5"
+        >
+          {store.failedSubmissions.map((submission) => (
+            <div
+              key={submission.localId}
+              role="listitem"
+              className="flex items-center justify-between gap-2 rounded-md border border-border-destructive bg-background-destructive px-3 py-1.5 text-sm text-foreground-destructive"
+            >
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate">{failedSubmissionPreview(submission)}</span>
+                <span className="truncate text-xs opacity-80">{submission.error}</span>
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Retry sending this message"
+                  onClick={() => handleRetryFailedSubmission(submission.localId)}
+                >
+                  Retry
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Edit this message"
+                  onClick={() => handleEditFailedSubmission(submission.localId)}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Discard this message"
+                  onClick={() => handleDiscardFailedSubmission(submission.localId)}
+                >
+                  Discard
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <ChatComposer
         isWorking={a.isWorking}
         canSubmit={a.canSubmit}

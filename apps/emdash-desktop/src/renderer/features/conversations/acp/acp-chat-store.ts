@@ -3,7 +3,6 @@ import { connectSession, createChatState, pinTopMode } from '@emdash/chat-ui';
 import type {
   AttachmentMimeType,
   AttachmentRef,
-  PromptAttachment,
   PromptDraft,
   PromptInput,
   QueuedPrompt,
@@ -31,7 +30,21 @@ import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
+import type {
+  AcpPromptAttachment,
+  AcpSubmissionSessionPort,
+  AcpSubmissionSnapshot,
+  FailedAcpSubmission,
+} from './acp-submission-recovery';
+import { AcpSubmissionController, resultError } from './acp-submission-recovery';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
+
+export type {
+  AcpPromptAttachment,
+  AcpSubmissionKind,
+  AcpSubmissionSnapshot,
+  FailedAcpSubmission,
+} from './acp-submission-recovery';
 
 export interface AgentAffordances {
   isWorking: boolean;
@@ -40,13 +53,6 @@ export interface AgentAffordances {
   canSubmit: boolean;
   canCancel: boolean;
 }
-
-type StoredPromptAttachment = Extract<PromptAttachment, { type: 'attachment' }>;
-
-export type AcpPromptAttachment = {
-  ref: StoredPromptAttachment;
-  previewUrl?: string;
-};
 
 type PermissionQueueItem = {
   requestId: string;
@@ -74,6 +80,7 @@ export class AcpChatStore {
   private _draftRev = 0;
   private _pendingDraftRev: number | null = null;
   private _draftTimer: number | null = null;
+  private readonly _submissions: AcpSubmissionController;
 
   constructor(
     readonly conversationId: string,
@@ -85,6 +92,11 @@ export class AcpChatStore {
     registerConversationCommands(conversationId, () =>
       this.commands.map((command) => command.name)
     );
+    this._submissions = new AcpSubmissionController(() => this._sessionPort(), {
+      onDirectStart: (snapshot) => this._showOptimisticPrompt(snapshot),
+      onFailure: (failure) => this._handleSubmissionFailure(failure),
+      onDiscard: (discarded) => this._releaseSubmissionAttachments(discarded),
+    });
 
     makeObservable(this, {
       session: observable.ref,
@@ -104,8 +116,12 @@ export class AcpChatStore {
       usage: computed,
       affordances: computed,
       isEmpty: computed,
+      failedSubmissions: computed,
       submitPrompt: action,
       queuePrompt: action,
+      retryFailedSubmission: action,
+      editFailedSubmission: action,
+      discardFailedSubmission: action,
       stop: action,
       setModel: action,
       setMode: action,
@@ -217,6 +233,15 @@ export class AcpChatStore {
     return !this.historyLoading && this.messageCount === 0;
   }
 
+  /**
+   * Submissions (direct or queued) that were rejected or threw, in the order
+   * they failed. Each carries the immutable snapshot needed to retry, edit,
+   * or discard it — see `acp-submission-recovery.ts`.
+   */
+  get failedSubmissions(): readonly FailedAcpSubmission[] {
+    return this._submissions.failedSubmissions;
+  }
+
   bootstrap(): void {
     if (this._bootstrapped) return;
     this._bootstrapped = true;
@@ -268,49 +293,47 @@ export class AcpChatStore {
     }
   }
 
+  /**
+   * Direct send. Captures an immutable recovery snapshot before any state is
+   * cleared; on rejection/throw the snapshot lands in `failedSubmissions`
+   * instead of being lost — see `acp-submission-recovery.ts`.
+   */
   submitPrompt(
     text: string,
     attachments: AcpPromptAttachment[] = [],
     hiddenContext?: string
   ): void {
-    const promptAttachments = attachments.map((attachment) => attachment.ref);
-    if (!this.affordances.isWorking) {
-      const optimisticId = `optimistic:user:${Date.now()}`;
-      this.chatState.session.setPendingPrompt({
-        id: optimisticId,
-        text,
-        attachments: attachments.map(toPendingAttachment),
-      });
-      this._syncMessageCount();
-      const pinMode = pinTopMode(optimisticId);
-      this._view?.setScrollMode(pinMode);
-      this.chatState.scroll.set(pinMode);
-    }
-
-    void this.session
-      ?.sendPrompt({
-        text,
-        ...(hiddenContext ? { hiddenContext } : {}),
-        ...(promptAttachments.length > 0 ? { attachments: promptAttachments } : {}),
-      })
-      .then((result) => {
-        if (!result.success) this._toastError('Failed to send message', result.error);
-      })
-      .catch((error: unknown) => this._toastError('Failed to send message', error));
+    this._submissions.submit(text, attachments, hiddenContext);
   }
 
+  /** Queued send — same recovery guarantee as `submitPrompt`. */
   queuePrompt(text: string, attachments: AcpPromptAttachment[] = [], hiddenContext?: string): void {
-    const promptAttachments = attachments.map((attachment) => attachment.ref);
-    void this.session
-      ?.queuePrompt({
-        text,
-        ...(hiddenContext ? { hiddenContext } : {}),
-        ...(promptAttachments.length > 0 ? { attachments: promptAttachments } : {}),
-      })
-      .then((result) => {
-        if (!result.success) this._toastError('Failed to queue message', result.error);
-      })
-      .catch((error: unknown) => this._toastError('Failed to queue message', error));
+    this._submissions.queue(text, attachments, hiddenContext);
+  }
+
+  /**
+   * Resend a failed submission under its original local identity. The entry
+   * is removed before resending so it cannot be retried twice or duplicate
+   * the prompt/turn.
+   */
+  retryFailedSubmission(localId: string): void {
+    this._submissions.retry(localId);
+  }
+
+  /**
+   * Remove a failed submission and hand its snapshot back to the caller so
+   * the composer can reload it as editable text/attachments.
+   */
+  editFailedSubmission(localId: string): AcpSubmissionSnapshot | null {
+    return this._submissions.edit(localId);
+  }
+
+  /**
+   * Permanently drop a failed submission. Attachment release happens via the
+   * controller's `onDiscard` hook — see `_releaseSubmissionAttachments`.
+   */
+  discardFailedSubmission(localId: string): void {
+    this._submissions.discard(localId);
   }
 
   setDraftText(text: string): void {
@@ -505,6 +528,56 @@ export class AcpChatStore {
     return this.session?.sessionState.current().queuedPrompts ?? [];
   }
 
+  /** Bridges `AcpSubmissionController` to the live ACP session, if connected. */
+  private _sessionPort(): AcpSubmissionSessionPort | null {
+    const session = this.session;
+    if (!session) return null;
+    return {
+      isWorking: () => this.affordances.isWorking,
+      queuedPromptCount: () => this._queuedPromptModels().length,
+      sendPrompt: (input) => session.sendPrompt(input),
+      queuePrompt: (input) => session.queuePrompt(input),
+    };
+  }
+
+  /** Show the optimistic user bubble for a direct send started while idle. */
+  private _showOptimisticPrompt(snapshot: AcpSubmissionSnapshot): void {
+    this.chatState.session.setPendingPrompt({
+      id: snapshot.localId,
+      text: snapshot.text,
+      attachments: snapshot.attachments.map(toPendingAttachment),
+    });
+    this._syncMessageCount();
+    const pinMode = pinTopMode(snapshot.localId);
+    this._view?.setScrollMode(pinMode);
+    this.chatState.scroll.set(pinMode);
+  }
+
+  /**
+   * A submission was rejected or threw. Clear any matching optimistic bubble
+   * (there is no turn behind it) and surface the failure — the snapshot
+   * itself is already preserved in `failedSubmissions` by the controller.
+   */
+  private _handleSubmissionFailure(failure: FailedAcpSubmission): void {
+    runInAction(() => {
+      if (this.chatState.session.state.pendingPrompt?.id === failure.localId) {
+        this.chatState.session.setPendingPrompt(null);
+        this._syncMessageCount();
+      }
+    });
+    this._toastError(
+      failure.kind === 'queued' ? 'Failed to queue message' : 'Failed to send message',
+      new Error(failure.error)
+    );
+  }
+
+  /** A failed submission was discarded for good — release any uploaded attachments. */
+  private _releaseSubmissionAttachments(discarded: FailedAcpSubmission): void {
+    for (const attachment of discarded.attachments) {
+      void this.deleteAttachment(attachment.ref.id);
+    }
+  }
+
   private async _sendQueuedPromptNow(id: string): Promise<void> {
     const current = this._queuedPromptModels();
     if (!current.some((prompt) => prompt.id === id)) return;
@@ -671,16 +744,6 @@ function toPendingAttachment(attachment: AcpPromptAttachment): ChatImageAttachme
     name: attachment.ref.name ?? 'image',
     dataUrl: attachment.previewUrl,
   };
-}
-
-function resultError(error: unknown): Error {
-  if (error instanceof Error) return error;
-  if (typeof error === 'object' && error !== null) {
-    const message = (error as { message?: unknown }).message;
-    const type = (error as { type?: unknown }).type;
-    return new Error(typeof message === 'string' ? message : String(type ?? 'Unknown error'));
-  }
-  return new Error(String(error));
 }
 
 function toLoadError(error: unknown): AcpLoadError {
