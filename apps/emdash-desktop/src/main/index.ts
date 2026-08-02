@@ -33,6 +33,7 @@ import { issuesSyncScheduler } from './core/issues/inbound-sync/issues-sync-sche
 import { projectSettingsService } from './core/projects/settings/project-settings-service';
 import { promptLibraryService } from './core/prompt-library/service';
 import { providerAccountRegistry } from './core/provider-accounts/provider-account-registry-instance';
+import { initializeProviderUsageService } from './core/provider-usage/service-instance';
 import { remoteTmuxReaperService } from './core/pty/remote-tmux-reaper-service';
 import { prSyncScheduler } from './core/pull-requests/pr-sync-scheduler';
 import { reconcileResourceSampler } from './core/resource-monitor/resource-sampler';
@@ -153,6 +154,7 @@ void app.whenReady().then(async () => {
   automationsService.start();
   appService.initialize();
   await appSettingsService.initialize();
+  await initializeProviderUsageService();
   applyNativeTheme(await appSettingsService.get('theme'));
   browserWebContentsRegistry.setKeyboardSettings(await appSettingsService.get('keyboard'));
   setBrowserCorsRelaxationSettings(await appSettingsService.get('browser'));
