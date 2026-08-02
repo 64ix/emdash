@@ -92,13 +92,10 @@ export class AcpChatStore {
     registerConversationCommands(conversationId, () =>
       this.commands.map((command) => command.name)
     );
-    this._submissions = new AcpSubmissionController(
-      () => this._sessionPort(),
-      {
-        onDirectStart: (snapshot) => this._showOptimisticPrompt(snapshot),
-        onFailure: (failure) => this._handleSubmissionFailure(failure),
-      }
-    );
+    this._submissions = new AcpSubmissionController(() => this._sessionPort(), {
+      onDirectStart: (snapshot) => this._showOptimisticPrompt(snapshot),
+      onFailure: (failure) => this._handleSubmissionFailure(failure),
+    });
 
     makeObservable(this, {
       session: observable.ref,

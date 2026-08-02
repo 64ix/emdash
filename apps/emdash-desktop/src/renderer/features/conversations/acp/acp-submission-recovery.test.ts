@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
 import type { PromptInput } from '@emdash/core/acp/client';
 import type { Result } from '@emdash/shared';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   AcpPromptAttachment,
   AcpSubmissionSessionPort,
@@ -239,7 +239,9 @@ describe('AcpSubmissionController', () => {
     expect(snap.text).toBe('hello');
     expect(snap.hiddenContext).toBe('ctx');
     expect(snap.attachments).toHaveLength(1);
-    expect(port.sendCalls).toEqual([{ text: 'hello', hiddenContext: 'ctx', attachments: [attachment('att-1').ref] }]);
+    expect(port.sendCalls).toEqual([
+      { text: 'hello', hiddenContext: 'ctx', attachments: [attachment('att-1').ref] },
+    ]);
     // Nothing failed yet — the snapshot has not entered failedSubmissions.
     expect(controller.failedSubmissions).toEqual([]);
   });
