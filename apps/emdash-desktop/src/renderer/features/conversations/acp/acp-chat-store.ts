@@ -15,6 +15,7 @@ import type {
   ComposerPermissionModeOption,
   ComposerQueuedPrompt,
 } from '@emdash/ui/react/components';
+import { ok } from '@emdash/shared';
 import type { BlobSource } from '@emdash/wire';
 import { action, computed, makeObservable, observable, runInAction, toJS } from 'mobx';
 // TODO(conversations-extraction): Inject task/workspace lookups instead of importing task stores.
@@ -31,6 +32,7 @@ import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
+import { createStopController, type StopController } from './acp-chat-stop-controller';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
 
 export interface AgentAffordances {
@@ -67,6 +69,13 @@ export class AcpChatStore {
   loadError: AcpLoadError | null = null;
   messageCount = 0;
   draftText = '';
+  /**
+   * True while a Stop/cancel request for the active turn is in flight.
+   * Mirrored into `chatState.session.setStopPending` so the transcript's
+   * active-message Stop control can disable itself and communicate a busy
+   * state (see acp-chat-stop-controller.ts).
+   */
+  isCancelling = false;
 
   private _view: ChatView | null = null;
   private _bootstrapped = false;
@@ -74,6 +83,7 @@ export class AcpChatStore {
   private _draftRev = 0;
   private _pendingDraftRev: number | null = null;
   private _draftTimer: number | null = null;
+  private readonly _stopController: StopController;
 
   constructor(
     readonly conversationId: string,
@@ -86,12 +96,26 @@ export class AcpChatStore {
       this.commands.map((command) => command.name)
     );
 
+    this._stopController = createStopController(
+      () => this.session?.cancelTurn() ?? Promise.resolve(ok<void>()),
+      {
+        onBusyChange: (busy) => {
+          runInAction(() => {
+            this.isCancelling = busy;
+          });
+          this.chatState.session.setStopPending(busy);
+        },
+        onError: (error) => this._toastError('Failed to stop', error),
+      }
+    );
+
     makeObservable(this, {
       session: observable.ref,
       historyLoading: observable,
       loadError: observable,
       messageCount: observable,
       draftText: observable,
+      isCancelling: observable,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -321,13 +345,13 @@ export class AcpChatStore {
     this._scheduleDraftWrite(text, this._draftRev);
   }
 
+  /**
+   * Cancel the active turn. Shared by the composer's Stop button and the
+   * active-message Stop action in the transcript (see acp-chat-panel.tsx),
+   * so both surfaces are single-flight together and disable in lockstep.
+   */
   stop(): void {
-    void this.session
-      ?.cancelTurn()
-      .then((result) => {
-        if (!result.success) this._toastError('Failed to stop', result.error);
-      })
-      .catch((error: unknown) => this._toastError('Failed to stop', error));
+    this._stopController.stop();
   }
 
   setModel(model: string): void {

@@ -76,27 +76,43 @@ export const card = recipe({
  * style itself (not a shared base), and keyed to the dedicated `userCardGroup`
  * marker, so it cannot leak to/from the messageGroup/codeGroup hover contexts
  * in descendant code blocks or sibling assistant messages.
+ *
+ * The `pending` variant forces the button visible (and non-interactive) while
+ * a Stop/cancel request is in flight, so the busy state remains communicated
+ * even after the pointer leaves the card — see UserMessageCard's `disabled`
+ * button state.
  */
-export const stopButtonOverlay = style({
-  position: 'absolute',
-  top: '6px',
-  right: '6px',
-  zIndex: 10,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '4px',
-  borderRadius: vars.radiusSm,
-  border: 'none',
-  background: 'transparent',
-  color: vars.fgMuted,
-  cursor: 'pointer',
-  opacity: 0,
-  transition: 'opacity 150ms ease',
-  selectors: {
-    [`${userCardGroup}:hover &`]: { opacity: 1 },
-    '&:focus-visible': { opacity: 1 },
-    '&:hover': { color: vars.fg },
+export const stopButtonOverlay = recipe({
+  base: {
+    position: 'absolute',
+    top: '6px',
+    right: '6px',
+    zIndex: 10,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '4px',
+    borderRadius: vars.radiusSm,
+    border: 'none',
+    background: 'transparent',
+    color: vars.fgMuted,
+    cursor: 'pointer',
+    opacity: 0,
+    transition: 'opacity 150ms ease',
+    selectors: {
+      [`${userCardGroup}:hover &`]: { opacity: 1 },
+      '&:focus-visible': { opacity: 1 },
+      '&:hover': { color: vars.fg },
+    },
+  },
+  variants: {
+    pending: {
+      false: {},
+      true: {
+        opacity: 1,
+        cursor: 'not-allowed',
+      },
+    },
   },
 });
 

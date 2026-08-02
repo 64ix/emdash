@@ -81,6 +81,13 @@ export type ChatSessionState = {
   setPendingPrompt(prompt: PendingPrompt | null): void;
   setTerminalOutput(terminalId: string, text: string | null): void;
   setTerminalOutputs(outputs: ReadonlyMap<string, string>): void;
+  /**
+   * Marks whether a Stop/cancel request for the active turn is currently in
+   * flight. Driven by the host (see AcpChatStore.stop) so the transcript's
+   * active-message Stop affordance can disable itself and communicate a busy
+   * state while cancellation is pending, independent of `turnStatus`.
+   */
+  setStopPending(pending: boolean): void;
 };
 
 export type ChatSessionSnapshot = {
@@ -88,6 +95,8 @@ export type ChatSessionSnapshot = {
   readonly plan: PlanState | null;
   readonly pendingToolCallIds: Set<string>;
   readonly pendingPrompt: PendingPrompt | null;
+  /** True while a Stop/cancel request for the active turn is in flight. */
+  readonly stopPending: boolean;
   terminalOutputText(terminalId: string): string | null;
 };
 
@@ -258,10 +267,17 @@ export function createChatState(ctx: ChatContext, opts?: ChatStateOptions): Chat
   };
 }
 
-function createSessionState(): ChatSessionState {
+/**
+ * Exported (rather than kept module-private) so unit tests can exercise the
+ * session-state primitives directly. Unlike `createChatState`, this factory
+ * only uses solid-js signals/memos — no DOM-dependent parse caches — so it is
+ * safe to call from the `node` test project.
+ */
+export function createSessionState(): ChatSessionState {
   const [permissions, setPermissions] = createSignal<readonly AcpPermissionRequest[]>([]);
   const [plan, setPlan] = createSignal<PlanState | null>(null);
   const [pendingPrompt, setPendingPrompt] = createSignal<PendingPrompt | null>(null);
+  const [stopPending, setStopPending] = createSignal(false);
   const [terminalOutputs, setTerminalOutputs] = createSignal<ReadonlyMap<string, string>>(
     new Map()
   );
@@ -286,6 +302,9 @@ function createSessionState(): ChatSessionState {
     get pendingPrompt() {
       return pendingPrompt();
     },
+    get stopPending() {
+      return stopPending();
+    },
     terminalOutputText(terminalId) {
       return terminalOutputs().get(terminalId) ?? null;
     },
@@ -296,6 +315,7 @@ function createSessionState(): ChatSessionState {
     setPermissions: (next) => setPermissions([...next]),
     setPlan,
     setPendingPrompt,
+    setStopPending,
     setTerminalOutput(terminalId, text) {
       setTerminalOutputs((previous) => {
         const next = new Map(previous);

@@ -33,6 +33,7 @@ export function UserMessageCard(props: { data: ChatMessage; ctx: RenderCtx; vars
 
   const isCurrent = () => turn.currentMessageId() === props.data.id;
   const showStop = () => isCurrent() && turn.turnStatus() === 'generating';
+  const isStopPending = () => turn.isStopPending();
 
   const styleVars = () => ({
     userCardPadX: props.vars.userCardPadX,
@@ -118,10 +119,13 @@ export function UserMessageCard(props: { data: ChatMessage; ctx: RenderCtx; vars
       <Show when={showStop()}>
         <button
           type="button"
-          class={stopButtonOverlay}
-          aria-label="Stop generating"
+          class={stopButtonOverlay({ pending: isStopPending() })}
+          aria-label={isStopPending() ? 'Stopping…' : 'Stop generating'}
+          aria-busy={isStopPending()}
+          disabled={isStopPending()}
           onClick={(e) => {
             e.stopPropagation();
+            if (isStopPending()) return;
             commands().onStop?.({ itemId: props.data.id });
           }}
         >
