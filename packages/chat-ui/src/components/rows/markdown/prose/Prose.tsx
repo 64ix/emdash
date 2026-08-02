@@ -105,31 +105,20 @@ function ProseFragment(props: {
 
   if (props.run.kind === 'text' && props.run.href) {
     const href = props.run.href;
-    const classification = () => commands().classifyLink?.(href);
 
+    // Every chat-authored link is routed through the host's typed
+    // link-action classification — there is no raw anchor/window.open
+    // fallback. The host decides and performs the action (editor, external
+    // confirmation, or a blocked/error report); we never let the browser
+    // navigate the anchor itself.
     const handleClick = (e: MouseEvent) => {
-      const result = classification();
-      if (result?.kind === 'workspace-file') {
-        e.preventDefault();
-        commands().onOpenFile?.({
-          path: result.path,
-          itemId: props.blockId,
-          source: 'prose-link',
-        });
-      }
-      // else: browser follows the <a> normally (new tab via target="_blank")
+      e.preventDefault();
+      commands().onActivateLink?.({ href, itemId: props.blockId, source: 'prose-link' });
     };
 
     // Links are not word-animated (href spans are not appended incrementally).
     return (
-      <a
-        class={cls}
-        style={{ left: `${props.frag.x}px` }}
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={handleClick}
-      >
+      <a class={cls} style={{ left: `${props.frag.x}px` }} href={href} onClick={handleClick}>
         {props.frag.text}
       </a>
     );

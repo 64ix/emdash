@@ -39,11 +39,7 @@ export type ChatCommands = {
    * Called when the user clicks a file path in a diff header, file-op row,
    * resource-link card, or inline prose link.
    */
-  onOpenFile?: (arg: {
-    path: string;
-    itemId: string;
-    source: 'diff' | 'file-op' | 'resource-link' | 'prose-link';
-  }) => void;
+  onOpenFile?: (arg: { path: string; itemId: string; source: 'diff' | 'file-op' }) => void;
 
   /**
    * Called when the user clicks an image attachment thumbnail inside a user
@@ -68,11 +64,21 @@ export type ChatCommands = {
   onStop?: (arg: { itemId: string }) => void;
 
   /**
-   * Synchronously classify an `href` from a rendered markdown link.
-   * Returns `{ kind: 'workspace-file'; path: string }` for workspace files,
-   * or `{ kind: 'external' }` to keep the default external-link behavior.
+   * Called when the user activates a chat-authored link — a rendered
+   * Markdown prose link or a resource-link row's URI alike. The host
+   * classifies `href` through its own typed link-action taxonomy (workspace
+   * file / external http(s) / blocked) and performs the resulting action
+   * itself (open the editor, run the external-link confirmation flow, or
+   * report a blocked target). There is no default here and no raw anchor or
+   * `window.open` fallback in the renderers that call this — an unhandled
+   * `href` is the host's responsibility to resolve to an explicit action,
+   * never to navigate.
    */
-  classifyLink?: (href: string) => { kind: 'workspace-file'; path: string } | { kind: 'external' };
+  onActivateLink?: (arg: {
+    href: string;
+    itemId: string;
+    source: 'prose-link' | 'resource-link';
+  }) => void;
 
   /**
    * Called when the user clicks a Mermaid diagram block preview.

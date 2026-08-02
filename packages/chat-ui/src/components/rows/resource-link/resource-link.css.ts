@@ -22,8 +22,6 @@ const rowBase = style({
   height: '100%',
 });
 
-export const rowStatic = rowBase;
-
 export const rowClickable = style([
   rowBase,
   {
