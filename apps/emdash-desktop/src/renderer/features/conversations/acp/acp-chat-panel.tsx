@@ -1,3 +1,4 @@
+import type { OutlineEntry } from '@emdash/chat-ui';
 import type { AttachmentMimeType, AttachmentRef } from '@emdash/core/acp/client';
 import { ChatComposer, ImageViewerDialog, MermaidViewerDialog } from '@emdash/ui/react/components';
 import type {
@@ -9,7 +10,7 @@ import type {
   MentionItem,
   PromptEditorRef,
 } from '@emdash/ui/react/components';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, ListTree } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -58,6 +59,7 @@ import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
 import { failedSubmissionPreview } from './acp-submission-recovery';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
+import { OUTLINE_NARROW_BREAKPOINT_PX, TranscriptOutlinePanel } from './transcript-outline-panel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -753,6 +755,14 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
   // button does not flash on mount before the first frame fires.
   const [atBottom, setAtBottom] = useState(true);
 
+  // ── Transcript outline (ticket #34) ────────────────────────────────────────
+  const outlineToggleRef = useRef<HTMLButtonElement | null>(null);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineSelectedItemId, setOutlineSelectedItemId] = useState<string | null>(null);
+  // Measured against this panel's own width (not the window's) — a split
+  // pane can be narrow even in a wide window. Drives rail-vs-drawer layout.
+  const [panelWidth, setPanelWidth] = useState(0);
+
   const handleReady = useCallback((view: ChatView) => {
     viewRef.current = view;
     setComposerSlot(view.composerSlot);
@@ -840,6 +850,34 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
     };
   }, [store]);
 
+  // Measure the panel's own width so the outline can pick rail vs. drawer
+  // layout independent of the overall window size (a split pane can be
+  // narrow even in a wide window) — see OUTLINE_NARROW_BREAKPOINT_PX.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width !== undefined) setPanelWidth(width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // The selected-entry highlight is conversation-scoped; a stale selection
+  // from a previous conversation is meaningless once the active tab changes.
+  useEffect(() => {
+    setOutlineSelectedItemId(null);
+  }, [activeConversationId]);
+
+  const handleSelectOutlineEntry = useCallback(
+    (entry: OutlineEntry) => {
+      store?.scrollToOutlineEntry(entry);
+      setOutlineSelectedItemId(entry.itemId);
+    },
+    [store]
+  );
+
   const handleViewerOpen = useCallback((src?: string, alt?: string) => {
     setViewer({ src, alt });
   }, []);
@@ -902,114 +940,145 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
   const showComposer = !store.historyLoading && store.loadError === null;
   const showHero = showComposer && store.isEmpty;
 
-  return (
-    <div ref={rootRef} className="relative h-full overflow-hidden bg-background-secondary-1">
-      <ChatTranscript
-        context={store.chatContext}
-        state={store.chatState}
-        composer="slot"
-        composerPlacement={store.isEmpty ? 'center' : 'bottom'}
-        contentOverlay
-        stickToBottom
-        pinUserMessages
-        onReady={handleReady}
-        commands={transcriptCommands}
-        onAtBottomChange={setAtBottom}
-        onReachStart={() => store.loadOlderHistory()}
-        style={{ position: 'absolute', inset: 0 }}
-      />
+  const outlineWide = panelWidth >= OUTLINE_NARROW_BREAKPOINT_PX;
 
-      {/* Loading / error overlay portaled into the library-owned slot.
+  return (
+    <div ref={rootRef} className="relative flex h-full overflow-hidden bg-background-secondary-1">
+      <div className="relative h-full min-w-0 flex-1 overflow-hidden">
+        <ChatTranscript
+          context={store.chatContext}
+          state={store.chatState}
+          composer="slot"
+          composerPlacement={store.isEmpty ? 'center' : 'bottom'}
+          contentOverlay
+          stickToBottom
+          pinUserMessages
+          onReady={handleReady}
+          commands={transcriptCommands}
+          onAtBottomChange={setAtBottom}
+          onReachStart={() => store.loadOlderHistory()}
+          style={{ position: 'absolute', inset: 0 }}
+        />
+
+        {/* Loading / error overlay portaled into the library-owned slot.
           The slot sits at z-index 15 (above pinned, below composer at 20).
           Hide the composer in error state so the overlay owns the whole content area.
           Precedence: error > loading. */}
-      {overlaySlot &&
-        (store.loadError !== null || store.historyLoading) &&
-        createPortal(
-          <div
-            // The library-owned overlay slot is pointer-events: none by design;
-            // opt back in so the Sign in / Retry buttons are clickable.
-            className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
-              store.loadError !== null || store.historyLoading ? 'bg-background-secondary-1' : ''
-            }`}
-            aria-live="polite"
-          >
-            {store.loadError !== null ? (
-              store.loadError.kind === 'auth_required' ? (
-                <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">
-                    {agent?.name ?? 'This agent'} needs you to sign in.
-                  </span>
-                  <span className="text-xs text-foreground-muted">
-                    {cliAuthMethod?.description ?? store.loadError.message}
-                  </span>
-                  <div className="mt-1 flex gap-2">
-                    {cliAuthMethod && (
-                      <Button variant="default" size="sm" onClick={openSignInModal}>
-                        Sign in
+        {overlaySlot &&
+          (store.loadError !== null || store.historyLoading) &&
+          createPortal(
+            <div
+              // The library-owned overlay slot is pointer-events: none by design;
+              // opt back in so the Sign in / Retry buttons are clickable.
+              className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
+                store.loadError !== null || store.historyLoading ? 'bg-background-secondary-1' : ''
+              }`}
+              aria-live="polite"
+            >
+              {store.loadError !== null ? (
+                store.loadError.kind === 'auth_required' ? (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">
+                      {agent?.name ?? 'This agent'} needs you to sign in.
+                    </span>
+                    <span className="text-xs text-foreground-muted">
+                      {cliAuthMethod?.description ?? store.loadError.message}
+                    </span>
+                    <div className="mt-1 flex gap-2">
+                      {cliAuthMethod && (
+                        <Button variant="default" size="sm" onClick={openSignInModal}>
+                          Sign in
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" onClick={() => store.retry()}>
+                        Retry
                       </Button>
-                    )}
-                    <Button variant="outline" size="sm" onClick={() => store.retry()}>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">Failed to load chat.</span>
+                    <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1"
+                      onClick={() => store.retry()}
+                    >
                       Retry
                     </Button>
                   </div>
-                </div>
+                )
               ) : (
-                <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">Failed to load chat.</span>
-                  <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-1"
-                    onClick={() => store.retry()}
-                  >
-                    Retry
-                  </Button>
-                </div>
-              )
-            ) : (
-              'Loading chat...'
-            )}
-          </div>,
-          overlaySlot
+                'Loading chat...'
+              )}
+            </div>,
+            overlaySlot
+          )}
+
+        {showHero &&
+          heroSlot &&
+          createPortal(
+            <div className="px-4 text-center">
+              <h1 className="text-2xl tracking-tight text-foreground">
+                What are we building today?
+              </h1>
+            </div>,
+            heroSlot
+          )}
+
+        {showComposer && composerSlot && (
+          <ComposerForStore
+            key={store.conversationId}
+            store={store}
+            composerSlot={composerSlot}
+            onViewerOpen={handleViewerOpen}
+          />
         )}
 
-      {showHero &&
-        heroSlot &&
-        createPortal(
-          <div className="px-4 text-center">
-            <h1 className="text-2xl tracking-tight text-foreground">What are we building today?</h1>
-          </div>,
-          heroSlot
-        )}
+        {showComposer &&
+          composerSlot &&
+          !atBottom &&
+          createPortal(
+            <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
+              <Button
+                variant="secondary"
+                size="icon-md"
+                aria-label="Scroll to bottom"
+                onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
+                className="pointer-events-auto rounded-full shadow-md"
+              >
+                <ArrowDown />
+              </Button>
+            </div>,
+            composerSlot
+          )}
 
-      {showComposer && composerSlot && (
-        <ComposerForStore
-          key={store.conversationId}
-          store={store}
-          composerSlot={composerSlot}
-          onViewerOpen={handleViewerOpen}
+        {showComposer && (
+          <Button
+            ref={outlineToggleRef}
+            variant="secondary"
+            size="icon-md"
+            aria-label={outlineOpen ? 'Hide outline' : 'Show outline'}
+            aria-pressed={outlineOpen}
+            onClick={() => setOutlineOpen((open) => !open)}
+            className="absolute top-3 right-3 z-10 rounded-full shadow-md"
+          >
+            <ListTree />
+          </Button>
+        )}
+      </div>
+
+      {outlineOpen && (
+        <TranscriptOutlinePanel
+          entries={store.outline}
+          wide={outlineWide}
+          selectedItemId={outlineSelectedItemId}
+          onSelect={handleSelectOutlineEntry}
+          onClose={() => setOutlineOpen(false)}
+          returnFocusRef={outlineToggleRef}
         />
       )}
-
-      {showComposer &&
-        composerSlot &&
-        !atBottom &&
-        createPortal(
-          <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
-            <Button
-              variant="secondary"
-              size="icon-md"
-              aria-label="Scroll to bottom"
-              onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
-              className="pointer-events-auto rounded-full shadow-md"
-            >
-              <ArrowDown />
-            </Button>
-          </div>,
-          composerSlot
-        )}
 
       <ImageViewerDialog
         open={!!viewer}
