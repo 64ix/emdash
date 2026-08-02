@@ -23,9 +23,10 @@ import { CSS } from '@dnd-kit/utilities';
 import { MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
-import { isTaskShippedFaded, STAGE_LABELS } from '@renderer/features/board/board-columns';
+import { isBoardDisplayable, STAGE_LABELS } from '@renderer/features/board/board-columns';
 import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
+import { TaskDetailPanel } from '@renderer/features/board/task-detail-panel';
 import {
   getProjectStore,
   projectDisplayName,
@@ -37,7 +38,7 @@ import {
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { rpc } from '@renderer/lib/ipc';
-import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
+import { useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { cn } from '@renderer/utils/utils';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
@@ -104,6 +105,11 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // slot and make-room displacement then work across columns exactly like
   // they do within one. Persistence still derives from store data at drop.
   const [dragPreview, setDragPreview] = useState<{ column: ColumnId; index: number } | null>(null);
+  // Task Detail Panel (CONTEXT.md): ephemeral board view state — which task's
+  // details are shown on the right. Local to this component, so it never
+  // survives leaving the board (unmount resets it) and writes nothing to the
+  // database. `null` means the panel is closed.
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   // Board open triggers an immediate derivation pass (PR facts + inbound issues);
@@ -115,22 +121,47 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     void rpc.issues.syncIssuesNow(projectId);
   }, [projectId]);
 
+  // Built unconditionally, ahead of the `!manager` early return below, so the
+  // disappearance effect that follows always runs in the same hook order
+  // regardless of whether the project's task manager is mounted yet.
+  const storeById = new Map<string, TaskStore>();
+  const rawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
+  if (manager) {
+    for (const [, store] of manager.tasks) {
+      const task = registeredTaskData(store);
+      if (!task || !isBoardDisplayable(task)) continue;
+      storeById.set(task.id, store);
+      rawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
+    }
+  }
+
+  // Disappearance handling (CONTEXT.md "Task Detail Panel"): a task archived
+  // elsewhere, or faded out by Shipped Fade, must never keep the panel open
+  // rendering stale or missing data — close it instead.
+  const selectedTaskGone = selectedTaskId !== null && !storeById.has(selectedTaskId);
+  useEffect(() => {
+    if (selectedTaskGone) setSelectedTaskId(null);
+  }, [selectedTaskGone]);
+
+  // Escape closes the panel (alongside the close button rendered in it).
+  useEffect(() => {
+    if (selectedTaskId === null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSelectedTaskId(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedTaskId]);
+
   if (!manager) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-foreground-muted">
         Open the project first so its tasks are loaded.
       </div>
     );
-  }
-
-  const storeById = new Map<string, TaskStore>();
-  const rawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
-  for (const [, store] of manager.tasks) {
-    const task = registeredTaskData(store);
-    if (!task || task.archivedAt || task.type !== 'task') continue;
-    if (isTaskShippedFaded(task)) continue; // Shipped Fade: hidden from the board, stage intact
-    storeById.set(task.id, store);
-    rawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
   }
 
   const awaitingInputIds = new Set<string>();
@@ -346,41 +377,54 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
         <span className="text-xs text-foreground-muted">{projectName}</span>
       </div>
       <BoardLinkSuggestions projectId={projectId} />
-      <DndContext
-        sensors={sensors}
-        collisionDetection={columnAwareCollision}
-        // The board always overflows horizontally (8 fixed-width columns), so
-        // dnd-kit's default 20%-of-container autoscroll band covers a whole
-        // visible column: hovering a drop target inside it scrolls the board
-        // under the pointer and the drop lands columns to the right of the
-        // one the user aimed at. 5% keeps edge-push scrolling for offscreen
-        // columns while leaving visible targets stationary.
-        autoScroll={{ threshold: { x: 0.05, y: 0.2 } }}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragEnd={handleDragEnd}
-        onDragCancel={handleDragCancel}
-      >
-        <div className="flex flex-1 gap-3 overflow-x-auto px-4 pb-4">
-          {COLUMNS.map((column) => (
-            <BoardColumn
-              key={column}
-              column={column}
-              entries={displayByColumn.get(column) ?? []}
-              storeById={storeById}
-              projectId={projectId}
-              // Ghost Cards (ticket #9) are not tasks and never sort/drag —
-              // they only ever live in the `idea` column, after real cards.
-              ghostCards={column === 'idea' ? ghostCards : undefined}
-              onAdoptGhostCard={adoptGhostCard}
-              onRejectGhostCard={rejectGhostCard}
-            />
-          ))}
-        </div>
-        <DragOverlay>
-          {activeDragStore ? <BoardCardPreview store={activeDragStore} /> : null}
-        </DragOverlay>
-      </DndContext>
+      {/* Task Detail Panel (CONTEXT.md): a fixed-width sibling to the right of
+          the board, not an overlay — the board stays fully interactive
+          (including drag-and-drop) while it is open. */}
+      <div className="flex min-h-0 flex-1">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={columnAwareCollision}
+          // The board always overflows horizontally (8 fixed-width columns), so
+          // dnd-kit's default 20%-of-container autoscroll band covers a whole
+          // visible column: hovering a drop target inside it scrolls the board
+          // under the pointer and the drop lands columns to the right of the
+          // one the user aimed at. 5% keeps edge-push scrolling for offscreen
+          // columns while leaving visible targets stationary.
+          autoScroll={{ threshold: { x: 0.05, y: 0.2 } }}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
+          <div className="flex flex-1 gap-3 overflow-x-auto px-4 pb-4">
+            {COLUMNS.map((column) => (
+              <BoardColumn
+                key={column}
+                column={column}
+                entries={displayByColumn.get(column) ?? []}
+                storeById={storeById}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={setSelectedTaskId}
+                // Ghost Cards (ticket #9) are not tasks and never sort/drag —
+                // they only ever live in the `idea` column, after real cards.
+                ghostCards={column === 'idea' ? ghostCards : undefined}
+                onAdoptGhostCard={adoptGhostCard}
+                onRejectGhostCard={rejectGhostCard}
+              />
+            ))}
+          </div>
+          <DragOverlay>
+            {activeDragStore ? <BoardCardPreview store={activeDragStore} /> : null}
+          </DragOverlay>
+        </DndContext>
+        {selectedTaskId && (
+          <TaskDetailPanel
+            projectId={projectId}
+            taskId={selectedTaskId}
+            onClose={() => setSelectedTaskId(null)}
+          />
+        )}
+      </div>
     </div>
   );
 });
@@ -389,7 +433,8 @@ const BoardColumn = observer(function BoardColumn({
   column,
   entries,
   storeById,
-  projectId,
+  selectedTaskId,
+  onSelectTask,
   ghostCards,
   onAdoptGhostCard,
   onRejectGhostCard,
@@ -397,7 +442,8 @@ const BoardColumn = observer(function BoardColumn({
   column: ColumnId;
   entries: CardEntry[];
   storeById: Map<string, TaskStore>;
-  projectId: string;
+  selectedTaskId: string | null;
+  onSelectTask: (taskId: string) => void;
   ghostCards?: GhostCard[];
   onAdoptGhostCard: (ghostCard: GhostCard) => void;
   onRejectGhostCard: (ghostCard: GhostCard) => void;
@@ -429,7 +475,14 @@ const BoardColumn = observer(function BoardColumn({
           {entries.map((entry) => {
             const store = storeById.get(entry.id);
             if (!store) return null;
-            return <BoardCard key={entry.id} store={store} projectId={projectId} />;
+            return (
+              <BoardCard
+                key={entry.id}
+                store={store}
+                isSelected={entry.id === selectedTaskId}
+                onSelect={onSelectTask}
+              />
+            );
           })}
           {/* Ghost Cards are not tasks: rendered after the sortable cards, never draggable. */}
           {ghostCards?.map((ghostCard) => (
@@ -448,12 +501,13 @@ const BoardColumn = observer(function BoardColumn({
 
 const BoardCard = observer(function BoardCard({
   store,
-  projectId,
+  isSelected,
+  onSelect,
 }: {
   store: TaskStore;
-  projectId: string;
+  isSelected: boolean;
+  onSelect: (taskId: string) => void;
 }) {
-  const { navigate } = useNavigate();
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: store.data.id,
     animateLayoutChanges: animateBoardLayoutChanges,
@@ -471,20 +525,30 @@ const BoardCard = observer(function BoardCard({
     opacity: isDragging ? 0.4 : 1,
   };
 
+  // Re-clicking the already-shown card is a no-op (no toggle): this always
+  // (re-)selects `task.id`, never clears it.
+  const handleSelect = () => onSelect(task.id);
+
   return (
     <div
       ref={setNodeRef}
       style={style}
       {...attributes}
       {...listeners}
-      className="cursor-grab touch-none rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing"
+      onClick={handleSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          handleSelect();
+        }
+      }}
+      className={cn(
+        'cursor-grab touch-none rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing',
+        // The card backing the open Task Detail Panel (CONTEXT.md) is highlighted.
+        isSelected && 'border-primary ring-1 ring-primary/50'
+      )}
     >
-      <button
-        className="w-full text-left text-xs font-medium hover:underline"
-        onClick={() => navigate('task', { projectId, taskId: task.id })}
-      >
-        {task.name}
-      </button>
+      <div className="w-full text-left text-xs font-medium">{task.name}</div>
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           {linkedIssue && (

@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
-import { isTaskShippedFaded, STAGE_LABELS } from './board-columns';
+import { isBoardDisplayable, isTaskShippedFaded, STAGE_LABELS } from './board-columns';
 import { COLUMNS, stageOf } from './board-ordering';
 
-function makeTask(workflowStage?: WorkflowStage, prs: PullRequest[] = []): Task {
+function makeTask(
+  workflowStage?: WorkflowStage,
+  prs: PullRequest[] = [],
+  overrides: Partial<Task> = {}
+): Task {
   return {
     id: 'task-1',
     projectId: 'project-1',
@@ -19,6 +23,7 @@ function makeTask(workflowStage?: WorkflowStage, prs: PullRequest[] = []): Task 
     prs,
     conversations: {},
     type: 'task',
+    ...overrides,
   };
 }
 
@@ -136,5 +141,35 @@ describe('isTaskShippedFaded', () => {
       }),
     ]);
     expect(isTaskShippedFaded(task, now)).toBe(false);
+  });
+});
+
+describe('isBoardDisplayable', () => {
+  const now = new Date('2026-07-31T00:00:00.000Z').getTime();
+
+  it('is true for a plain, non-archived task', () => {
+    expect(isBoardDisplayable(makeTask('spec'))).toBe(true);
+  });
+
+  it('is false for an archived task', () => {
+    const task = makeTask('spec', [], { archivedAt: '2026-01-02T00:00:00.000Z' });
+    expect(isBoardDisplayable(task)).toBe(false);
+  });
+
+  it('is false for a non-task row (e.g. an automation run)', () => {
+    const task = makeTask('spec', [], { type: 'automation-run' });
+    expect(isBoardDisplayable(task)).toBe(false);
+  });
+
+  it('is false for a shipped task faded out past the Shipped Fade window', () => {
+    const oldMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS + 1000)).toISOString();
+    const task = makeTask('shipped', [makePr({ status: 'merged', mergedAt: oldMergedAt })]);
+    expect(isBoardDisplayable(task, now)).toBe(false);
+  });
+
+  it('is true for a shipped task still inside the Shipped Fade window', () => {
+    const recentMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS - 1000)).toISOString();
+    const task = makeTask('shipped', [makePr({ status: 'merged', mergedAt: recentMergedAt })]);
+    expect(isBoardDisplayable(task, now)).toBe(true);
   });
 });

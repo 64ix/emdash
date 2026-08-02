@@ -33,3 +33,13 @@ export function isTaskShippedFaded(task: Task, now?: number): boolean {
   }
   return isShippedFaded(latestMergedAt, now);
 }
+
+/**
+ * A task counts as a Feature Board card — and, by extension, can back an open
+ * Task Detail Panel (CONTEXT.md) — only while it is a real, non-archived task
+ * not hidden by Shipped Fade. One predicate for both: a task the board stops
+ * showing must never leave the panel rendering it on stale data.
+ */
+export function isBoardDisplayable(task: Task, now?: number): boolean {
+  return task.type === 'task' && !task.archivedAt && !isTaskShippedFaded(task, now);
+}

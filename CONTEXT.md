@@ -110,6 +110,20 @@ always derived from the Spec.
 The state of a task whose Workflow Stage is unset. Displayed as the first
 column of the Feature Board; not itself a Workflow Stage.
 
+## Task Detail Panel
+
+The side panel that opens on the right of the Feature Board when a card is
+clicked, splitting the view: the board stays fully interactive on the left
+(including drag-and-drop), the clicked task's details on the right. Fixed
+width, not resizable. Clicking a different card switches its content;
+re-clicking the shown card does nothing. Escape and a close button dismiss
+it, and the card behind it stays highlighted while it is open. Ephemeral
+view state — it does not survive leaving the Feature Board, adds no
+view-registry entry, and writes nothing to the database; a task that stops
+being displayable (archived, faded by Shipped Fade) closes the panel rather
+than showing stale or missing data. Clicking a Ghost Card opens the same
+panel in ghost mode with the issue's details and an Adopt action.
+
 ## Context Usage
 
 The per-conversation measure of how full one agent session's context
