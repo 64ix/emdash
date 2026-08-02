@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import type { UnitDef } from '@core/units';
+import { describe, expect, it } from 'vitest';
 import { ARTIFACT_LANE_MAX_WIDTH, computeLaneWidth, resolveLane, resolveUnitLane } from './lane';
 
 type Def = Pick<UnitDef<unknown, Record<string, number>>, 'lane'>;
