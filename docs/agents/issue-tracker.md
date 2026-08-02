@@ -34,6 +34,37 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 Create a GitHub issue on `64ix/emdash`.
 
+## Parent / child tickets: link them as native sub-issues
+
+Whenever a skill publishes child tickets under a parent — `/to-tickets` under a
+`[Spec]`, `/wayfinder` children under a map — a `## Parent` section in the
+child's body is **documentation, not a link**. GitHub only treats a ticket as a
+child once the sub-issues endpoint has been called. Until then the child is a
+top-level issue that lands in every default list, search and count.
+
+Publish the parent first, then link each child to it:
+
+```bash
+child_id=$(gh api repos/64ix/emdash/issues/<child> --jq .id)
+gh api --method POST repos/64ix/emdash/issues/<parent>/sub_issues -F sub_issue_id=$child_id
+```
+
+`sub_issue_id` takes the child's numeric **database id** (`.id`), _not_ its
+`#number` and _not_ its `node_id` — the same trap as issue dependencies below.
+
+Keep the `## Parent` section in the body too: it is what makes the linkage
+reconstructible if the API call was ever missed. Verify before handing off:
+
+```bash
+gh api repos/64ix/emdash/issues/<parent> --jq .sub_issues_summary
+gh issue list --search "is:open no:parent-issue"
+```
+
+The second command should list parents only. Linking does **not** hide children
+from an unfiltered list — GitHub never collapses sub-issues there. What it buys
+is the filter: `no:parent-issue`, `parent-issue:64ix/emdash#<n>` and
+`has:sub-issue` only work once the edges exist.
+
 ## Task Marker
 
 When a skill publishes a **Spec** (`[Spec] <feature>`) or **Map**
@@ -61,7 +92,7 @@ Run `gh issue view <number> --comments`.
 Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
 
 - **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
-- **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
+- **Child ticket**: an issue linked to the map as a GitHub sub-issue — use the exact call in "Parent / child tickets" above; the `## Parent` body section alone does not create the link. Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
 - **Blocking**: GitHub's **native issue dependencies** — the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/64ix/emdash/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/64ix/emdash/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only — the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me` — the session's first write.
