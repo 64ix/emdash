@@ -49,6 +49,25 @@ export type { Margin };
  */
 export type GroupRole = 'solo' | 'first' | 'middle' | 'last';
 
+// ── Lane ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Declarative transcript presentation intent for a unit kind.
+ *
+ * `prose`    — the existing readable measure (the default when a UnitDef
+ *              omits `lane`). Owned entirely by the transcript layout.
+ * `artifact` — a wider bounded lane for diffs, terminal output, and other
+ *              structured content that reads poorly at prose width.
+ *
+ * A UnitDef only *declares* its lane (see `UnitDef.lane` below); it never
+ * computes or applies its own CSS width. The transcript layout
+ * (ChatRoot / UnitRow) is the sole width owner: it resolves the declared lane
+ * to an exact pixel width via `core/layout/lane.ts#computeLaneWidth` and
+ * threads that width into both `measure()`/`Render` and the row's rendered
+ * geometry, so measurement and paint never disagree.
+ */
+export type Lane = 'prose' | 'artifact';
+
 // ── RenderUnit ────────────────────────────────────────────────────────────────
 
 /**
@@ -136,6 +155,10 @@ export type SegmentCtx = {
  *              cur.top) and assigns the result to the lower unit's `gapBefore`.
  *              Falls back to `density.turnGap` when absent. Turn boundaries
  *              resolve to 8px via the user message's margin (top: 8, bottom: 8).
+ * `lane`     — declared presentation intent (see `Lane` above). Defaults to
+ *              `'prose'` when omitted. Resolved to an exact width by
+ *              `core/layout/lane.ts#resolveLane` / `computeLaneWidth` — the
+ *              def itself never sets CSS width.
  * `estimate` — O(1) height heuristic for off-screen units at setCount/prepend.
  *              Falls back to `genericEstimate` when omitted.
  * `measure`  — exact height (px); called only for visible units.
@@ -147,6 +170,7 @@ export type UnitDef<D, V extends Record<string, number> = {}> = {
   kind: string;
   vars?: V;
   margin?: Margin;
+  lane?: Lane;
   estimate?(data: D, ctx: MeasureCtx, vars: V): number;
   measure(data: D, ctx: MeasureCtx, vars: V): number;
   Render: Component<{ data: D; ctx: RenderCtx; vars: V }>;
