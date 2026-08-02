@@ -6,6 +6,7 @@ import {
 } from '@renderer/features/tasks/stores/task-selectors';
 import { rpc } from '@renderer/lib/ipc';
 import { focusTracker } from '@renderer/utils/focus-tracker';
+import { commitRef } from '@shared/core/git/utils';
 import { resolveWorkspacePath } from './workspace-path';
 import { workspaceRegistry } from './workspace-registry';
 
@@ -97,6 +98,55 @@ export async function openFileInAdjacentPane(
     'file',
     { path: resolvedPath },
     { preview: false, target: 'right' }
+  );
+}
+
+/**
+ * Opens the task's full-diff review surface (the working-tree-vs-HEAD "disk"
+ * diff tab already used by the Changes panel's unstaged section) for
+ * `filePath`, instead of the raw file. Intended for the ACP diff card's
+ * "Open full diff" action — reviewing beyond the bounded in-transcript
+ * preview should land on the same diff surface a user reaches by clicking
+ * the file in the Changes panel, not a plain editor tab.
+ */
+export async function openDiffInReviewSurface(
+  projectId: string,
+  taskId: string,
+  filePath: string
+): Promise<void> {
+  const provisioned = asProvisioned(getTaskStore(projectId, taskId));
+  if (!provisioned) return;
+  const workspace = workspaceRegistry.get(projectId, provisioned.workspaceId);
+  if (!workspace) return;
+
+  const resolvedPath = resolveEditorFilePath(workspace.path, filePath);
+  if (resolvedPath === null) {
+    void openExternalFilePath(projectId, taskId, filePath);
+    return;
+  }
+
+  const exists = await rpc.workspace.files.fileExists(
+    projectId,
+    provisioned.workspaceId,
+    resolvedPath
+  );
+  if (!exists.success || !exists.data.exists) {
+    toast.error(`File not found in workspace: ${filePath}`);
+    return;
+  }
+
+  focusTracker.transition({ mainPanel: 'editor' }, 'panel_switch');
+  provisioned.viewModel?.activePane.open(
+    'diff',
+    {
+      activeFile: {
+        path: resolvedPath,
+        type: 'disk',
+        group: 'disk',
+        originalRef: commitRef('HEAD'),
+      },
+    },
+    { preview: false }
   );
 }
 

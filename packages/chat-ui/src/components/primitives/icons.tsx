@@ -2,6 +2,7 @@ export { GenericFileIcon } from './icons/GenericFileIcon';
 export { IconCheck } from './icons/IconCheck';
 export { IconCopy } from './icons/IconCopy';
 export { IconError } from './icons/IconError';
+export { IconExternalLink } from './icons/IconExternalLink';
 export { IconPlanList } from './icons/IconPlanList';
 export { IconShieldAlert } from './icons/IconShieldAlert';
 export { IconStop } from './icons/IconStop';

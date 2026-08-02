@@ -25,6 +25,7 @@ import {
 import { usePaneContext } from '@renderer/features/tabs/pane-context';
 // TODO(conversations-extraction): Inject task editor/file-opening behavior into ACP chat.
 import {
+  openDiffInReviewSurface,
   openFileInAdjacentPane,
   openFileInTaskEditor,
 } from '@renderer/features/tasks/stores/open-file-in-file-editor';
@@ -871,6 +872,10 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
         if (!store) return;
         const open = arg.source === 'diff' ? openFileInAdjacentPane : openFileInTaskEditor;
         void open(store.projectId, store.taskId, arg.path);
+      },
+      onOpenDiff: (arg) => {
+        if (!store) return;
+        void openDiffInReviewSurface(store.projectId, store.taskId, arg.path);
       },
       onClickMention: (arg: Parameters<NonNullable<ChatCommands['onClickMention']>>[0]) => {
         if (!store) return;

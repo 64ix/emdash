@@ -68,3 +68,17 @@ export const copyButtonInline = style([
     },
   },
 ]);
+
+/**
+ * Always-visible inline variant (no group-hover reveal). Used in toolbars
+ * where the action is a primary affordance rather than a hover-revealed
+ * extra — e.g. the diff card footer.
+ */
+export const copyButtonToolbar = style([
+  buttonBase,
+  {
+    gap: '4px',
+    fontSize: '0.75rem',
+    opacity: 1,
+  },
+]);
