@@ -20,6 +20,7 @@
     "**/.turbo",
     "**/out",
     "**/storybook-static",
+    "**/drizzle/meta",
     "**/.env*",
     "**/pnpm-lock.yaml",
     "**/yarn.lock",

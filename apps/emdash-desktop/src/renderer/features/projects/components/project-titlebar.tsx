@@ -1,4 +1,12 @@
-import { ChevronDown, Ellipsis, ExternalLink, GithubIcon, Globe, Kanban, Trash2 } from 'lucide-react';
+import {
+  ChevronDown,
+  Ellipsis,
+  ExternalLink,
+  GithubIcon,
+  Globe,
+  Kanban,
+  Trash2,
+} from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import {
