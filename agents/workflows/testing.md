@@ -30,6 +30,17 @@ pnpm run test
   - `browser` — `src/renderer/tests/browser/**/*.test.{ts,tsx}` via Playwright
 - `pnpm run test` runs the `node`, `main-db`, `migrations`, and `browser` projects.
 - Tests use per-file `vi.mock()` setup.
+- One exception: `tooling/vitest-restore-real-timers.ts` is a shared `setupFiles`
+  hook (wired via the top-level `test.setupFiles` in `vitest.config.ts`, inherited
+  by every project through `extends: true`) that calls `vi.useRealTimers()` in a
+  global `afterEach`. Vitest's non-browser environments share one process-wide
+  `globalThis` — including the timer implementation — across test files in the
+  same worker, so a single file that installs fake timers and forgets to restore
+  them can hang an unrelated file that runs after it. That is a structural,
+  cross-file failure mode that per-file discipline alone cannot guarantee against,
+  so it gets a global backstop instead. Individual files should still restore real
+  timers themselves (most already do); the global hook is defence in depth, not a
+  substitute.
 - Integration-style tests create temporary repos and worktrees in `os.tmpdir()`.
 
 ## CI Notes

@@ -1,4 +1,3 @@
-import { page } from '@vitest/browser/context';
 /**
  * Browser-mode regression tests for the Feature Board drag-and-drop wiring.
  *
@@ -22,6 +21,7 @@ import { observable, runInAction } from 'mobx';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 
 // ── Store mocks ───────────────────────────────────────────────────────────────
 
@@ -62,6 +62,28 @@ vi.mock('@renderer/features/tasks/stores/task-store', () => ({
 
 vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
   AgentStatusIndicator: () => null,
+}));
+
+// BoardMainPanel pulls in BoardLinkSuggestions and GhostCards, which call the
+// real `rpc`/`events` singletons on mount (link suggestions, ghost cards,
+// board/issue sync). This suite only exercises drag-and-drop geometry, so
+// stub those calls directly rather than relying on the browser project's
+// generic `electronAPI.invoke` stub — the real handlers return arrays these
+// components `.map` over, which a one-size-fits-all IPC stub can't guess.
+vi.mock('@renderer/lib/ipc', () => ({
+  rpc: {
+    issues: {
+      getLinkSuggestions: vi.fn(() => Promise.resolve([])),
+      getGhostCards: vi.fn(() => Promise.resolve([])),
+      syncIssuesNow: vi.fn(() => Promise.resolve()),
+    },
+    tasks: {
+      syncBoardStages: vi.fn(() => Promise.resolve()),
+    },
+  },
+  events: {
+    on: vi.fn(() => () => {}),
+  },
 }));
 
 import { BoardMainPanel } from '@renderer/features/board/board-main-panel';

@@ -122,6 +122,12 @@ const toolingAlias = {
 export default defineConfig({
   resolve: { alias },
   test: {
+    // Applies to every project below via `extends: true`. See the file for
+    // why this is needed: Vitest's non-browser environments share a single
+    // global object across test files within a worker, so a file that
+    // installs fake timers and forgets to restore them can leak that state
+    // into whichever unrelated test file runs next.
+    setupFiles: ['./tooling/vitest-restore-real-timers.ts'],
     projects: [
       {
         // All existing tests that run in a Node.js environment.
@@ -200,6 +206,12 @@ export default defineConfig({
             instances: [{ browser: 'chromium' }],
           },
           include: ['src/renderer/tests/browser/**/*.test.{ts,tsx}'],
+          // Each file spins up its own real Chromium instance. Running them
+          // concurrently makes the xterm-backed suites (real render + resize
+          // timing) prone to spurious timeouts under CPU contention. These
+          // files are few and each is fast in isolation, so trade a little
+          // wall-clock time for determinism.
+          fileParallelism: false,
         },
       },
     ],
