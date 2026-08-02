@@ -10,9 +10,14 @@ name: Main Mirror Guard
 # absent from every build for a day, and nobody noticed until the behaviour was
 # reported missing.
 
+# NOTE ON THE TRIGGER: this deliberately does *not* use `on: push: branches: [main]`.
+# For push events GitHub loads the workflow file from the pushed branch — and `main`
+# mirrors upstream, so it will never contain this file, and a push-triggered guard
+# would silently never run. Scheduled and dispatched runs execute from the default
+# branch (`fork-main`), which does have it. Hence: schedule + manual dispatch.
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '0 6 * * *' # daily 06:00 UTC — one hour before Upstream Sync on Mondays
   workflow_dispatch: {}
 
 permissions:
@@ -25,7 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
       - name: Verify main carries no fork commits
@@ -33,7 +37,8 @@ jobs:
         run: |
           git remote add upstream https://github.com/generalaction/emdash.git
           git fetch --no-tags --quiet upstream main
-          STRAY="$(git log --oneline upstream/main..HEAD)"
+          git fetch --no-tags --quiet origin main
+          STRAY="$(git log --oneline upstream/main..origin/main)"
           if [ -n "$STRAY" ]; then
             {
               echo "stray<<EOF"

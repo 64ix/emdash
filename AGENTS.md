@@ -473,7 +473,10 @@ PRs target `fork-main`.
 > git fetch origin && git log --oneline origin/fork-main..origin/main   # MUST be empty
 > ```
 >
-> Enforced by `.github/workflows/main-mirror-guard.yml` on every push to `main`.
+> `.github/workflows/main-mirror-guard.yml` re-checks this daily and opens an issue on
+> drift, but it is a safety net, not a merge-time gate (it cannot run on push to `main`
+> — that branch never carries our workflow files). **The checks above are still yours.**
+>
 > **Happened once:** PR #13 ([Spec #11] Auto-generated Conversation Titles) landed on
 > `main`; the feature was missing from every build for a day before anyone noticed.
 

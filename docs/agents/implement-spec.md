@@ -40,7 +40,11 @@ sub-section of `AGENTS.md`. Facts the runner cannot infer from git alone:
   > Never repair this by force-pushing `main` first: cherry-pick the commit onto
   > `fork-main` and push that, and only then restore `main` to the upstream sha —
   > otherwise the only copy of the work is destroyed.
-  > `.github/workflows/main-mirror-guard.yml` catches it on every push to `main`.
+  >
+  > `.github/workflows/main-mirror-guard.yml` re-checks daily as a safety net. It
+  > cannot be a merge-time gate: push-triggered workflows load their file from the
+  > pushed branch, and `main` mirrors upstream, so it never carries our workflows.
+  > The two checks above are the runner's own responsibility.
 - **Test command (the gate):** from a fresh worktree, install and build the
   workspace packages first, then run from `apps/emdash-desktop`:
   `pnpm typecheck`, `pnpm exec oxlint .`, and

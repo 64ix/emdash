@@ -32,8 +32,12 @@ spec = one PR onto `fork-main`.
 > git log --oneline origin/fork-main..origin/main   # MUST be empty
 > ```
 >
-> `.github/workflows/main-mirror-guard.yml` enforces this on every push to `main`.
-> If it fires, the issue it opens carries the remediation commands.
+> `.github/workflows/main-mirror-guard.yml` checks this **daily** (and on
+> `workflow_dispatch`), opening an issue with remediation commands when `main` drifts.
+> It cannot be push-triggered: for push events GitHub loads the workflow file from the
+> pushed branch, and `main` mirrors upstream, so it will never carry the guard. The
+> daily run is therefore a safety net, not a merge-time gate — **the base check above
+> is still yours to do.**
 >
 > **Happened once:** PR #13 ([Spec #11] Auto-generated Conversation Titles) was merged
 > to `main`. The feature was missing from every build for a day with no error anywhere;
