@@ -24,6 +24,7 @@ describe('ProviderUsageService provider normalization', () => {
     );
     const http = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer secret-token');
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
       return Response.json({
         five_hour: { utilization: 37.5, resets_at: '2026-08-02T12:00:00.000Z' },
         seven_day: { utilization: 51, resets_at: '2026-08-08T00:00:00.000Z' },
@@ -202,6 +203,35 @@ describe('ProviderUsageService provider normalization', () => {
     );
   });
 
+  it('reads the credentials file from CLAUDE_SECURESTORAGE_CONFIG_DIR', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'emdash-claude-config-'));
+    const secureStorageDir = await mkdtemp(join(tmpdir(), 'emdash-claude-secure-storage-'));
+    await writeFile(
+      join(secureStorageDir, '.credentials.json'),
+      JSON.stringify({ claudeAiOauth: { accessToken: 'secure-storage-secret' } })
+    );
+    const http = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer secure-storage-secret');
+      return Response.json({ five_hour: { utilization: 6, resets_at: null } });
+    });
+    const service = new ProviderUsageService({
+      adapters: [
+        new ClaudeUsageAdapter({
+          env: {
+            CLAUDE_CONFIG_DIR: configDir,
+            CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir,
+          },
+          platform: 'linux',
+          http: http as typeof fetch,
+          now: () => NOW,
+        }),
+      ],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    expect((await service.getSnapshots())[0]?.windows[0]?.utilization).toBe(6);
+  });
+
   it('treats an empty CLAUDE_CONFIG_DIR as Claude Code does', async () => {
     const readKeychain = vi.fn(async () =>
       JSON.stringify({ claudeAiOauth: { accessToken: 'keychain-secret' } })
@@ -225,6 +255,31 @@ describe('ProviderUsageService provider normalization', () => {
     await service.getSnapshots();
 
     expect(readKeychain).toHaveBeenCalledWith('Claude Code-credentials', 'test-user');
+  });
+
+  it('keeps an empty CLAUDE_CONFIG_DIR for the credentials-file fallback', async () => {
+    const readTextFile = vi.fn(async () =>
+      JSON.stringify({ claudeAiOauth: { accessToken: 'relative-config-secret' } })
+    );
+    const service = new ProviderUsageService({
+      adapters: [
+        new ClaudeUsageAdapter({
+          env: { CLAUDE_CONFIG_DIR: '' },
+          platform: 'linux',
+          homeDir: '/unused-home',
+          readTextFile,
+          http: vi.fn(async () =>
+            Response.json({ five_hour: { utilization: 7, resets_at: null } })
+          ) as typeof fetch,
+          now: () => NOW,
+        }),
+      ],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    await service.getSnapshots();
+
+    expect(readTextFile).toHaveBeenCalledWith('.credentials.json');
   });
 
   it.each([
@@ -329,6 +384,44 @@ describe('ProviderUsageService provider normalization', () => {
     expect((await service.getSnapshots())[0]?.windows[0]?.utilization).toBe(44);
   });
 
+  it('skips malformed Codex windows instead of promoting a secondary window', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'emdash-codex-malformed-window-'));
+    const dayDir = join(codexHome, 'sessions', '2026', '08', '02');
+    await mkdir(dayDir, { recursive: true });
+    const secondaryOnly = JSON.stringify({
+      timestamp: '2026-08-02T09:50:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        rate_limits: {
+          secondary: { used_percent: 99, resets_at: 1_785_667_200 },
+        },
+      },
+    });
+    const invalidReset = JSON.stringify({
+      timestamp: '2026-08-02T09:45:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        rate_limits: {
+          primary: { used_percent: 88, resets_at: 'invalid' },
+        },
+      },
+    });
+    await writeFile(
+      join(dayDir, 'rollout.jsonl'),
+      `${tokenCountEvent('2026-08-02T09:30:00.000Z', 44, 61)}\n${invalidReset}\n${secondaryOnly}`
+    );
+    const service = new ProviderUsageService({
+      adapters: [new CodexUsageAdapter({ env: { CODEX_HOME: codexHome } })],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    const [snapshot] = await service.getSnapshots();
+
+    expect(snapshot.windows[0]).toMatchObject({ id: 'primary', utilization: 44, primary: true });
+  });
+
   it('bounds the number of recent Codex session files read', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'emdash-codex-bounded-'));
     const dayDir = join(codexHome, 'sessions', '2026', '08', '02');
@@ -356,6 +449,50 @@ describe('ProviderUsageService provider normalization', () => {
     expect(snapshot.error?.code).toBe('unreadable-data');
   });
 
+  it('bounds each Codex session file read to its newest bytes', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'emdash-codex-bounded-bytes-'));
+    const dayDir = join(codexHome, 'sessions', '2026', '08', '02');
+    await mkdir(dayDir, { recursive: true });
+    await writeFile(
+      join(dayDir, 'rollout.jsonl'),
+      `${tokenCountEvent('2026-08-02T08:00:00.000Z', 12, 22)}\n${'x'.repeat(512)}`
+    );
+    const service = new ProviderUsageService({
+      adapters: [
+        new CodexUsageAdapter({
+          env: { CODEX_HOME: codexHome },
+          maxFileBytes: 128,
+        }),
+      ],
+      now: () => NOW.getTime(),
+    });
+    service.initialize({ claude: true, codex: true });
+
+    const [snapshot] = await service.getSnapshots();
+
+    expect(snapshot.windows).toEqual([]);
+    expect(snapshot.error?.code).toBe('unreadable-data');
+  });
+
+  it('reads a complete recent Codex event when the byte boundary cuts an older line', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'emdash-codex-tail-boundary-'));
+    const dayDir = join(codexHome, 'sessions', '2026', '08', '02');
+    await mkdir(dayDir, { recursive: true });
+    const recentEvent = tokenCountEvent('2026-08-02T09:45:00.000Z', 73, 81);
+    await writeFile(join(dayDir, 'rollout.jsonl'), `${'x'.repeat(512)}\n${recentEvent}`);
+    const service = new ProviderUsageService({
+      adapters: [
+        new CodexUsageAdapter({
+          env: { CODEX_HOME: codexHome },
+          maxFileBytes: recentEvent.length + 16,
+        }),
+      ],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    expect((await service.getSnapshots())[0]?.windows[0]?.utilization).toBe(73);
+  });
+
   it('silently omits providers whose local source is absent', async () => {
     const missingHome = join(tmpdir(), `emdash-codex-missing-${crypto.randomUUID()}`);
     const service = new ProviderUsageService({
@@ -379,7 +516,7 @@ describe('ProviderUsageService activity-aware polling', () => {
     );
     const adapter: ProviderUsageAdapter = {
       provider: 'claude',
-      isAvailable: async () => true,
+      isAvailable: async () => ok(true),
       read,
     };
     const service = new ProviderUsageService({
@@ -399,6 +536,34 @@ describe('ProviderUsageService activity-aware polling', () => {
     expect(read).toHaveBeenCalledTimes(2);
     await service.recordActivity('claude');
     expect(read).toHaveBeenCalledTimes(3);
+    service.dispose();
+  });
+
+  it('refreshes again when activity occurs during an in-flight refresh', async () => {
+    let releaseFirstRead = (): void => undefined;
+    const firstReadGate = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    const read = vi.fn(async () => {
+      if (read.mock.calls.length === 1) await firstReadGate;
+      return ok({
+        provider: 'claude' as const,
+        windows: [],
+        lastUpdated: NOW.toISOString(),
+      });
+    });
+    const service = new ProviderUsageService({
+      adapters: [{ provider: 'claude', isAvailable: async () => ok(true), read }],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    const startRefresh = service.recordActivity('claude');
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    const stopRefresh = service.recordActivity('claude');
+    releaseFirstRead();
+    await Promise.all([startRefresh, stopRefresh]);
+
+    expect(read).toHaveBeenCalledTimes(2);
     service.dispose();
   });
 
@@ -422,7 +587,7 @@ describe('ProviderUsageService activity-aware polling', () => {
       )
       .mockResolvedValueOnce(err({ code: 'network' as const, message: 'offline' }));
     const service = new ProviderUsageService({
-      adapters: [{ provider: 'claude', isAvailable: async () => true, read }],
+      adapters: [{ provider: 'claude', isAvailable: async () => ok(true), read }],
     });
     service.initialize({ claude: true, codex: true });
 
@@ -434,6 +599,42 @@ describe('ProviderUsageService activity-aware polling', () => {
     expect(snapshot.error?.code).toBe('network');
   });
 
+  it('keeps the last good snapshot when an availability probe fails transiently', async () => {
+    const isAvailable = vi
+      .fn()
+      .mockResolvedValueOnce(ok(true))
+      .mockResolvedValueOnce(
+        err({ code: 'unreadable-data' as const, message: 'credential store unavailable' })
+      );
+    const read = vi.fn(async () =>
+      ok({
+        provider: 'claude' as const,
+        windows: [
+          {
+            id: 'five_hour',
+            label: '5-hour session',
+            utilization: 30,
+            resetsAt: null,
+            primary: true,
+          },
+        ],
+        lastUpdated: NOW.toISOString(),
+      })
+    );
+    const service = new ProviderUsageService({
+      adapters: [{ provider: 'claude', isAvailable, read }],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    await service.refresh('claude');
+    await service.refresh('claude');
+    const [snapshot] = await service.getSnapshots();
+
+    expect(snapshot.windows[0]?.utilization).toBe(30);
+    expect(snapshot.lastUpdated).toBe(NOW.toISOString());
+    expect(snapshot.error?.code).toBe('unreadable-data');
+  });
+
   it('stops polling a provider immediately when its gauge is hidden', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -441,7 +642,7 @@ describe('ProviderUsageService activity-aware polling', () => {
       ok({ provider: 'claude' as const, windows: [], lastUpdated: new Date().toISOString() })
     );
     const service = new ProviderUsageService({
-      adapters: [{ provider: 'claude', isAvailable: async () => true, read }],
+      adapters: [{ provider: 'claude', isAvailable: async () => ok(true), read }],
       pollIntervalMs: 30 * 60_000,
     });
     service.initialize({ claude: true, codex: true });

@@ -9,6 +9,6 @@ export function isLocalProviderUsageActivity(
 ): boolean {
   if (!workspace) return false;
   if (workspace.location === 'remote') return false;
-  if (workspace.type === 'project-ssh') return false;
-  return workspace.legacyProvider !== 'ssh';
+  if (workspace.type === 'project-ssh' || workspace.type === 'byoi') return false;
+  return workspace.legacyProvider !== 'ssh' && workspace.legacyProvider !== 'byoi';
 }

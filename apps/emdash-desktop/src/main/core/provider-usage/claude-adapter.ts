@@ -24,6 +24,7 @@ export type ClaudeUsageAdapterDependencies = {
 
 const execFileAsync = promisify(execFile);
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+const REQUEST_TIMEOUT_MS = 10_000;
 
 export class ClaudeUsageAdapter implements ProviderUsageAdapter {
   readonly provider = 'claude' as const;
@@ -47,12 +48,15 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
     this.now = deps.now ?? (() => new Date());
   }
 
-  async isAvailable(): Promise<boolean> {
-    return (await this.resolveAccessToken()) !== null;
+  async isAvailable(): Promise<Result<boolean, ProviderUsageError>> {
+    const result = await this.resolveAccessToken();
+    return result.success ? ok(result.data !== null) : err(result.error);
   }
 
   async read(): Promise<Result<ProviderUsageSnapshot, ProviderUsageError>> {
-    const accessToken = await this.resolveAccessToken();
+    const tokenResult = await this.resolveAccessToken();
+    if (!tokenResult.success) return tokenResult;
+    const accessToken = tokenResult.data;
     if (!accessToken) {
       return err({
         code: 'authentication',
@@ -68,6 +72,7 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
           Authorization: `Bearer ${accessToken}`,
           'anthropic-beta': 'oauth-2025-04-20',
         },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch {
       return err({ code: 'network', message: 'Claude usage could not be refreshed.' });
@@ -93,24 +98,43 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
     }
   }
 
-  private configDir(): string {
-    return (this.env.CLAUDE_CONFIG_DIR || join(this.homeDir, '.claude')).normalize('NFC');
+  private credentialsDir(): string {
+    const secureStorageDir = this.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+    if (secureStorageDir !== undefined) {
+      return (secureStorageDir || join(this.homeDir, '.claude')).normalize('NFC');
+    }
+    return (this.env.CLAUDE_CONFIG_DIR ?? join(this.homeDir, '.claude')).normalize('NFC');
   }
 
-  private async resolveAccessToken(): Promise<string | null> {
+  private async resolveAccessToken(): Promise<Result<string | null, ProviderUsageError>> {
+    let keychainReadFailed = false;
     if (this.platform === 'darwin') {
       const account = claudeKeychainAccount(this.env, this.userName);
-      for (const service of claudeKeychainServices(this.env, this.configDir())) {
-        const raw = await this.readKeychain(service, account).catch(() => null);
+      for (const service of claudeKeychainServices(this.env, this.credentialsDir())) {
+        let raw: string | null;
+        try {
+          raw = await this.readKeychain(service, account);
+        } catch {
+          keychainReadFailed = true;
+          continue;
+        }
         const token = parseAccessToken(raw);
-        if (token) return token;
+        if (token) return ok(token);
       }
     }
 
-    const raw = await this.readTextFile(join(this.configDir(), '.credentials.json')).catch(
-      () => null
-    );
-    return parseAccessToken(raw);
+    try {
+      const raw = await this.readTextFile(join(this.credentialsDir(), '.credentials.json'));
+      return ok(parseAccessToken(raw));
+    } catch (error) {
+      if (!isFileNotFoundError(error) || keychainReadFailed) {
+        return err({
+          code: 'unreadable-data',
+          message: 'Claude Code credentials could not be read.',
+        });
+      }
+      return ok(null);
+    }
   }
 }
 
@@ -122,9 +146,18 @@ async function readMacOsKeychain(service: string, account: string): Promise<stri
       { timeout: 5_000 }
     );
     return stdout.trim() || null;
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingKeychainItem(error)) return null;
+    throw error;
   }
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+function isMissingKeychainItem(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 44;
 }
 
 function claudeKeychainServices(env: ClaudeEnvironment, configDir: string): string[] {

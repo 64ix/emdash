@@ -7,6 +7,6 @@ import type {
 
 export interface ProviderUsageAdapter {
   readonly provider: ProviderUsageProvider;
-  isAvailable(): Promise<boolean>;
+  isAvailable(): Promise<Result<boolean, ProviderUsageError>>;
   read(): Promise<Result<ProviderUsageSnapshot, ProviderUsageError>>;
 }

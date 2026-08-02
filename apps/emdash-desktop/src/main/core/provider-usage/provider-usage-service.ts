@@ -59,6 +59,8 @@ export class ProviderUsageService {
     if (!this.visibility[provider] || !this.adapters.has(provider)) return;
     this.lastActivity.set(provider, this.now());
     this.ensureTimer();
+    const existing = this.inflight.get(provider);
+    if (existing) await existing;
     await this.refresh(provider);
   }
 
@@ -81,7 +83,14 @@ export class ProviderUsageService {
 
   private async doRefresh(provider: ProviderUsageProvider): Promise<ProviderUsageSnapshot | null> {
     const adapter = this.adapters.get(provider);
-    if (!adapter || !(await adapter.isAvailable())) {
+    if (!adapter) return null;
+    const availability = await adapter.isAvailable();
+    if (!availability.success) {
+      this.storeError(provider, availability.error);
+      this.emit();
+      return this.snapshots.get(provider) ?? null;
+    }
+    if (!availability.data) {
       this.snapshots.delete(provider);
       this.emit();
       return null;
@@ -90,18 +99,7 @@ export class ProviderUsageService {
     if (result.success) {
       this.snapshots.set(provider, result.data);
     } else {
-      const cached = this.snapshots.get(provider);
-      this.snapshots.set(
-        provider,
-        cached
-          ? { ...cached, error: result.error }
-          : {
-              provider,
-              windows: [],
-              lastUpdated: new Date(this.now()).toISOString(),
-              error: result.error,
-            }
-      );
+      this.storeError(provider, result.error);
     }
     this.emit();
     return this.snapshots.get(provider) ?? null;
@@ -139,6 +137,21 @@ export class ProviderUsageService {
 
   private emit(): void {
     this.deps.emit?.(this.visibleSnapshots());
+  }
+
+  private storeError(provider: ProviderUsageProvider, error: ProviderUsageSnapshot['error']): void {
+    const cached = this.snapshots.get(provider);
+    this.snapshots.set(
+      provider,
+      cached
+        ? { ...cached, error }
+        : {
+            provider,
+            windows: [],
+            lastUpdated: new Date(this.now()).toISOString(),
+            error,
+          }
+    );
   }
 
   private now(): number {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { providerUsageProviderForActivityEvent } from './provider-usage-activity-event';
 import { isLocalProviderUsageActivity } from './provider-usage-activity-locality';
 
 describe('provider usage activity locality', () => {
@@ -21,9 +22,30 @@ describe('provider usage activity locality', () => {
     expect(
       isLocalProviderUsageActivity({ location: null, type: 'byoi', legacyProvider: 'ssh' })
     ).toBe(false);
+    expect(
+      isLocalProviderUsageActivity({ location: null, type: 'byoi', legacyProvider: null })
+    ).toBe(false);
+    expect(
+      isLocalProviderUsageActivity({ location: null, type: 'local', legacyProvider: 'byoi' })
+    ).toBe(false);
   });
 
   it('does not assume an unresolved activity belongs to the local machine', () => {
     expect(isLocalProviderUsageActivity(undefined)).toBe(false);
+  });
+
+  it('refreshes supported providers at both ends of a turn', () => {
+    expect(providerUsageProviderForActivityEvent({ type: 'start', providerId: 'claude' })).toBe(
+      'claude'
+    );
+    expect(providerUsageProviderForActivityEvent({ type: 'stop', providerId: 'codex' })).toBe(
+      'codex'
+    );
+    expect(
+      providerUsageProviderForActivityEvent({ type: 'notification', providerId: 'codex' })
+    ).toBeNull();
+    expect(
+      providerUsageProviderForActivityEvent({ type: 'stop', providerId: 'gemini' })
+    ).toBeNull();
   });
 });
