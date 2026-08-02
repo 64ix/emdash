@@ -111,14 +111,34 @@ function ProseFragment(props: {
     // fallback. The host decides and performs the action (editor, external
     // confirmation, or a blocked/error report); we never let the browser
     // navigate the anchor itself.
+    const activate = () => {
+      commands().onActivateLink?.({ href, itemId: props.blockId, source: 'prose-link' });
+    };
     const handleClick = (e: MouseEvent) => {
       e.preventDefault();
-      commands().onActivateLink?.({ href, itemId: props.blockId, source: 'prose-link' });
+      activate();
+    };
+    // Middle-click dispatches `auxclick`, not `click` — `handleClick`'s
+    // preventDefault() never runs for it, so a real `<a href>` left
+    // unguarded here would still let the browser fall back to its native
+    // "open link in background tab" behavior for the raw, unclassified
+    // `href`. Intercept it the same way so every activation path (not just
+    // primary click) goes through the typed contract.
+    const handleAuxClick = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      activate();
     };
 
     // Links are not word-animated (href spans are not appended incrementally).
     return (
-      <a class={cls} style={{ left: `${props.frag.x}px` }} href={href} onClick={handleClick}>
+      <a
+        class={cls}
+        style={{ left: `${props.frag.x}px` }}
+        href={href}
+        onClick={handleClick}
+        onAuxClick={handleAuxClick}
+      >
         {props.frag.text}
       </a>
     );

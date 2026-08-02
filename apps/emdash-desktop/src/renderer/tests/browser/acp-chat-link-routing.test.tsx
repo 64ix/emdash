@@ -241,6 +241,38 @@ describe('ACP chat link routing (browser)', () => {
     unmount(mounted);
   });
 
+  it('routes a middle-click (auxclick) on a prose link through the same typed contract as a left click', async () => {
+    // Middle-click dispatches `auxclick`, not `click` — Chromium's own
+    // preventDefault()-only-on-click guard would never see it. A real `<a
+    // href>` left unguarded here would still fall back to the browser's
+    // native "open link in background tab" behavior for the raw,
+    // unclassified href instead of running the typed link-action contract.
+    const commands: ChatCommands = {
+      onActivateLink: (arg) => activateChatLink(arg, TASK_CONTEXT),
+    };
+    const mounted = mountChatTranscript(commands);
+
+    const link = await waitFor(() =>
+      Array.from(mounted.host.querySelectorAll('a')).find((a) =>
+        a.textContent?.includes('workspace file')
+      )
+    );
+
+    const auxEvent = new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 });
+    link.dispatchEvent(auxEvent);
+    await flush();
+
+    expect(mocks.openFileInTaskEditor).toHaveBeenCalledWith(
+      'p1',
+      't1',
+      '/Users/dev/workspace/docs/readme.md'
+    );
+    expect(auxEvent.defaultPrevented).toBe(true);
+    expect(windowOpenSpy).not.toHaveBeenCalled();
+
+    unmount(mounted);
+  });
+
   it('routes a resource-link row through the same typed contract as prose links', async () => {
     const commands: ChatCommands = {
       onActivateLink: (arg) => activateChatLink(arg, TASK_CONTEXT),

@@ -249,10 +249,10 @@ Callbacks injected by the host to respond to user actions:
 
 | Callback | Signature | Description |
 | --- | --- | --- |
-| `onOpenFile` | `({ path, itemId, source }) => void` | User clicked a file path (diff, file-op, resource-link, prose-link). |
+| `onOpenFile` | `({ path, itemId, source }) => void` | User clicked a file path in a diff header or file-op row (`source: 'diff' \| 'file-op'`). |
 | `onViewImage` | `({ attachment, itemId, source }) => void` | User clicked an image thumbnail in a user message. |
 | `onStop` | `({ itemId }) => void` | User clicked the stop button during generation. |
-| `classifyLink` | `(href) => { kind: 'workspace-file'; path: string } \| { kind: 'external' }` | Classify a markdown `href` at render time (must be synchronous). |
+| `onActivateLink` | `({ href, itemId, source }) => void` | User activated a chat-authored link — a resource-link row or inline prose link (`source: 'resource-link' \| 'prose-link'`). The host classifies `href` itself (workspace file / external http(s) / blocked) and performs the resulting action; there is no default and no raw anchor/`window.open` fallback. |
 | `onViewMermaid` | `({ chart, blockId, source }) => void` | User clicked a Mermaid diagram preview. |
 
 ---

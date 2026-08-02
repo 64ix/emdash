@@ -139,6 +139,28 @@ describe('activateChatLink', () => {
     expect(mocks.openFileInTaskEditor).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledTimes(1);
   });
+
+  it('surfaces a rejected activation as an error toast instead of an unhandled rejection', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      mocks.openFileInTaskEditor.mockRejectedValue(new Error('rpc exploded'));
+      activateChatLink({ href: 'docs/readme.md', itemId: 'i1', source: 'prose-link' }, CONTEXT);
+      await flush();
+      // Let any microtask-queued unhandledRejection listeners run.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(mocks.toast).toHaveBeenCalledTimes(1);
+      const call = mocks.toast.mock.calls[0][0];
+      expect(call.title).toBe('Could not open link');
+      expect(call.description).toBe('docs/readme.md');
+      expect(call.variant).toBe('destructive');
+      expect(call.action.label).toBe('Copy');
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
 });
 
 describe('blockedChatLinkTitle', () => {

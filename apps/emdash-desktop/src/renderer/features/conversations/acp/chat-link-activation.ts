@@ -36,12 +36,19 @@ export type ChatLinkTaskContext = {
  * which are synchronous void handlers); errors within the async work are
  * reported via the same toast path used for blocked targets, never thrown
  * back into the caller.
+ *
+ * `performActivation` can reject (e.g. a thrown/rejected RPC call inside
+ * `openFileInTaskEditor`) — without a `.catch` here that would surface only
+ * as an unhandled promise rejection, silently dropping the failure instead of
+ * telling the user their click did nothing.
  */
 export function activateChatLink(
   arg: ChatLinkActivationArg,
   context: ChatLinkTaskContext | null
 ): void {
-  void performActivation(arg, context);
+  void performActivation(arg, context).catch(() => {
+    reportActivationFailure(arg.href);
+  });
 }
 
 async function performActivation(
@@ -73,6 +80,20 @@ async function performActivation(
       return exhaustive;
     }
   }
+}
+
+function reportActivationFailure(href: string): void {
+  toast({
+    title: 'Could not open link',
+    description: href,
+    variant: 'destructive',
+    action: {
+      label: 'Copy',
+      onClick: () => {
+        void rpc.app.clipboardWriteText(href);
+      },
+    },
+  });
 }
 
 function reportBlockedChatLink(reason: ChatLinkBlockReason, target: string): void {

@@ -36,8 +36,9 @@ export const CHAT_VIEW_COMMANDS = [
  */
 export type ChatCommands = {
   /**
-   * Called when the user clicks a file path in a diff header, file-op row,
-   * resource-link card, or inline prose link.
+   * Called when the user clicks a file path in a diff header or a file-op
+   * row. Resource-link rows and inline prose links go through
+   * `onActivateLink` instead (see below).
    */
   onOpenFile?: (arg: { path: string; itemId: string; source: 'diff' | 'file-op' }) => void;
 
