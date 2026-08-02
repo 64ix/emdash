@@ -9,7 +9,7 @@ import type {
   MentionItem,
   PromptEditorRef,
 } from '@emdash/ui/react/components';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, PanelRight } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -33,6 +33,7 @@ import {
   asProvisioned,
   getRegisteredTaskData,
   getTaskStore,
+  getTaskView,
 } from '@renderer/features/tasks/stores/task-selectors';
 import {
   issueMentionToken,
@@ -57,6 +58,11 @@ import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
 import { failedSubmissionPreview } from './acp-submission-recovery';
+import type { ChangesFootprintEntry } from './changes/acp-changes-footprint';
+import { ChangesDrawer } from './changes/changes-drawer';
+import { ChangesRail } from './changes/changes-rail';
+import { openChangesFootprintEntry } from './changes/changes-rail-actions';
+import { isChangesRailNarrow } from './changes/changes-rail-layout';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -901,115 +907,154 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
 
   const showComposer = !store.historyLoading && store.loadError === null;
   const showHero = showComposer && store.isEmpty;
+  const changesRail = getTaskView(store.projectId, store.taskId)?.changesRail ?? null;
+  const isChangesRailNarrowLayout = isChangesRailNarrow(pane.dimensions?.width ?? null);
+  const handleSelectChangesEntry = (entry: ChangesFootprintEntry) => {
+    openChangesFootprintEntry(store.projectId, store.taskId, entry);
+  };
 
   return (
-    <div ref={rootRef} className="relative h-full overflow-hidden bg-background-secondary-1">
-      <ChatTranscript
-        context={store.chatContext}
-        state={store.chatState}
-        composer="slot"
-        composerPlacement={store.isEmpty ? 'center' : 'bottom'}
-        contentOverlay
-        stickToBottom
-        pinUserMessages
-        onReady={handleReady}
-        commands={transcriptCommands}
-        onAtBottomChange={setAtBottom}
-        onReachStart={() => store.loadOlderHistory()}
-        style={{ position: 'absolute', inset: 0 }}
-      />
+    <div ref={rootRef} className="relative flex h-full overflow-hidden bg-background-secondary-1">
+      <div className="relative min-w-0 flex-1 overflow-hidden">
+        <ChatTranscript
+          context={store.chatContext}
+          state={store.chatState}
+          composer="slot"
+          composerPlacement={store.isEmpty ? 'center' : 'bottom'}
+          contentOverlay
+          stickToBottom
+          pinUserMessages
+          onReady={handleReady}
+          commands={transcriptCommands}
+          onAtBottomChange={setAtBottom}
+          onReachStart={() => store.loadOlderHistory()}
+          style={{ position: 'absolute', inset: 0 }}
+        />
 
-      {/* Loading / error overlay portaled into the library-owned slot.
+        {/* Loading / error overlay portaled into the library-owned slot.
           The slot sits at z-index 15 (above pinned, below composer at 20).
           Hide the composer in error state so the overlay owns the whole content area.
           Precedence: error > loading. */}
-      {overlaySlot &&
-        (store.loadError !== null || store.historyLoading) &&
-        createPortal(
-          <div
-            // The library-owned overlay slot is pointer-events: none by design;
-            // opt back in so the Sign in / Retry buttons are clickable.
-            className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
-              store.loadError !== null || store.historyLoading ? 'bg-background-secondary-1' : ''
-            }`}
-            aria-live="polite"
-          >
-            {store.loadError !== null ? (
-              store.loadError.kind === 'auth_required' ? (
-                <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">
-                    {agent?.name ?? 'This agent'} needs you to sign in.
-                  </span>
-                  <span className="text-xs text-foreground-muted">
-                    {cliAuthMethod?.description ?? store.loadError.message}
-                  </span>
-                  <div className="mt-1 flex gap-2">
-                    {cliAuthMethod && (
-                      <Button variant="default" size="sm" onClick={openSignInModal}>
-                        Sign in
+        {overlaySlot &&
+          (store.loadError !== null || store.historyLoading) &&
+          createPortal(
+            <div
+              // The library-owned overlay slot is pointer-events: none by design;
+              // opt back in so the Sign in / Retry buttons are clickable.
+              className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
+                store.loadError !== null || store.historyLoading ? 'bg-background-secondary-1' : ''
+              }`}
+              aria-live="polite"
+            >
+              {store.loadError !== null ? (
+                store.loadError.kind === 'auth_required' ? (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">
+                      {agent?.name ?? 'This agent'} needs you to sign in.
+                    </span>
+                    <span className="text-xs text-foreground-muted">
+                      {cliAuthMethod?.description ?? store.loadError.message}
+                    </span>
+                    <div className="mt-1 flex gap-2">
+                      {cliAuthMethod && (
+                        <Button variant="default" size="sm" onClick={openSignInModal}>
+                          Sign in
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" onClick={() => store.retry()}>
+                        Retry
                       </Button>
-                    )}
-                    <Button variant="outline" size="sm" onClick={() => store.retry()}>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">Failed to load chat.</span>
+                    <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1"
+                      onClick={() => store.retry()}
+                    >
                       Retry
                     </Button>
                   </div>
-                </div>
+                )
               ) : (
-                <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">Failed to load chat.</span>
-                  <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-1"
-                    onClick={() => store.retry()}
-                  >
-                    Retry
-                  </Button>
-                </div>
-              )
-            ) : (
-              'Loading chat...'
-            )}
-          </div>,
-          overlaySlot
+                'Loading chat...'
+              )}
+            </div>,
+            overlaySlot
+          )}
+
+        {showHero &&
+          heroSlot &&
+          createPortal(
+            <div className="px-4 text-center">
+              <h1 className="text-2xl tracking-tight text-foreground">
+                What are we building today?
+              </h1>
+            </div>,
+            heroSlot
+          )}
+
+        {showComposer && composerSlot && (
+          <ComposerForStore
+            key={store.conversationId}
+            store={store}
+            composerSlot={composerSlot}
+            onViewerOpen={handleViewerOpen}
+          />
         )}
 
-      {showHero &&
-        heroSlot &&
-        createPortal(
-          <div className="px-4 text-center">
-            <h1 className="text-2xl tracking-tight text-foreground">What are we building today?</h1>
-          </div>,
-          heroSlot
-        )}
+        {showComposer &&
+          composerSlot &&
+          !atBottom &&
+          createPortal(
+            <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
+              <Button
+                variant="secondary"
+                size="icon-md"
+                aria-label="Scroll to bottom"
+                onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
+                className="pointer-events-auto rounded-full shadow-md"
+              >
+                <ArrowDown />
+              </Button>
+            </div>,
+            composerSlot
+          )}
 
-      {showComposer && composerSlot && (
-        <ComposerForStore
-          key={store.conversationId}
-          store={store}
-          composerSlot={composerSlot}
-          onViewerOpen={handleViewerOpen}
-        />
-      )}
-
-      {showComposer &&
-        composerSlot &&
-        !atBottom &&
-        createPortal(
-          <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
+        {changesRail && (
+          <div className="pointer-events-none absolute top-3 right-3 z-20">
             <Button
               variant="secondary"
-              size="icon-md"
-              aria-label="Scroll to bottom"
-              onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
-              className="pointer-events-auto rounded-full shadow-md"
+              size="icon-sm"
+              aria-label={changesRail.isOpen ? 'Hide Changes' : 'Show Changes'}
+              aria-pressed={changesRail.isOpen}
+              onClick={() => changesRail.toggleOpen()}
+              className="pointer-events-auto shadow-sm"
             >
-              <ArrowDown />
+              <PanelRight className="size-4" />
             </Button>
-          </div>,
-          composerSlot
+          </div>
         )}
+      </div>
+
+      {changesRail && !isChangesRailNarrowLayout && (
+        <ChangesRail
+          store={changesRail}
+          footprint={store.changesFootprint}
+          onSelectEntry={handleSelectChangesEntry}
+        />
+      )}
+      {changesRail && isChangesRailNarrowLayout && (
+        <ChangesDrawer
+          store={changesRail}
+          footprint={store.changesFootprint}
+          onSelectEntry={handleSelectChangesEntry}
+        />
+      )}
 
       <ImageViewerDialog
         open={!!viewer}
