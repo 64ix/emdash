@@ -193,7 +193,6 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'browser',
-          setupFiles: ['src/renderer/tests/browser/setup/electron-api-stub.ts'],
           browser: {
             enabled: true,
             provider: playwright(),
