@@ -548,7 +548,7 @@ const BoardCard = observer(function BoardCard({
         isSelected && 'border-primary ring-1 ring-primary/50'
       )}
     >
-      <div className="w-full text-left text-xs font-medium">{task.name}</div>
+      <span className="block w-full text-left text-xs font-medium">{task.name}</span>
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           {linkedIssue && (
