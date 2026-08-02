@@ -56,6 +56,7 @@ import type { ChatCaches } from './core/caches';
 import type { ThemeVarKey } from './core/config';
 import type { MeasureCtx } from './core/define';
 import { genericEstimate } from './core/layout/generic-estimate';
+import { computeLaneWidth, resolveLane, type Lane } from './core/layout/lane';
 import { STICK_THRESHOLD_PX } from './core/stick-to-bottom';
 import { unitReservedHeight } from './core/units';
 import { Virtualizer } from './core/virtualizer';
@@ -359,6 +360,11 @@ export function ChatRoot(props: ChatRootProps) {
   const [scrollVelocity, setScrollVelocity] = createSignal(0);
   const [viewHeight, setViewHeight] = createSignal(600);
   const [containerWidth, setContainerWidth] = createSignal(0);
+  // Total width (px) available inside the scroll container, BEFORE the prose
+  // column's max-width cap is applied — i.e. containerWidth's un-capped
+  // sibling. This is the upper bound the artifact lane may grow into without
+  // causing page-level horizontal overflow (see core/layout/lane.ts).
+  const [availableWidth, setAvailableWidth] = createSignal(0);
   const [contentColumnLeft, setContentColumnLeft] = createSignal(0);
 
   const updateContentColumnGeometry = () => {
@@ -368,6 +374,26 @@ export function ChatRoot(props: ChatRootProps) {
     if (probeRect.width <= 0) return;
     setContainerWidth(probeRect.width);
     setContentColumnLeft(probeRect.left - outerRect.left);
+  };
+
+  /**
+   * Resolve a unit kind's declared lane + effective row width (px).
+   *
+   * The lane declaration lives on the UnitDef (`core/units.ts#UnitDef.lane`);
+   * this is the ONLY place ChatRoot turns that declaration into a width,
+   * via the pure `resolveLane` / `computeLaneWidth` functions — no inline
+   * `unit.kind === 'diff'` branching. `rowWidth` (fed to UnitRow.measure and
+   * to the row wrapper's CSS) and the wrapper's geometry below always agree
+   * because both read from this single function.
+   */
+  const rowLaneGeometry = (kind: string): { lane: Lane; width: number } => {
+    const def = UNIT_REGISTRY[kind];
+    const lane = resolveLane(def);
+    const width = computeLaneWidth(lane, {
+      proseWidth: containerWidth(),
+      availableWidth: availableWidth(),
+    });
+    return { lane, width };
   };
 
   const updateSlotPadBottom = () => {
@@ -1213,6 +1239,7 @@ export function ChatRoot(props: ChatRootProps) {
     padBottom();
     viewHeight();
     containerWidth();
+    availableWidth();
     measureEpoch();
     expandedUserId();
     scheduler.request();
@@ -1252,7 +1279,8 @@ export function ChatRoot(props: ChatRootProps) {
       prefetchEnd = ahead;
     }
 
-    const w = containerWidth();
+    const proseW = containerWidth();
+    const availW = availableWidth();
     const t = theme();
 
     let measured = 0;
@@ -1264,9 +1292,14 @@ export function ChatRoot(props: ChatRootProps) {
       if (!unitDef) return;
       const c = u.chrome;
       const unitInsetX = c?.insetX ?? 0;
+      // Match the exact row width UnitRow will use once this unit becomes
+      // visible (see rowLaneGeometry) so the precise measure() reserved here
+      // never has to self-correct on scroll-in.
+      const lane = resolveLane(unitDef);
+      const laneW = computeLaneWidth(lane, { proseWidth: proseW, availableWidth: availW });
       const ctx: MeasureCtx = {
         theme: t,
-        width: Math.max(0, w - 2 * unitInsetX),
+        width: Math.max(0, laneW - 2 * unitInsetX),
         isCollapsed: (id: string) => viewState().isCollapsed(id),
         expanded: (id: string) => viewState().isCollapsed(id),
         caches: caches(),
@@ -1522,8 +1555,12 @@ export function ChatRoot(props: ChatRootProps) {
     onCleanup(() => snapshotInto(state()));
 
     const roHeight = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height;
-      if (h && h > 0) setViewHeight(h);
+      const rect = entries[0]?.contentRect;
+      if (!rect) return;
+      if (rect.height > 0) setViewHeight(rect.height);
+      // contentRect excludes scrollContainer's own padding (CONTENT_GUTTER),
+      // matching the un-capped flow width canvas/widthProbe would occupy.
+      if (rect.width > 0) setAvailableWidth(rect.width);
     });
     roHeight.observe(el);
     onCleanup(() => roHeight.disconnect());
@@ -1698,11 +1735,31 @@ export function ChatRoot(props: ChatRootProps) {
                           const unit = u();
                           return unit ? activeTurnItemIds().has(unit.itemId) : false;
                         };
+                        // Single seam turning the unit's declared lane into an
+                        // exact width (core/layout/lane.ts). Feeds BOTH the
+                        // wrapper's rendered geometry (below) and UnitRow's
+                        // rowWidth so measurement and paint never disagree.
+                        const geometry = () => rowLaneGeometry(u()?.kind ?? '');
+                        // Prose rows keep the existing CSS-class geometry
+                        // (left:0, width:100% of the centered content column)
+                        // untouched. Artifact rows override with an explicit
+                        // px width, centered on the SAME axis by "breaking
+                        // out" of the (still 672px-capped) canvas column —
+                        // canvas itself is horizontally centered, so `left:
+                        // calc(50% - width/2)` relative to canvas's own box
+                        // lands at the true panel midpoint regardless of
+                        // canvas's own width.
+                        const rowStyle = () => {
+                          const g = geometry();
+                          if (g.lane === 'prose') return undefined;
+                          return { width: `${g.width}px`, left: `calc(50% - ${g.width / 2}px)` };
+                        };
 
                         return (
                           <Show when={u()}>
                             <div
                               class={unitRowWrapper}
+                              style={rowStyle()}
                               ref={(el) => {
                                 rowEls.set(unitIndex, el);
                                 // Seed initial transform; commit() reconciles on each frame.
@@ -1713,11 +1770,13 @@ export function ChatRoot(props: ChatRootProps) {
                                 });
                               }}
                               data-index={String(unitIndex)}
+                              data-unit-kind={u()?.kind}
+                              data-lane={geometry().lane}
                             >
                               <UnitRow
                                 unit={u()!}
                                 index={unitIndex}
-                                rowWidth={containerWidth()}
+                                rowWidth={geometry().width}
                                 theme={theme()}
                                 viewState={viewState()}
                                 virt={virt}

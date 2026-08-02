@@ -137,6 +137,10 @@ export const diffUnitDef = defineUnit<ChatDiff, DiffVars>({
   kind: 'diff',
   margin: { top: 2, bottom: 6 },
   vars: DIFF_VARS,
+  // Diffs read poorly compressed into the prose column — declare the wider
+  // artifact lane (ticket #27). The layout resolves this to an exact width;
+  // diffUnitH/DiffUnitRender never branch on width themselves.
+  lane: 'artifact',
 
   estimate(item, ctx, vars): number {
     if (item.status === 'running' && item.newText.length === 0) return vars.headerH;
