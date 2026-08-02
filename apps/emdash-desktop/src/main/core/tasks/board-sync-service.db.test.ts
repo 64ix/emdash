@@ -344,4 +344,92 @@ describe('BoardSyncService', () => {
       expect(mocks.emit).not.toHaveBeenCalled();
     });
   });
+
+  describe('getStageAuthority — Task Detail Panel read-only fact (ticket #41)', () => {
+    it('is declarative with no holding PR for a link-less task', async () => {
+      await insertTask(fixture.db, { id: 'task-linkless', linkedIssues: null });
+
+      expect(await service.getStageAuthority('task-linkless')).toEqual({
+        holdingPr: null,
+        isCurrentStageGithubProven: false,
+      });
+    });
+
+    it('is declarative with no holding PR when no PR references the Spec', async () => {
+      await insertTask(fixture.db, { id: 'task-no-pr', linkedIssues: specLink('#300') });
+
+      expect(await service.getStageAuthority('task-no-pr')).toEqual({
+        holdingPr: null,
+        isCurrentStageGithubProven: false,
+      });
+    });
+
+    it('is github-proven, pointing at the open PR, when it references the Spec', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-open-pr',
+        workflowStage: 'implementing',
+        linkedIssues: specLink('#301'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/10`,
+        headRefName: 'feature/10',
+        status: 'open',
+        description: 'Closes #301',
+      });
+
+      expect(await service.getStageAuthority('task-open-pr')).toEqual({
+        holdingPr: {
+          url: `${REPOSITORY_URL}/pull/10`,
+          title: 'PR',
+          identifier: '#1',
+          status: 'open',
+          isDraft: false,
+        },
+        isCurrentStageGithubProven: true,
+      });
+    });
+
+    it('is github-proven, pointing at the merged PR, once the Spec-referencing PR ships', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-merged-pr',
+        workflowStage: 'review',
+        linkedIssues: specLink('#302'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/11`,
+        headRefName: 'feature/11',
+        status: 'merged',
+        description: 'Closes #302',
+      });
+
+      const authority = await service.getStageAuthority('task-merged-pr');
+      expect(authority.holdingPr?.status).toBe('merged');
+      expect(authority.isCurrentStageGithubProven).toBe(true);
+    });
+
+    it('is never github-proven while the task currently sits in triage', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-triage-authority',
+        workflowStage: 'triage',
+        linkedIssues: specLink('#303'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/12`,
+        headRefName: 'feature/12',
+        status: 'closed',
+        description: 'Closes #303',
+      });
+
+      const authority = await service.getStageAuthority('task-triage-authority');
+      expect(authority.holdingPr?.status).toBe('closed');
+      expect(authority.isCurrentStageGithubProven).toBe(false);
+    });
+
+    it('is declarative with no holding PR for a task that does not exist', async () => {
+      expect(await service.getStageAuthority('does-not-exist')).toEqual({
+        holdingPr: null,
+        isCurrentStageGithubProven: false,
+      });
+    });
+  });
 });

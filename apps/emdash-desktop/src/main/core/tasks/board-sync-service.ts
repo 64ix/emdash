@@ -8,13 +8,25 @@ import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
 import {
   derivePrStage,
+  deriveTaskStageAuthorityFact,
   findSpecMatchingPrs,
   parseIssueNumberFromIdentifier,
   type PrWorkflowFact,
 } from '@shared/core/pull-requests/pr-workflow-derivation';
 import { prSyncProgressChannel } from '@shared/core/pull-requests/prEvents';
-import type { WorkflowStage } from '@shared/core/tasks/tasks';
+import type { PullRequestStatus } from '@shared/core/pull-requests/pull-requests';
+import type { TaskStageAuthority, WorkflowStage } from '@shared/core/tasks/tasks';
 import { writeTaskWorkflowStage } from './task-fact-writes';
+
+/** A PR fact carrying the extra display fields the Task Detail Panel's stage
+ * authority section needs (CONTEXT.md "Workflow Stage") — same matching shape
+ * as `PrWorkflowFact`, extended for display rather than re-queried elsewhere. */
+type StageAuthorityPrFact = PrWorkflowFact & {
+  url: string;
+  title: string;
+  identifier: string | null;
+  isDraft: boolean;
+};
 
 type SpecLinkedTaskRow = {
   id: string;
@@ -172,6 +184,62 @@ export class BoardSyncService implements IInitializable, IDisposable {
     await writeTaskWorkflowStage(row.id, nextStage);
   }
 
+  /**
+   * Read-only stage authority fact for the Task Detail Panel (ticket #41,
+   * CONTEXT.md "Workflow Stage"): the PR that proves — or would prove, once the
+   * next `syncProject` pass catches up — the task's Workflow Stage through its
+   * Spec Linked Issue Role, and whether that fact currently governs the
+   * *persisted* stage. Reuses the exact same matching and precedence rules
+   * `syncProject`/`applyProvisionedStage` use, so the panel never derives a
+   * second, divergeable answer.
+   */
+  async getStageAuthority(taskId: string): Promise<TaskStageAuthority> {
+    const none: TaskStageAuthority = { holdingPr: null, isCurrentStageGithubProven: false };
+
+    const [row] = await db
+      .select({
+        projectId: tasks.projectId,
+        workflowStage: tasks.workflowStage,
+        linkedIssues: tasks.linkedIssues,
+        workspaceId: tasks.workspaceId,
+      })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))
+      .limit(1);
+    if (!row) return none;
+
+    const specIssueNumber = parseIssueNumberFromIdentifier(row.linkedIssues?.spec?.identifier);
+    if (specIssueNumber == null) return none; // link-less tasks have no PR authority to prove
+
+    const repositoryUrls = await this._repositoryUrlsForProject(row.projectId);
+    if (repositoryUrls.length === 0) return none;
+
+    const taskBranch = row.workspaceId
+      ? (await this._branchNamesByWorkspaceId([row.workspaceId])).get(row.workspaceId)
+      : undefined;
+    const prFacts = await this._stageAuthorityPrFacts(repositoryUrls);
+
+    const { holdingPr, isCurrentStageGithubProven } = deriveTaskStageAuthorityFact({
+      currentStage: (row.workflowStage as WorkflowStage | null) ?? null,
+      specIssueNumber,
+      taskBranch,
+      prFacts,
+    });
+
+    return {
+      holdingPr: holdingPr
+        ? {
+            url: holdingPr.url,
+            title: holdingPr.title,
+            identifier: holdingPr.identifier,
+            status: holdingPr.status,
+            isDraft: holdingPr.isDraft,
+          }
+        : null,
+      isCurrentStageGithubProven,
+    };
+  }
+
   private async _repositoryUrlsForProject(projectId: string): Promise<string[]> {
     const rows = await db
       .select({ remoteUrl: projectRemotes.remoteUrl })
@@ -237,6 +305,35 @@ export class BoardSyncService implements IInitializable, IDisposable {
     return rows.map((row) => ({
       headRefName: row.headRefName,
       status: row.status as PrWorkflowFact['status'],
+      description: row.description ?? null,
+    }));
+  }
+
+  /** Same rows as `_prFactsForRepositories`, extended with the display fields
+   * `getStageAuthority` needs to point the panel at the holding PR. */
+  private async _stageAuthorityPrFacts(repositoryUrls: string[]): Promise<StageAuthorityPrFact[]> {
+    if (repositoryUrls.length === 0) return [];
+
+    const rows = await db
+      .select({
+        url: pullRequests.url,
+        title: pullRequests.title,
+        identifier: pullRequests.identifier,
+        isDraft: pullRequests.isDraft,
+        headRefName: pullRequests.headRefName,
+        status: pullRequests.status,
+        description: pullRequests.description,
+      })
+      .from(pullRequests)
+      .where(pullRequestRepositoryScope(repositoryUrls));
+
+    return rows.map((row) => ({
+      url: row.url,
+      title: row.title,
+      identifier: row.identifier ?? null,
+      isDraft: Boolean(row.isDraft),
+      headRefName: row.headRefName,
+      status: row.status as PullRequestStatus,
       description: row.description ?? null,
     }));
   }

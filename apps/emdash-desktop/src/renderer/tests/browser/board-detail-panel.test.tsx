@@ -1,20 +1,24 @@
-import { page } from '@vitest/browser/context';
 /**
- * Browser-mode tests for the Task Detail Panel shell (CONTEXT.md, ticket #40):
- * open, switch, close, highlight, drag-with-panel-open, and disappearance.
+ * Browser-mode tests for the Task Detail Panel: the shell's gestures
+ * (CONTEXT.md, ticket #40 — open, switch, close, highlight, drag-with-panel-
+ * open, disappearance) and its content (ticket #41 — vitals, typed links,
+ * derived PR, stage authority). Panel *actions* (rename, pin, archive, the
+ * hover arrow, "Open task", ghost mode — ticket #42) are out of scope here.
  *
  * Mounts the real BoardMainPanel in Chromium (real layout, real
  * getBoundingClientRect) with mocked stores and genuine PointerEvent/click
  * dispatch, following the pattern established by the board drag-and-drop
- * browser tests (`board-dnd.test.tsx`). Panel *content* (vitals, typed links,
- * derived PR, stage authority — ticket #41) and *actions* (rename, pin,
- * archive, the hover arrow, "Open task", ghost mode — ticket #42) are out of
- * scope here; only the shell's gestures are exercised.
+ * browser tests (`board-dnd.test.tsx`) — including mocking `@renderer/lib/ipc`
+ * directly rather than the generic `electronAPI.invoke` stub, so
+ * `tasks.getTaskStageAuthority` can return a distinct fixture per test.
  */
 import { observable, runInAction } from 'mobx';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
+import type { LinkedIssueRoles } from '@shared/core/linked-issue';
+import type { StageHoldingPr, TaskStageAuthority } from '@shared/core/tasks/tasks';
 
 // ── Store mocks (mirrors board-dnd.test.tsx) ───────────────────────────────
 
@@ -24,15 +28,36 @@ type MockStore = {
     name: string;
     status: string;
     type: string;
+    createdAt?: string;
     workflowStage?: string;
     boardRank?: string;
     archivedAt?: string;
+    linkedIssues?: LinkedIssueRoles;
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
 };
 
 const managerTasks = new Map<string, MockStore>();
+/** Branch names by task id, read by the mocked `getTaskGitWorktreeStore` selector. */
+const branchByTaskId = new Map<string, string>();
+
+const DECLARATIVE_AUTHORITY: TaskStageAuthority = {
+  holdingPr: null,
+  isCurrentStageGithubProven: false,
+};
+
+// `vi.mock` factories are hoisted above all other top-level statements, so a
+// mock a factory below needs to reference must itself be declared through
+// `vi.hoisted` — a plain `const` here would still be in its temporal dead
+// zone when the factory runs (mirrors the `mocks` pattern in
+// board-sync-service.db.test.ts). Overridden per test via
+// `.mockResolvedValueOnce` / `.mockImplementation`.
+const mocks = vi.hoisted(() => ({
+  getTaskStageAuthority: vi.fn(() =>
+    Promise.resolve<TaskStageAuthority>({ holdingPr: null, isCurrentStageGithubProven: false })
+  ),
+}));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
   useParams: () => ({ params: { projectId: 'p1' } }),
@@ -48,6 +73,10 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   getTaskManagerStore: () => ({ tasks: managerTasks }),
   taskAgentStatus: () => 'idle',
   getTaskStore: (_projectId: string, taskId: string) => managerTasks.get(taskId),
+  getTaskGitWorktreeStore: (_projectId: string, taskId: string) => {
+    const branchName = branchByTaskId.get(taskId);
+    return branchName ? { branchName } : undefined;
+  },
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
@@ -58,22 +87,43 @@ vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
   AgentStatusIndicator: () => null,
 }));
 
-// BoardMainPanel (via TaskDetailPanel) transitively imports `rpc` from
-// `@renderer/lib/ipc`, which reads `window.electronAPI` at module-eval time —
-// present in the real Electron renderer, absent in this plain-Chromium
-// browser-mode test. Stub it before dynamically importing BoardMainPanel: a
-// static import would already have evaluated ipc.ts before any in-file
-// statement could stub it.
-vi.stubGlobal('electronAPI', {
-  invoke: vi.fn(() => Promise.resolve([])),
-  eventSend: vi.fn(),
-  eventOn: () => () => {},
-});
-const { BoardMainPanel } = await import('@renderer/features/board/board-main-panel');
+// BoardMainPanel pulls in BoardLinkSuggestions and GhostCards (real rpc calls
+// on mount) plus TaskDetailPanel's own `tasks.getTaskStageAuthority` and
+// `app.openExternal` calls — stub the whole `rpc` surface directly rather
+// than relying on the generic `electronAPI.invoke` stub (board-dnd.test.tsx's
+// pattern), so this file can hand back distinct stage-authority fixtures.
+vi.mock('@renderer/lib/ipc', () => ({
+  rpc: {
+    issues: {
+      getLinkSuggestions: vi.fn(() => Promise.resolve([])),
+      getGhostCards: vi.fn(() => Promise.resolve([])),
+      syncIssuesNow: vi.fn(() => Promise.resolve()),
+    },
+    tasks: {
+      syncBoardStages: vi.fn(() => Promise.resolve()),
+      getTaskStageAuthority: mocks.getTaskStageAuthority,
+    },
+    app: {
+      openExternal: vi.fn(() => Promise.resolve()),
+    },
+  },
+  events: {
+    on: vi.fn(() => () => {}),
+  },
+}));
+
+import { BoardMainPanel } from '@renderer/features/board/board-main-panel';
 
 function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): MockStore {
   return {
-    data: { id, name: id, status: 'active', type: 'task', ...overrides },
+    data: {
+      id,
+      name: id,
+      status: 'active',
+      type: 'task',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    },
     conversationStats: {},
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
   };
@@ -81,7 +131,14 @@ function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): Mock
 
 /** A store whose `data` is a mobx observable, so mutating it re-renders BoardMainPanel. */
 function makeLiveStore(id: string, overrides: Partial<MockStore['data']> = {}) {
-  const data = observable({ id, name: id, status: 'active', type: 'task', ...overrides });
+  const data = observable({
+    id,
+    name: id,
+    status: 'active',
+    type: 'task',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  });
   return {
     data,
     conversationStats: {},
@@ -180,6 +237,11 @@ function setupDom() {
     document.body.appendChild(host);
     root = createRoot(host);
     await page.viewport(1280, 800);
+    // `vi.clearAllMocks()` (afterEach, below) clears call history but not a
+    // mock's implementation — reset the default here so a prior test's
+    // `.mockResolvedValue` override (a persistent one, unlike `...Once`) can
+    // never leak into the next test.
+    mocks.getTaskStageAuthority.mockImplementation(() => Promise.resolve(DECLARATIVE_AUTHORITY));
   });
 
   afterEach(() => {
@@ -187,6 +249,7 @@ function setupDom() {
     host.remove();
     style.remove();
     managerTasks.clear();
+    branchByTaskId.clear();
     vi.clearAllMocks();
   });
 }
@@ -219,6 +282,32 @@ function closeButton(): HTMLElement {
   return Array.from(host.querySelectorAll('button')).find(
     (b) => b.getAttribute('aria-label') === 'Close task details'
   ) as HTMLElement;
+}
+
+/** The open panel's full text content — used for simple presence/absence assertions. */
+function panelText(): string {
+  return host.querySelector('h2')?.parentElement?.parentElement?.textContent ?? '';
+}
+
+function panelSection(id: string): Element | null {
+  return host.querySelector(`[data-panel-section="${id}"]`);
+}
+
+function stageSelect(): HTMLSelectElement {
+  return host.querySelector('select[aria-label="Workflow stage"]') as HTMLSelectElement;
+}
+
+/** Simulates picking `value` from the stage `<select>` — a real DOM `change` event. */
+function selectStage(value: string) {
+  const select = stageSelect();
+  select.value = value;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function linkedIssueRoles(): string[] {
+  return Array.from(host.querySelectorAll('[data-linked-issue-role]')).map(
+    (el) => el.getAttribute('data-linked-issue-role') ?? ''
+  );
 }
 
 describe('Task Detail Panel — open, switch, close', () => {
@@ -391,5 +480,154 @@ describe('Task Detail Panel — leaving and returning to the board', () => {
     await mount();
 
     expect(panelHeading()).toBeNull();
+  });
+});
+
+describe('Task Detail Panel — vitals (ticket #41)', () => {
+  setupDom();
+
+  it('shows "Not provisioned yet" for a task with no branch yet', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).toContain('Not provisioned yet');
+  });
+
+  it('shows the branch name once the task has been provisioned', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    branchByTaskId.set('card-a', 'task/my-branch');
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).toContain('task/my-branch');
+    expect(panelText()).not.toContain('Not provisioned yet');
+  });
+
+  it('shows the total session count across providers', async () => {
+    const a = makeStore('card-a');
+    a.conversationStats = { claude: 2, codex: 1 };
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).toContain('3 sessions');
+  });
+});
+
+describe('Task Detail Panel — typed links (ticket #41)', () => {
+  setupDom();
+
+  it('lists Origin and Spec, omitting the unset Map role, in Origin-Map-Spec order', async () => {
+    const linkedIssues: LinkedIssueRoles = {
+      version: '1',
+      origin: {
+        provider: 'github',
+        url: 'https://github.com/acme/repo/issues/1',
+        title: 'Origin issue',
+        identifier: '#1',
+      },
+      spec: {
+        provider: 'github',
+        url: 'https://github.com/acme/repo/issues/3',
+        title: 'Spec issue',
+        identifier: '#3',
+      },
+    };
+    const a = makeStore('card-a', { linkedIssues });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(linkedIssueRoles()).toEqual(['origin', 'spec']);
+    expect(panelText()).toContain('Origin issue');
+    expect(panelText()).toContain('Spec issue');
+  });
+
+  it('renders no Linked issues section for a purely local task with no links', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelSection('linked-issues')).toBeNull();
+  });
+});
+
+describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)', () => {
+  setupDom();
+
+  it('renders no Pull request section when nothing references the Spec', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(panelSection('pull-request')).toBeNull();
+  });
+
+  it('shows the Spec-derived PR, disables the stage selector, and names the holding fact', async () => {
+    const pr: StageHoldingPr = {
+      url: 'https://github.com/acme/repo/pull/9',
+      title: 'Ship the feature',
+      identifier: '#9',
+      status: 'open',
+      isDraft: false,
+    };
+    mocks.getTaskStageAuthority.mockResolvedValueOnce({
+      holdingPr: pr,
+      isCurrentStageGithubProven: true,
+    });
+    const a = makeStore('card-a', { workflowStage: 'review' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(panelSection('pull-request')).not.toBeNull();
+    expect(panelText()).toContain('Ship the feature');
+    expect(stageSelect().disabled).toBe(true);
+    expect(panelText()).toContain('#9');
+  });
+
+  it('offers only the declarative stages, and applies a stage change, when the stage is declarative', async () => {
+    const a = makeStore('card-a', { workflowStage: 'idea' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    const select = stageSelect();
+    expect(select.disabled).toBe(false);
+    expect(Array.from(select.options).map((option) => option.value)).toEqual([
+      '',
+      'idea',
+      'implementing',
+      'triage',
+    ]);
+
+    selectStage('implementing');
+    await settle();
+
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('implementing', null);
   });
 });

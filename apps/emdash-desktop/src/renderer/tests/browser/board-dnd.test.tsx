@@ -56,8 +56,9 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   taskAgentStatus: () => 'idle',
   // Statically imported by task-detail-panel.tsx even though these
   // drag-and-drop tests never click a card (drag suppresses the click, so
-  // the panel never opens) — the mock still needs to shadow the real export.
+  // the panel never opens) — the mock still needs to shadow the real exports.
   getTaskStore: (_projectId: string, taskId: string) => managerTasks.get(taskId),
+  getTaskGitWorktreeStore: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
