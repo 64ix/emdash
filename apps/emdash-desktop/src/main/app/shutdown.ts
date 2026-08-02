@@ -4,10 +4,12 @@ import { disposeAcpRuntimeProcess } from '@main/core/acp/controller';
 import { disposeAgentConfigRuntimeProcess } from '@main/core/agent-config/controller';
 import { agentHookService } from '@main/core/agent-hooks/agent-hook-service';
 import { automationsService } from '@main/core/automations/automations-service';
+import { issuesSyncScheduler } from '@main/core/issues/inbound-sync/issues-sync-scheduler';
 import { remoteTmuxReaperService } from '@main/core/pty/remote-tmux-reaper-service';
 import { prSyncScheduler } from '@main/core/pull-requests/pr-sync-scheduler';
 import { stopResourceSampler } from '@main/core/resource-monitor/resource-sampler';
 import { runtimeManager } from '@main/core/runtime/runtime-manager';
+import { boardSyncService } from '@main/core/tasks/board-sync-service';
 import { updateService } from '@main/core/updates/update-service';
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
@@ -47,6 +49,8 @@ export async function runQuitCleanup(): Promise<void> {
   stopResourceSampler();
   updateService.dispose();
   prSyncScheduler.dispose();
+  boardSyncService.dispose();
+  issuesSyncScheduler.dispose();
   remoteTmuxReaperService.dispose();
 
   // critical phase

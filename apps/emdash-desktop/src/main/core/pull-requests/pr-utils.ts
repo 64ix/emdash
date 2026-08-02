@@ -96,6 +96,7 @@ export function assemblePullRequest(
     reviewDecision: row.reviewDecision ?? null,
     createdAt: row.pullRequestCreatedAt,
     updatedAt: row.pullRequestUpdatedAt,
+    mergedAt: row.mergedAt ?? null,
     author: author ? dbRowToUserRow(author) : null,
     labels: labels.map((l) => ({ name: l.name, color: l.color ?? null }) satisfies Label),
     assignees: assignees.map(dbRowToUserRow),

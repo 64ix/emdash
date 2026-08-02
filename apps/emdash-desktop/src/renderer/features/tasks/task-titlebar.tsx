@@ -43,7 +43,14 @@ import { ToggleGroup, ToggleGroupItem } from '@renderer/lib/ui/toggle-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/tooltip';
 import { formatDiffLineCount } from '@renderer/utils/format-diff-line-count';
 import { cn } from '@renderer/utils/utils';
-import { linkedIssueDisplayIdentifier, type LinkedIssue } from '@shared/core/linked-issue';
+import {
+  linkedIssueDisplayIdentifier,
+  linkedIssueRoleLabels,
+  linkedIssueRoleSchema,
+  mostAdvancedLinkedIssue,
+  type LinkedIssue,
+  type LinkedIssueRole,
+} from '@shared/core/linked-issue';
 import { AutomationRunPill } from './components/automation-run-pill';
 import { IssueSelector, ProviderLogo } from './components/issue-selector/issue-selector';
 import { PreviewServerPills } from './components/preview-servers/preview-server-pills';
@@ -133,6 +140,7 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
   if (!taskStore || !taskPayload) return null;
 
   const isRemoteProject = projectStore?.data.type === 'ssh';
+  const mostAdvancedLink = mostAdvancedLinkedIssue(taskPayload.linkedIssues);
   return (
     <Titlebar
       leftSlot={
@@ -272,19 +280,25 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
                   )}
                 </div>
               </div>
-              <IssueSelector
-                value={taskPayload.linkedIssue ?? null}
-                onValueChange={(issue) => {
-                  void taskStore.updateLinkedIssue(issue ?? undefined);
-                }}
-                projectId={projectId}
-                repositoryUrl={workspace.gitRepository.canonicalRepositoryUrl ?? ''}
-                projectPath={workspace.path}
-                excludeTaskId={taskId}
-              />
+              <div className="flex w-full flex-col gap-2">
+                {linkedIssueRoleSchema.options.map((role) => (
+                  <LinkedIssueRoleField
+                    key={role}
+                    role={role}
+                    value={taskPayload.linkedIssues?.[role] ?? null}
+                    onValueChange={(issue) => {
+                      void taskStore.updateLinkedIssueRole(role, issue);
+                    }}
+                    projectId={projectId}
+                    repositoryUrl={workspace.gitRepository.canonicalRepositoryUrl ?? ''}
+                    projectPath={workspace.path}
+                    excludeTaskId={taskId}
+                  />
+                ))}
+              </div>
             </PopoverContent>
           </Popover>
-          {taskPayload.linkedIssue ? <LinkedIssueBadge issue={taskPayload.linkedIssue} /> : null}
+          {mostAdvancedLink ? <LinkedIssueBadge issue={mostAdvancedLink.issue} /> : null}
           {taskPayload.type === 'task' && (
             <button
               className={cn(
@@ -414,6 +428,40 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
     />
   );
 });
+
+function LinkedIssueRoleField({
+  role,
+  value,
+  onValueChange,
+  projectId,
+  repositoryUrl,
+  projectPath,
+  excludeTaskId,
+}: {
+  role: LinkedIssueRole;
+  value: LinkedIssue | null;
+  onValueChange: (issue: LinkedIssue | null) => void;
+  projectId: string;
+  repositoryUrl: string;
+  projectPath: string;
+  excludeTaskId: string;
+}) {
+  return (
+    <div className="flex w-full flex-col gap-1">
+      <MicroLabel className="flex items-center text-foreground-passive">
+        {linkedIssueRoleLabels[role]}
+      </MicroLabel>
+      <IssueSelector
+        value={value}
+        onValueChange={onValueChange}
+        projectId={projectId}
+        repositoryUrl={repositoryUrl}
+        projectPath={projectPath}
+        excludeTaskId={excludeTaskId}
+      />
+    </div>
+  );
+}
 
 function LinkedIssueBadge({ issue }: { issue: LinkedIssue }) {
   const displayIdentifier = linkedIssueDisplayIdentifier(issue);

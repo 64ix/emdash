@@ -155,6 +155,20 @@
       "when": 1785502263622,
       "tag": "0021_wooden_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1785528592159,
+      "tag": "0022_pink_norrin_radd",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1785528778310,
+      "tag": "0023_workflow_stage_migration",
+      "breakpoints": true
     }
   ]
 }

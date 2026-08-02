@@ -29,6 +29,7 @@ import { localDependencyManager } from './core/dependencies/dependency-managers'
 import { editorBufferService } from './core/editor/editor-buffer-service';
 import { githubAccountReconciliationService } from './core/github/accounts/github-account-reconciliation-instance';
 import { GitHubAuthServerAdapter } from './core/github/accounts/github-auth-server-adapter';
+import { issuesSyncScheduler } from './core/issues/inbound-sync/issues-sync-scheduler';
 import { projectSettingsService } from './core/projects/settings/project-settings-service';
 import { promptLibraryService } from './core/prompt-library/service';
 import { providerAccountRegistry } from './core/provider-accounts/provider-account-registry-instance';
@@ -38,6 +39,7 @@ import { reconcileResourceSampler } from './core/resource-monitor/resource-sampl
 import { searchService } from './core/search/search-service';
 import { workspaceFileIndexService } from './core/search/workspace-file-index-service';
 import { appSettingsService } from './core/settings/settings-service';
+import { boardSyncService } from './core/tasks/board-sync-service';
 import { updateService } from './core/updates/update-service';
 import { viewStateService } from './core/view-state/view-state-service';
 import { initializeDatabase } from './db/initialize';
@@ -145,6 +147,8 @@ void app.whenReady().then(async () => {
 
   projectSettingsService.initialize();
   prSyncScheduler.initialize();
+  boardSyncService.initialize();
+  issuesSyncScheduler.initialize();
   remoteTmuxReaperService.initialize();
   automationsService.start();
   appService.initialize();

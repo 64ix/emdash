@@ -4,6 +4,7 @@ import { conversations, projects, tasks, workspaces } from '@main/db/schema';
 import { log } from '@main/lib/logger';
 import { ALL_COMMAND_DEFS } from '@shared/commands';
 import type { Conversation } from '@shared/core/conversations/conversations';
+import { linkedIssueRoleSchema, type LinkedIssue } from '@shared/core/linked-issue';
 import type {
   CommandPaletteQuery,
   SearchItem,
@@ -212,9 +213,11 @@ class SearchService {
   }
 
   private upsertTask(task: Task, branchName?: string): void {
-    const keywords = [branchName, task.linkedIssue?.identifier, task.linkedIssue?.title]
-      .filter(Boolean)
-      .join(' ');
+    const linkedIssueKeywords = linkedIssueRoleSchema.options
+      .map((role) => task.linkedIssues?.[role])
+      .filter((issue): issue is LinkedIssue => Boolean(issue))
+      .flatMap((issue) => [issue.identifier, issue.title]);
+    const keywords = [branchName, ...linkedIssueKeywords].filter(Boolean).join(' ');
 
     try {
       sqlite

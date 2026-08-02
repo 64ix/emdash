@@ -149,12 +149,12 @@ async function drag(from: Element, toX: number, toY: number, hoverFrames = 4) {
 
 const STAGE_LABELS: Record<string, string> = {
   idea: 'Idea',
-  grilled: 'Grilled',
+  exploring: 'Exploring',
   spec: 'Spec',
-  tickets: 'Tickets',
   implementing: 'Implementing',
-  pr: 'PR',
+  review: 'Review',
   shipped: 'Shipped',
+  triage: 'Triage',
 };
 
 let host: HTMLDivElement;
@@ -248,7 +248,7 @@ describe('board drag-and-drop — narrow viewport (autoscroll regressions)', () 
   it('dropping on a fully visible column near the right edge stays on that column', async () => {
     // "Idea" is fully visible but sits inside what used to be the default 20%
     // autoscroll band: before the fix the board scrolled under the pointer
-    // mid-hover and the drop landed on "grilled".
+    // mid-hover and the drop landed on the next column over.
     const a = makeStore('card-a');
     const b = makeStore('card-b');
     managerTasks.set(a.data.id, a);
@@ -275,15 +275,15 @@ describe('board drag-and-drop — narrow viewport (autoscroll regressions)', () 
     scroller.scrollLeft = 472;
     await settle();
 
-    // Grilled's live centre now sits in the middle-left of the viewport,
+    // Exploring's live centre now sits in the middle-left of the viewport,
     // outside any autoscroll activation zone.
-    const target = center(columnZone('Grilled'));
+    const target = center(columnZone('Exploring'));
     expect(target.x).toBeGreaterThan(0);
     expect(target.x).toBeLessThan(window.innerWidth / 2);
     await drag(cardEl('card-a'), target.x, target.y);
 
     expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
-    expect(a.updateBoardPosition).toHaveBeenCalledWith('grilled', expect.any(String));
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('exploring', expect.any(String));
   });
 });
 
@@ -383,15 +383,15 @@ describe('board drag-and-drop — hitbox: column with a populated neighbour', ()
     managerTasks.set(x.data.id, x);
     await mount();
 
-    // Aim at the top card slot of the (empty) grilled column: same height as
-    // the neighbouring card in idea, clearly inside grilled's zone.
-    const zone = columnZone('Grilled');
+    // Aim at the top card slot of the (empty) exploring column: same height as
+    // the neighbouring card in idea, clearly inside exploring's zone.
+    const zone = columnZone('Exploring');
     const zoneRect = zone.getBoundingClientRect();
     const neighbourY = center(cardEl('card-x')).y;
     await drag(cardEl('card-a'), zoneRect.left + zoneRect.width / 2, neighbourY);
 
     expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
-    expect(a.updateBoardPosition).toHaveBeenCalledWith('grilled', expect.any(String));
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('exploring', expect.any(String));
   });
 
   it('dropping near the top of an empty column whose RIGHT neighbour has a card lands in the hovered column', async () => {
@@ -401,13 +401,13 @@ describe('board drag-and-drop — hitbox: column with a populated neighbour', ()
     managerTasks.set(x.data.id, x);
     await mount();
 
-    const zone = columnZone('Grilled');
+    const zone = columnZone('Exploring');
     const zoneRect = zone.getBoundingClientRect();
     const neighbourY = center(cardEl('card-x')).y;
     await drag(cardEl('card-a'), zoneRect.left + zoneRect.width / 2, neighbourY);
 
     expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
-    expect(a.updateBoardPosition).toHaveBeenCalledWith('grilled', expect.any(String));
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('exploring', expect.any(String));
   });
 });
 

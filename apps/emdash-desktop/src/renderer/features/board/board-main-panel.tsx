@@ -22,7 +22,10 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { isTaskShippedFaded, STAGE_LABELS } from '@renderer/features/board/board-columns';
+import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
+import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
 import {
   getProjectStore,
   projectDisplayName,
@@ -33,9 +36,18 @@ import {
 } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
+import { rpc } from '@renderer/lib/ipc';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { cn } from '@renderer/utils/utils';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
+import {
+  linkedIssueDisplayIdentifier,
+  linkedIssueRoleLabels,
+  mostAdvancedLinkedIssue,
+  type LinkedIssue,
+  type LinkedIssueRole,
+} from '@shared/core/linked-issue';
 import {
   COLUMNS,
   computeDropPosition,
@@ -45,16 +57,12 @@ import {
   type ColumnId,
 } from './board-ordering';
 
-const STAGE_LABELS: Record<ColumnId, string> = {
-  unstaged: 'Unstaged',
-  idea: 'Idea',
-  grilled: 'Grilled',
-  spec: 'Spec',
-  tickets: 'Tickets',
-  implementing: 'Implementing',
-  pr: 'PR',
-  shipped: 'Shipped',
-};
+/** "Spec #123" (or just "Spec" when the issue has no identifier) for the most-advanced-link badge. */
+function linkedIssueBadgeText(link: { role: LinkedIssueRole; issue: LinkedIssue }): string {
+  const label = linkedIssueRoleLabels[link.role];
+  const identifier = linkedIssueDisplayIdentifier(link.issue);
+  return identifier ? `${label} ${identifier}` : label;
+}
 
 /** dnd-kit id for a column's empty-space drop target (distinct from card ids). */
 const COLUMN_DROP_PREFIX = 'column-drop::';
@@ -89,6 +97,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   } = useParams('board');
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
+  const { ghostCards, adopt: adoptGhostCard, reject: rejectGhostCard } = useGhostCards(projectId);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   // While dragging over a foreign column, the active card is moved into that
   // column's list (display only) so its SortableContext owns it: the ghost
@@ -96,6 +105,15 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // they do within one. Persistence still derives from store data at drop.
   const [dragPreview, setDragPreview] = useState<{ column: ColumnId; index: number } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  // Board open triggers an immediate derivation pass (PR facts + inbound issues);
+  // background derivation otherwise follows the existing sync cadences
+  // (see board-sync-service.ts and issues-sync-scheduler.ts). Best-effort —
+  // failures are logged main-side.
+  useEffect(() => {
+    void rpc.tasks.syncBoardStages(projectId);
+    void rpc.issues.syncIssuesNow(projectId);
+  }, [projectId]);
 
   if (!manager) {
     return (
@@ -110,6 +128,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   for (const [, store] of manager.tasks) {
     const task = registeredTaskData(store);
     if (!task || task.archivedAt || task.type !== 'task') continue;
+    if (isTaskShippedFaded(task)) continue; // Shipped Fade: hidden from the board, stage intact
     storeById.set(task.id, store);
     rawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
   }
@@ -326,6 +345,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
         <h1 className="text-sm font-medium">Feature board</h1>
         <span className="text-xs text-foreground-muted">{projectName}</span>
       </div>
+      <BoardLinkSuggestions projectId={projectId} />
       <DndContext
         sensors={sensors}
         collisionDetection={columnAwareCollision}
@@ -349,6 +369,11 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
               entries={displayByColumn.get(column) ?? []}
               storeById={storeById}
               projectId={projectId}
+              // Ghost Cards (ticket #9) are not tasks and never sort/drag —
+              // they only ever live in the `idea` column, after real cards.
+              ghostCards={column === 'idea' ? ghostCards : undefined}
+              onAdoptGhostCard={adoptGhostCard}
+              onRejectGhostCard={rejectGhostCard}
             />
           ))}
         </div>
@@ -365,12 +390,19 @@ const BoardColumn = observer(function BoardColumn({
   entries,
   storeById,
   projectId,
+  ghostCards,
+  onAdoptGhostCard,
+  onRejectGhostCard,
 }: {
   column: ColumnId;
   entries: CardEntry[];
   storeById: Map<string, TaskStore>;
   projectId: string;
+  ghostCards?: GhostCard[];
+  onAdoptGhostCard: (ghostCard: GhostCard) => void;
+  onRejectGhostCard: (ghostCard: GhostCard) => void;
 }) {
+  const cardCount = entries.length + (ghostCards?.length ?? 0);
   const { setNodeRef, isOver } = useDroppable({ id: columnDropId(column) });
   // Keep the ids array referentially stable while its contents are unchanged:
   // useDroppable re-renders this column on every drag movement, and a fresh
@@ -384,7 +416,7 @@ const BoardColumn = observer(function BoardColumn({
     <div className="flex w-56 shrink-0 flex-col rounded-lg border border-border bg-background-2/40">
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-medium text-foreground-muted">{STAGE_LABELS[column]}</span>
-        <Badge variant="secondary">{entries.length}</Badge>
+        <Badge variant="secondary">{cardCount}</Badge>
       </div>
       <SortableContext items={cardIds} strategy={verticalListSortingStrategy}>
         <div
@@ -399,6 +431,15 @@ const BoardColumn = observer(function BoardColumn({
             if (!store) return null;
             return <BoardCard key={entry.id} store={store} projectId={projectId} />;
           })}
+          {/* Ghost Cards are not tasks: rendered after the sortable cards, never draggable. */}
+          {ghostCards?.map((ghostCard) => (
+            <GhostCardView
+              key={ghostCard.id}
+              ghostCard={ghostCard}
+              onAdopt={() => onAdoptGhostCard(ghostCard)}
+              onReject={() => onRejectGhostCard(ghostCard)}
+            />
+          ))}
         </div>
       </SortableContext>
     </div>
@@ -421,6 +462,7 @@ const BoardCard = observer(function BoardCard({
   if (!task) return null;
 
   const sessionCount = Object.values(store.conversationStats).reduce((a, b) => a + b, 0);
+  const linkedIssue = mostAdvancedLinkedIssue(task.linkedIssues);
   const agentStatus = taskAgentStatus(store);
 
   const style = {
@@ -445,6 +487,11 @@ const BoardCard = observer(function BoardCard({
       </button>
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
+          {linkedIssue && (
+            <Badge variant="outline" title={linkedIssue.issue.title}>
+              {linkedIssueBadgeText(linkedIssue)}
+            </Badge>
+          )}
           {sessionCount > 0 && (
             <span className="flex items-center gap-0.5 text-[10px] text-foreground-muted">
               <MessageSquare className="size-3" />

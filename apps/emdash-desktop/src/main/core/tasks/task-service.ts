@@ -11,7 +11,7 @@ import { tasks, workspaces } from '@main/db/schema';
 import { events } from '@main/lib/events';
 import { HookCore, type Hookable } from '@main/lib/hookable';
 import { log } from '@main/lib/logger';
-import type { LinkedIssue } from '@shared/core/linked-issue';
+import type { LinkedIssue, LinkedIssueRole } from '@shared/core/linked-issue';
 import {
   taskCreatedChannel,
   taskDeletedChannel,
@@ -28,6 +28,7 @@ import type {
   RenameTaskSuccess,
   Task,
 } from '@shared/core/tasks/tasks';
+import { boardSyncService } from './board-sync-service';
 import { archiveTask } from './operations/archiveTask';
 import { createTask } from './operations/createTask';
 import { deleteTask } from './operations/deleteTask';
@@ -36,10 +37,10 @@ import { getTasks } from './operations/getTasks';
 import { renameTask } from './operations/renameTask';
 import { restoreTask } from './operations/restoreTask';
 import { setTaskPinned } from './operations/setTaskPinned';
-import { updateLinkedIssue } from './operations/updateLinkedIssue';
 import { updateTaskBoardPosition } from './operations/updateTaskBoardPosition';
 import { updateTaskStatus } from './operations/updateTaskStatus';
 import type { TeardownTaskError } from './provision-task-error';
+import { writeLinkedIssueRole } from './task-fact-writes';
 import { taskSessionManager } from './task-session-manager';
 import { mapTaskRowToTask } from './utils/utils';
 
@@ -219,8 +220,12 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
     return result;
   }
 
-  async updateLinkedIssue(taskId: string, issue?: LinkedIssue): Promise<void> {
-    const task = await updateLinkedIssue(taskId, issue);
+  async updateLinkedIssueRole(
+    taskId: string,
+    role: LinkedIssueRole,
+    issue: LinkedIssue | null
+  ): Promise<void> {
+    const task = await writeLinkedIssueRole(taskId, role, issue);
     if (task) this._hooks.callHookBackground('task:updated', task);
   }
 
@@ -235,6 +240,11 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
     const task: Task = { ...mapTaskRowToTask(row), prs: [], conversations: {} };
     this._hooks.callHookBackground('task:updated', task);
     return task;
+  }
+
+  /** Feature Board open trigger: an immediate PR-facts derivation pass for the project. */
+  async syncBoardStages(projectId: string): Promise<void> {
+    await boardSyncService.syncProject(projectId);
   }
 
   // Operations with no hook — thin pass-throughs

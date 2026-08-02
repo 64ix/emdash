@@ -71,7 +71,7 @@ vi.mock('@renderer/lib/ipc', () => ({
       updateTaskStatus: vi.fn(),
       updateTaskBoardPosition: vi.fn(),
       setTaskPinned: vi.fn(),
-      updateLinkedIssue: vi.fn(),
+      updateLinkedIssueRole: vi.fn(),
       convertAutomationTask: vi.fn(),
     },
   },

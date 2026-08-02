@@ -14,12 +14,12 @@ describe('COLUMNS', () => {
     expect(COLUMNS).toEqual([
       'unstaged',
       'idea',
-      'grilled',
+      'exploring',
       'spec',
-      'tickets',
       'implementing',
-      'pr',
+      'review',
       'shipped',
+      'triage',
     ]);
   });
 });

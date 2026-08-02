@@ -36,6 +36,7 @@ function makePR(
     reviewDecision: null,
     createdAt: '2026-01-01',
     updatedAt: '2026-01-01',
+    mergedAt: null,
     author: null,
     labels: [],
     assignees: [],

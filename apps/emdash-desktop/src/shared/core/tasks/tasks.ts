@@ -6,7 +6,7 @@ import type {
 } from '@emdash/core/git';
 import z from 'zod';
 import type { Conversation } from '@shared/core/conversations/conversations';
-import type { LinkedIssue } from '@shared/core/linked-issue';
+import type { LinkedIssueRoles } from '@shared/core/linked-issue';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { TaskConfig } from '@shared/core/tasks/task-config';
 import type { WorkspaceConfig } from '@shared/core/workspaces/workspace-config';
@@ -58,17 +58,21 @@ export const taskLifecycleStatuses = z.enum([
 export type TaskLifecycleStatus = z.infer<typeof taskLifecycleStatuses>;
 
 /**
- * Feature workflow stages (idea → spec → PR pipeline). Orthogonal to
- * `TaskLifecycleStatus`, which drives internal task/workspace logic.
+ * Feature workflow stages: the Feature Board pipeline
+ * `idea → exploring → spec → implementing → review → shipped`, plus the
+ * out-of-flow `triage` stage. Orthogonal to `TaskLifecycleStatus`, which
+ * drives internal task/workspace logic. See CONTEXT.md ("Workflow Stage")
+ * and docs/adr/0003-board-stages-derived-not-declared.md for the stage
+ * authority model.
  */
 export const workflowStages = z.enum([
   'idea',
-  'grilled',
+  'exploring',
   'spec',
-  'tickets',
   'implementing',
-  'pr',
+  'review',
   'shipped',
+  'triage',
 ]);
 
 export type WorkflowStage = z.infer<typeof workflowStages>;
@@ -88,7 +92,8 @@ export type Task = {
   statusChangedAt: string;
   archivedAt?: string;
   lastInteractedAt?: string;
-  linkedIssue?: LinkedIssue;
+  /** Typed, role-keyed linked issues (Origin / Map / Spec). At most one issue per role. */
+  linkedIssues?: LinkedIssueRoles;
   isPinned: boolean;
   prs: PullRequest[];
   conversations: Record<string, number>;

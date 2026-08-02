@@ -13,6 +13,7 @@ import type { AgentEvent } from '@shared/core/agents/agentEvents';
 import type { ConversationConfig } from '@shared/core/conversations/conversation-config';
 import { conversationCreatedChannel } from '@shared/core/conversations/conversationEvents';
 import type { Conversation } from '@shared/core/conversations/conversations';
+import { linkedIssueRolesFromOrigin } from '@shared/core/linked-issue';
 import type {
   CreateTaskError,
   CreateTaskParams,
@@ -168,7 +169,7 @@ export function commitCreateTask(
       name: params.taskConfig.name,
       status: initialStatus,
       workspaceId,
-      linkedIssue: params.taskConfig.linkedIssue ?? null,
+      linkedIssues: linkedIssueRolesFromOrigin(params.taskConfig.linkedIssue),
       type: params.automationRunId ? 'automation-run' : 'task',
       automationRunId: params.automationRunId ?? null,
       updatedAt: sql`CURRENT_TIMESTAMP`,

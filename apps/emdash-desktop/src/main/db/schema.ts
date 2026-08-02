@@ -15,7 +15,7 @@ import {
   storedAutomationTaskConfig,
 } from '@shared/core/automations/config';
 import { conversationConfig } from '@shared/core/conversations/conversation-config';
-import { linkedIssue } from '@shared/core/linked-issue';
+import { linkedIssueRoles } from '@shared/core/linked-issue';
 import { providerAccountMeta } from '@shared/core/provider-accounts/provider-account-meta';
 import { sshConnectionMetadata } from '@shared/core/ssh/ssh-connection-metadata';
 import type { TerminalShellId } from '@shared/core/terminals/terminal-settings';
@@ -125,11 +125,12 @@ export const tasks = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     status: text('status').notNull(),
-    workflowStage: text('workflow_stage'), // feature workflow stage (idea → spec → PR); null = unstaged
+    workflowStage: text('workflow_stage'), // Feature Board workflow stage; null = Unstaged
     boardRank: text('board_rank'), // manual Feature Board position within a column (fractional index); null = unranked
     sourceBranch: text('source_branch').$type<StoredBranch>(), // @deprecated — moved to workspaces.config (git.fromBranch)
     taskBranch: text('task_branch'), // @deprecated — use workspaces.config for provisioned branch identity
-    linkedIssue: versionedJsonColumn(linkedIssue)('linked_issue'),
+    // Role-keyed (Origin / Map / Spec); column name unchanged, only the stored shape evolved.
+    linkedIssues: versionedJsonColumn(linkedIssueRoles)('linked_issue'),
     archivedAt: text('archived_at'), // null = active, timestamp = archived
     createdAt: text('created_at')
       .notNull()
@@ -216,6 +217,9 @@ export const pullRequests = sqliteTable(
     description: text('description'),
     status: text('status').notNull().default('open'),
     isDraft: integer('is_draft'),
+    // When the PR was merged (GitHub `mergedAt`); null until merged. Drives Shipped Fade
+    // (CONTEXT.md) and the `shipped` workflow-stage derivation in board-sync-service.ts.
+    mergedAt: text('merged_at'),
 
     authorUserId: text('author_user_id').references(() => pullRequestUsers.userId, {
       onDelete: 'set null',
