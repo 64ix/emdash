@@ -94,17 +94,17 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
   }
 
   private configDir(): string {
-    return this.env.CLAUDE_CONFIG_DIR || join(this.homeDir, '.claude');
+    return (this.env.CLAUDE_CONFIG_DIR || join(this.homeDir, '.claude')).normalize('NFC');
   }
 
   private async resolveAccessToken(): Promise<string | null> {
     if (this.platform === 'darwin') {
-      const raw = await this.readKeychain(
-        claudeKeychainService(this.env, this.configDir()),
-        claudeKeychainAccount(this.env, this.userName)
-      ).catch(() => null);
-      const token = parseAccessToken(raw);
-      if (token) return token;
+      const account = claudeKeychainAccount(this.env, this.userName);
+      for (const service of claudeKeychainServices(this.env, this.configDir())) {
+        const raw = await this.readKeychain(service, account).catch(() => null);
+        const token = parseAccessToken(raw);
+        if (token) return token;
+      }
     }
 
     const raw = await this.readTextFile(join(this.configDir(), '.credentials.json')).catch(
@@ -127,9 +127,20 @@ async function readMacOsKeychain(service: string, account: string): Promise<stri
   }
 }
 
-function claudeKeychainService(env: ClaudeEnvironment, configDir: string): string {
-  if (!env.CLAUDE_CONFIG_DIR) return 'Claude Code-credentials';
-  const scope = createHash('sha256').update(configDir.normalize('NFC')).digest('hex').slice(0, 8);
+function claudeKeychainServices(env: ClaudeEnvironment, configDir: string): string[] {
+  const secureStorageDir = env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  if (secureStorageDir !== undefined) {
+    const normalized = secureStorageDir.trim().normalize('NFC');
+    return normalized
+      ? [scopedKeychainService(normalized)]
+      : ['Claude Code-credentials', 'Claude Code'];
+  }
+  if (env.CLAUDE_CONFIG_DIR) return [scopedKeychainService(configDir)];
+  return ['Claude Code-credentials', 'Claude Code'];
+}
+
+function scopedKeychainService(configDir: string): string {
+  const scope = createHash('sha256').update(configDir).digest('hex').slice(0, 8);
   return `Claude Code-credentials-${scope}`;
 }
 

@@ -105,6 +105,37 @@ describe('ProviderUsageService provider normalization', () => {
     expect(JSON.stringify(snapshots)).not.toContain('keychain-secret');
   });
 
+  it('falls back to the legacy unscoped macOS keychain service', async () => {
+    const readKeychain = vi.fn(async (service: string) =>
+      service === 'Claude Code'
+        ? JSON.stringify({ claudeAiOauth: { accessToken: 'legacy-secret' } })
+        : null
+    );
+    const service = new ProviderUsageService({
+      adapters: [
+        new ClaudeUsageAdapter({
+          env: {},
+          platform: 'darwin',
+          userName: 'test-user',
+          readKeychain,
+          readTextFile: vi.fn(async () => {
+            throw new Error('file fallback must not run');
+          }),
+          http: vi.fn(async () =>
+            Response.json({ five_hour: { utilization: 4, resets_at: null } })
+          ) as typeof fetch,
+          now: () => NOW,
+        }),
+      ],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    await service.getSnapshots();
+
+    expect(readKeychain).toHaveBeenNthCalledWith(1, 'Claude Code-credentials', 'test-user');
+    expect(readKeychain).toHaveBeenNthCalledWith(2, 'Claude Code', 'test-user');
+  });
+
   it('matches Claude Code keychain scoping and account validation', async () => {
     const configDir = await mkdtemp(join(tmpdir(), 'emdash-claude-keychain-'));
     const readKeychain = vi.fn(async () =>
@@ -133,6 +164,41 @@ describe('ProviderUsageService provider normalization', () => {
         .digest('hex')
         .slice(0, 8)}`,
       'claude-code-user'
+    );
+  });
+
+  it('lets CLAUDE_SECURESTORAGE_CONFIG_DIR override the keychain scope', async () => {
+    const secureStorageDir = '/tmp/claude-secure-storage';
+    const readKeychain = vi.fn(async () =>
+      JSON.stringify({ claudeAiOauth: { accessToken: 'keychain-secret' } })
+    );
+    const service = new ProviderUsageService({
+      adapters: [
+        new ClaudeUsageAdapter({
+          env: {
+            CLAUDE_CONFIG_DIR: '/tmp/claude-config',
+            CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir,
+            USER: 'test-user',
+          },
+          platform: 'darwin',
+          readKeychain,
+          http: vi.fn(async () =>
+            Response.json({ five_hour: { utilization: 4, resets_at: null } })
+          ) as typeof fetch,
+          now: () => NOW,
+        }),
+      ],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    await service.getSnapshots();
+
+    expect(readKeychain).toHaveBeenCalledWith(
+      `Claude Code-credentials-${createHash('sha256')
+        .update(secureStorageDir)
+        .digest('hex')
+        .slice(0, 8)}`,
+      'test-user'
     );
   });
 
@@ -201,18 +267,21 @@ describe('ProviderUsageService provider normalization', () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'emdash-codex-usage-'));
     const dayDir = join(codexHome, 'sessions', '2026', '08', '02');
     await mkdir(dayDir, { recursive: true });
+    const oldPath = join(dayDir, 'rollout-old.jsonl');
+    const corruptPath = join(dayDir, 'rollout-corrupt.jsonl');
+    const newPath = join(dayDir, 'rollout-new.jsonl');
+    await writeFile(oldPath, tokenCountEvent('2026-08-02T08:00:00.000Z', 12, 22));
+    await writeFile(corruptPath, '{broken\n');
     await writeFile(
-      join(dayDir, 'rollout-old.jsonl'),
-      tokenCountEvent('2026-08-02T08:00:00.000Z', 12, 22)
-    );
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await writeFile(join(dayDir, 'rollout-corrupt.jsonl'), '{broken\n');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await writeFile(
-      join(dayDir, 'rollout-new.jsonl'),
+      newPath,
       `${JSON.stringify({ type: 'event_msg', payload: { type: 'token_count' } })}\n` +
         `${tokenCountEvent('2026-08-02T09:30:00.000Z', 44, 61)}\n{truncated`
     );
+    await Promise.all([
+      utimes(oldPath, new Date(1_000), new Date(1_000)),
+      utimes(corruptPath, new Date(2_000), new Date(2_000)),
+      utimes(newPath, new Date(3_000), new Date(3_000)),
+    ]);
     const service = new ProviderUsageService({
       adapters: [new CodexUsageAdapter({ env: { CODEX_HOME: codexHome } })],
     });
@@ -240,6 +309,24 @@ describe('ProviderUsageService provider normalization', () => {
         ],
       },
     ]);
+  });
+
+  it('resolves CODEX_HOME after login-shell environment capture', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'emdash-codex-late-env-'));
+    const dayDir = join(codexHome, 'sessions', '2026', '08', '02');
+    await mkdir(dayDir, { recursive: true });
+    await writeFile(
+      join(dayDir, 'rollout.jsonl'),
+      tokenCountEvent('2026-08-02T09:30:00.000Z', 44, 61)
+    );
+    const env: Record<string, string | undefined> = {};
+    const adapter = new CodexUsageAdapter({ env, homeDir: join(codexHome, 'unused-home') });
+
+    env.CODEX_HOME = codexHome;
+    const service = new ProviderUsageService({ adapters: [adapter] });
+    service.initialize({ claude: true, codex: true });
+
+    expect((await service.getSnapshots())[0]?.windows[0]?.utilization).toBe(44);
   });
 
   it('bounds the number of recent Codex session files read', async () => {

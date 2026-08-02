@@ -15,18 +15,18 @@ type RecentFile = { path: string; mtimeMs: number };
 
 export class CodexUsageAdapter implements ProviderUsageAdapter {
   readonly provider = 'codex' as const;
-  private readonly sessionsDir: string;
+  private readonly env: Record<string, string | undefined>;
+  private readonly homeDir: string;
   private readonly maxFiles: number;
 
   constructor(deps: CodexUsageAdapterDependencies = {}) {
-    const env = deps.env ?? process.env;
-    const codexHome = env.CODEX_HOME || join(deps.homeDir ?? homedir(), '.codex');
-    this.sessionsDir = join(codexHome, 'sessions');
+    this.env = deps.env ?? process.env;
+    this.homeDir = deps.homeDir ?? homedir();
     this.maxFiles = deps.maxFiles ?? 5;
   }
 
   async isAvailable(): Promise<boolean> {
-    return stat(this.sessionsDir)
+    return stat(this.sessionsDir())
       .then((value) => value.isDirectory())
       .catch(() => false);
   }
@@ -59,8 +59,12 @@ export class CodexUsageAdapter implements ProviderUsageAdapter {
         }
       }
     };
-    await visit(this.sessionsDir, 0);
+    await visit(this.sessionsDir(), 0);
     return found.sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, this.maxFiles);
+  }
+
+  private sessionsDir(): string {
+    return join(this.env.CODEX_HOME || join(this.homeDir, '.codex'), 'sessions');
   }
 
   private async readFileSnapshot(file: RecentFile): Promise<ProviderUsageSnapshot | null> {
