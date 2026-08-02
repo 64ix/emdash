@@ -826,6 +826,7 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
         onReady={handleReady}
         commands={transcriptCommands}
         onAtBottomChange={setAtBottom}
+        onReachStart={() => store.loadOlderHistory()}
         style={{ position: 'absolute', inset: 0 }}
       />
 

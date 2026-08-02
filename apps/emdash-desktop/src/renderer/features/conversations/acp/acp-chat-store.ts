@@ -31,7 +31,16 @@ import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
+import { AcpHistoryPagination } from './acp-history-pagination';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
+
+/**
+ * Page size for every ACP history fetch: the initial window, each
+ * reach-start-triggered older page, and the post-turn-commit refresh window.
+ * Kept as a single constant so all three requests stay consistent with the
+ * `AcpHistoryPagination` cursor bookkeeping.
+ */
+const HISTORY_PAGE_SIZE = 100;
 
 export interface AgentAffordances {
   isWorking: boolean;
@@ -74,6 +83,7 @@ export class AcpChatStore {
   private _draftRev = 0;
   private _pendingDraftRev: number | null = null;
   private _draftTimer: number | null = null;
+  private readonly _historyPagination = new AcpHistoryPagination();
 
   constructor(
     readonly conversationId: string,
@@ -118,6 +128,7 @@ export class AcpChatStore {
       setDraftText: action,
       exportTranscript: action,
       retry: action,
+      loadOlderHistory: action,
     });
   }
 
@@ -232,6 +243,19 @@ export class AcpChatStore {
 
   bindView(view: ChatView | null): void {
     this._view = view;
+  }
+
+  /**
+   * Load the next older page of transcript history, if one is available.
+   * Intended to be wired to `ChatTranscript`'s `onReachStart` (fired when the
+   * transcript is scrolled to its top). A no-op when history is still
+   * loading, a page is already in flight, or the start of history has
+   * already been reached — see `AcpHistoryPagination`.
+   */
+  loadOlderHistory(): void {
+    const begin = this._historyPagination.beginLoadOlder();
+    if (!begin) return;
+    void this._loadOlderHistory(begin.epoch, begin.before);
   }
 
   async uploadAttachment(input: {
@@ -417,19 +441,23 @@ export class AcpChatStore {
   }
 
   private async _runBootstrap(): Promise<void> {
+    // Fence off any older-page load already in flight from a prior attempt
+    // (retry after a load error) before this bootstrap seeds fresh state.
+    this._historyPagination.reset();
     let providerId: string | undefined;
     try {
       const input = this._startInput();
       providerId = input.providerId;
       const clientSession = await AcpLiveSession.create(this.conversationId, input);
 
-      const history = await clientSession.getHistory(undefined, 100);
+      const history = await clientSession.getHistory(undefined, HISTORY_PAGE_SIZE);
       if (!history.success) throw resultError(history.error);
 
       runInAction(() => {
         this.session?.dispose();
         this.session = clientSession;
         this.chatState.transcript.history.seed(history.data.turns);
+        this._historyPagination.seed(history.data);
         this._subscribeLiveSession(clientSession);
         this._applyDraftSnapshot(clientSession.draft.current());
         this.historyLoading = false;
@@ -635,14 +663,59 @@ export class AcpChatStore {
     );
   }
 
+  /**
+   * Re-fetch the most recent history window after a turn commits (the
+   * runtime only exposes a just-finished turn's content through the
+   * canonical history, not through `activeTurn`). Appends only turns not
+   * already known — via `AcpHistoryPagination.reconcileRefresh` — so this
+   * never discards older pages already prepended by `loadOlderHistory`.
+   */
   private async _refreshHistory(): Promise<void> {
-    const history = await this.session?.getHistory(undefined, 100);
+    const history = await this.session?.getHistory(undefined, HISTORY_PAGE_SIZE);
     if (!history?.success) return;
+    const fresh = this._historyPagination.reconcileRefresh(history.data.turns);
     runInAction(() => {
       this.chatState.session.setPendingPrompt(null);
-      this.chatState.transcript.history.seed(history.data.turns);
+      this.chatState.transcript.history.append([...fresh]);
       this._syncMessageCount();
     });
+  }
+
+  /**
+   * Fetch and prepend one older-history page. Reach-start can only fire while
+   * this conversation's view is bound, but the fetch is async — the panel may
+   * have switched to another conversation (unbinding `_view`) by the time it
+   * resolves. When still bound, go through `ChatView.loadOlder` (chat-ui's
+   * `doLoadOlder`) to also capture/restore the visible reading position; when
+   * backgrounded, prepend directly into `chatState` so the page is never
+   * silently dropped — it renders correctly once the view rebinds.
+   */
+  private async _loadOlderHistory(epoch: number, before: number): Promise<void> {
+    try {
+      const result = await this.session?.getHistory(before, HISTORY_PAGE_SIZE);
+      if (!result) {
+        this._historyPagination.abortLoadOlder(epoch);
+        return;
+      }
+      if (!result.success) {
+        this._historyPagination.abortLoadOlder(epoch);
+        this._toastError('Failed to load older messages', result.error);
+        return;
+      }
+      const fresh = this._historyPagination.completeLoadOlder(epoch, result.data);
+      if (!fresh || fresh.length === 0) return;
+      runInAction(() => {
+        if (this._view) {
+          this._view.loadOlder([...fresh]);
+        } else {
+          this.chatState.transcript.history.prepend([...fresh]);
+        }
+        this._syncMessageCount();
+      });
+    } catch (error) {
+      this._historyPagination.abortLoadOlder(epoch);
+      this._toastError('Failed to load older messages', error);
+    }
   }
 
   private _syncMessageCount(): void {
