@@ -1,4 +1,4 @@
-import type { TranscriptTurn } from '@emdash/core/acp/client';
+import type { TranscriptItem, TranscriptTurn } from '@emdash/core/acp/client';
 import { describe, expect, it, vi } from 'vitest';
 import { AcpChatStore } from './acp-chat-store';
 import type { AcpHistoryPagination } from './acp-history-pagination';
@@ -37,12 +37,17 @@ vi.mock('@renderer/lib/chat/advertised-command-provider', () => ({
   registerConversationCommands: vi.fn(),
   unregisterConversationCommands: vi.fn(),
 }));
+// `projects` is an empty Map (rather than omitted) so `_resolveWorkspace()`'s
+// `getTaskStore` lookup (used by `_syncChangesFootprint`) resolves to "task
+// not found" the same way it would for any unregistered task, instead of
+// throwing on a missing `.projects`.
 vi.mock('@renderer/lib/stores/app-state', () => ({
   appState: {
     sshConnections: {
       stateFor: vi.fn(),
       connect: vi.fn(async () => {}),
     },
+    projects: { projects: new Map() },
   },
 }));
 
@@ -94,17 +99,17 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-describe('AcpChatStore.loadOlderHistory', () => {
-  function setUpStore(seedTurns: TranscriptTurn[], nextCursor: number | null) {
-    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
-    const pagination = (store as unknown as { _historyPagination: AcpHistoryPagination })
-      ._historyPagination;
-    pagination.seed({ turns: seedTurns, nextCursor });
-    const fakeChatState = store.chatState as unknown as FakeChatState;
-    fakeChatState.transcript.history.seed(seedTurns);
-    return { store, fakeChatState };
-  }
+function setUpStore(seedTurns: TranscriptTurn[], nextCursor: number | null) {
+  const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+  const pagination = (store as unknown as { _historyPagination: AcpHistoryPagination })
+    ._historyPagination;
+  pagination.seed({ turns: seedTurns, nextCursor });
+  const fakeChatState = store.chatState as unknown as FakeChatState;
+  fakeChatState.transcript.history.seed(seedTurns);
+  return { store, fakeChatState };
+}
 
+describe('AcpChatStore.loadOlderHistory', () => {
   it('prepends through the bound view, preserving the scroll-anchor seam', async () => {
     const { store, fakeChatState } = setUpStore([makeTurn(10), makeTurn(11)], 10);
     const olderPage = { turns: [makeTurn(8), makeTurn(9)], nextCursor: null };
@@ -190,6 +195,83 @@ describe('AcpChatStore.loadOlderHistory', () => {
       makeTurn(9),
       makeTurn(10),
       makeTurn(11),
+    ]);
+  });
+});
+
+// ── AcpChatStore.changesFootprint — resynced alongside messageCount ─────────
+//
+// `_resolveWorkspace()` returns null in this harness (no task/workspace is
+// registered), so these tests exercise the transcript-only path: a real
+// workspace's Git status is covered by `acp-changes-footprint.test.ts`'s
+// pure-function tests instead of re-mocking the whole workspace registry here.
+describe('AcpChatStore.changesFootprint', () => {
+  function modifyItem(id: string, seq: number, path: string): TranscriptItem {
+    return {
+      kind: 'modify-file-tool-call',
+      id,
+      seq,
+      toolCallId: id,
+      title: `Edit ${path}`,
+      status: 'done',
+      path,
+      oldText: '',
+      newText: '',
+    };
+  }
+
+  it('reflects the transcript seeded at bootstrap', () => {
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    const fakeChatState = store.chatState as unknown as FakeChatState;
+    const turnWithEdit: TranscriptTurn = {
+      ...makeTurn(1),
+      items: [modifyItem('c1', 1, 'src/a.ts')],
+    };
+    fakeChatState.transcript.history.seed([turnWithEdit]);
+
+    (store as unknown as { _syncChangesFootprint: () => void })._syncChangesFootprint();
+
+    expect(store.changesFootprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/a.ts',
+        status: 'modified',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 'turn-1', itemId: 'c1' },
+      },
+    ]);
+    expect(store.changesFootprint.read).toEqual([]);
+  });
+
+  it('recomputes once an older page adds more edited files', async () => {
+    const turnWithEdit: TranscriptTurn = {
+      ...makeTurn(10),
+      items: [modifyItem('c1', 1, 'src/a.ts')],
+    };
+    const { store, fakeChatState } = setUpStore([turnWithEdit], 10);
+    (store as unknown as { _syncChangesFootprint: () => void })._syncChangesFootprint();
+    expect(store.changesFootprint.edited.map((entry) => entry.path)).toEqual(['src/a.ts']);
+
+    const olderTurn: TranscriptTurn = {
+      ...makeTurn(9),
+      items: [modifyItem('c2', 1, 'src/b.ts')],
+    };
+    store.session = {
+      getHistory: vi.fn(async () => ({
+        success: true,
+        data: { turns: [olderTurn], nextCursor: null },
+      })),
+    } as never;
+
+    store.bindView(null);
+    store.loadOlderHistory();
+    await flushMicrotasks();
+
+    expect(fakeChatState.transcript.history.get()).toEqual([olderTurn, turnWithEdit]);
+    expect(store.changesFootprint.edited.map((entry) => entry.path)).toEqual([
+      'src/a.ts',
+      'src/b.ts',
     ]);
   });
 });

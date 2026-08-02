@@ -16,7 +16,7 @@ import type {
   ComposerQueuedPrompt,
 } from '@emdash/ui/react/components';
 import type { BlobSource } from '@emdash/wire';
-import { action, computed, makeObservable, observable, runInAction, toJS } from 'mobx';
+import { action, computed, makeObservable, observable, reaction, runInAction, toJS } from 'mobx';
 // TODO(conversations-extraction): Inject task/workspace lookups instead of importing task stores.
 import { asProvisioned, getTaskStore } from '@renderer/features/tasks/stores/task-selectors';
 import { workspaceRegistry } from '@renderer/features/tasks/stores/workspace-registry';
@@ -33,6 +33,11 @@ import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
 import { createStopController, type StopController } from './acp-chat-stop-controller';
 import { AcpHistoryPagination } from './acp-history-pagination';
+import {
+  buildChangesFootprint,
+  EMPTY_CHANGES_FOOTPRINT,
+  type ChangesFootprint,
+} from './changes/acp-changes-footprint';
 import type {
   AcpPromptAttachment,
   AcpSubmissionSessionPort,
@@ -84,6 +89,14 @@ export class AcpChatStore {
   loadError: AcpLoadError | null = null;
   messageCount = 0;
   draftText = '';
+  /**
+   * Task-scoped Changes footprint (edited/read files), reconciled from the
+   * canonical transcript (persisted + active turns) and the task's current
+   * Git status. Recomputed via `_syncChangesFootprint` — see that method for
+   * every place the transcript or Git status can change. Never persisted;
+   * see `ChangesRailViewStore` for the view preferences that are.
+   */
+  changesFootprint: ChangesFootprint = EMPTY_CHANGES_FOOTPRINT;
   /**
    * True while a Stop/cancel request for the active turn is in flight.
    * Mirrored into `chatState.session.setStopPending` so the transcript's
@@ -138,6 +151,7 @@ export class AcpChatStore {
       messageCount: observable,
       draftText: observable,
       isCancelling: observable,
+      changesFootprint: observable.ref,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -510,6 +524,7 @@ export class AcpChatStore {
         this.historyLoading = false;
         this.loadError = null;
         this._syncMessageCount();
+        this._syncChangesFootprint();
       });
     } catch (error) {
       log.error('ACP chat bootstrap failed', {
@@ -702,11 +717,24 @@ export class AcpChatStore {
           this._syncMessageCount();
         })
       ),
-      session.activeTurn.onChange(() => runInAction(() => this._syncMessageCount())),
+      session.activeTurn.onChange(() =>
+        runInAction(() => {
+          this._syncMessageCount();
+          this._syncChangesFootprint();
+        })
+      ),
       session.draft.onChange((draft) =>
         runInAction(() => {
           this._applyDraftSnapshot(draft);
         })
+      ),
+      // The Changes footprint reconciles transcript activity with the task's
+      // current Git status; resync whenever a fresh Git snapshot arrives
+      // (e.g. the working tree changed outside this conversation, or the
+      // watcher catches up with edits this conversation just made).
+      reaction(
+        () => this._resolveWorkspace()?.gitWorktree.fileChanges,
+        () => runInAction(() => this._syncChangesFootprint())
       )
     );
   }
@@ -775,6 +803,7 @@ export class AcpChatStore {
       this.chatState.session.setPendingPrompt(null);
       this.chatState.transcript.history.append([...fresh]);
       this._syncMessageCount();
+      this._syncChangesFootprint();
     });
   }
 
@@ -808,6 +837,7 @@ export class AcpChatStore {
           this.chatState.transcript.history.prepend([...fresh]);
         }
         this._syncMessageCount();
+        this._syncChangesFootprint();
       });
     } catch (error) {
       this._historyPagination.abortLoadOlder(epoch);
@@ -824,6 +854,37 @@ export class AcpChatStore {
     const activeCount = state.activeTurnSnapshot?.items.length ?? 0;
     const pendingPromptCount = this.chatState.session.state.pendingPrompt ? 1 : 0;
     this.messageCount = committedCount + activeCount + pendingPromptCount;
+  }
+
+  /**
+   * Resolves this store's task workspace, if the task is currently
+   * provisioned. Used for the Changes footprint's Git-status input and path
+   * normalization — see `_syncChangesFootprint`. Returns null (rather than
+   * throwing, unlike `_startInput`) so the footprint degrades to
+   * transcript-only when the workspace is not resolvable.
+   */
+  private _resolveWorkspace() {
+    const task = asProvisioned(getTaskStore(this.projectId, this.taskId));
+    if (!task?.workspaceId) return null;
+    return workspaceRegistry.get(this.projectId, task.workspaceId) ?? null;
+  }
+
+  /**
+   * Recompute the task-scoped Changes footprint. Called wherever the
+   * transcript (committed history or the active turn) or the task's current
+   * Git status can change — bootstrap, history refresh/load-older, live
+   * active-turn updates, and the Git reaction registered in
+   * `_subscribeLiveSession`.
+   */
+  private _syncChangesFootprint(): void {
+    const workspace = this._resolveWorkspace();
+    const state = this.chatState.transcript.state;
+    this.changesFootprint = buildChangesFootprint({
+      committedTurns: state.committedTurns,
+      activeTurn: state.activeTurnSnapshot,
+      gitChanges: workspace?.gitWorktree.fileChanges ?? [],
+      workspacePath: workspace?.path ?? null,
+    });
   }
 
   private _toastError(title: string, error: unknown): void {
