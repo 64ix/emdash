@@ -117,6 +117,17 @@ export function removeFailedSubmission(
   return { removed, entries: next };
 }
 
+/**
+ * One-line preview for the Retry/Edit/Discard banner. Pure/DOM-free so the
+ * banner's own labeling logic is pinned by a unit test rather than only by
+ * (currently absent) browser coverage of `AcpChatPanel`.
+ */
+export function failedSubmissionPreview(submission: AcpSubmissionSnapshot): string {
+  if (submission.text.trim().length > 0) return submission.text.split(/\r?\n/, 1)[0] ?? '';
+  if (submission.attachments.length > 0) return 'Attachment-only message';
+  return 'Message';
+}
+
 export function resultError(error: unknown): Error {
   if (error instanceof Error) return error;
   if (typeof error === 'object' && error !== null) {
@@ -140,6 +151,8 @@ export interface AcpSubmissionHooks {
   onDirectStart?(snapshot: AcpSubmissionSnapshot): void;
   /** Any submission (direct or queued) was rejected or threw. */
   onFailure?(failure: FailedAcpSubmission): void;
+  /** A failed submission was permanently discarded — release its attachments. */
+  onDiscard?(discarded: FailedAcpSubmission): void;
 }
 
 /**
@@ -222,10 +235,14 @@ export class AcpSubmissionController {
     return removed;
   }
 
-  /** Drop a failed submission for good. Only path that permanently loses it. */
+  /**
+   * Drop a failed submission for good and release any uploaded attachments
+   * via `onDiscard`. Only path that permanently loses a failed submission.
+   */
   discard(localId: string): FailedAcpSubmission | null {
     const { removed, entries } = removeFailedSubmission(this.failedSubmissions, localId);
     this.failedSubmissions = entries;
+    if (removed) this.hooks.onDiscard?.(removed);
     return removed;
   }
 

@@ -53,9 +53,10 @@ import {
   mostAdvancedLinkedIssue,
   type LinkedIssue,
 } from '@shared/core/linked-issue';
-import type { AcpChatStore, AcpPromptAttachment, FailedAcpSubmission } from './acp-chat-store';
+import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
+import { failedSubmissionPreview } from './acp-submission-recovery';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -230,12 +231,6 @@ function toComposerAttachment(attachment: AcpPromptAttachment): ComposerAttachme
     previewUrl: attachment.previewUrl,
     mimeType: attachment.ref.mimeType,
   };
-}
-
-function failedSubmissionPreview(submission: FailedAcpSubmission): string {
-  if (submission.text.trim().length > 0) return promptPreview(submission.text);
-  if (submission.attachments.length > 0) return 'Attachment-only message';
-  return 'Message';
 }
 
 // ── Composer for a single store ────────────────────────────────────────────────

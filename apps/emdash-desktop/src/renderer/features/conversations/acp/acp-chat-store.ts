@@ -95,6 +95,7 @@ export class AcpChatStore {
     this._submissions = new AcpSubmissionController(() => this._sessionPort(), {
       onDirectStart: (snapshot) => this._showOptimisticPrompt(snapshot),
       onFailure: (failure) => this._handleSubmissionFailure(failure),
+      onDiscard: (discarded) => this._releaseSubmissionAttachments(discarded),
     });
 
     makeObservable(this, {
@@ -327,13 +328,12 @@ export class AcpChatStore {
     return this._submissions.edit(localId);
   }
 
-  /** Permanently drop a failed submission and release any uploaded attachments. */
+  /**
+   * Permanently drop a failed submission. Attachment release happens via the
+   * controller's `onDiscard` hook — see `_releaseSubmissionAttachments`.
+   */
   discardFailedSubmission(localId: string): void {
-    const removed = this._submissions.discard(localId);
-    if (!removed) return;
-    for (const attachment of removed.attachments) {
-      void this.deleteAttachment(attachment.ref.id);
-    }
+    this._submissions.discard(localId);
   }
 
   setDraftText(text: string): void {
@@ -569,6 +569,13 @@ export class AcpChatStore {
       failure.kind === 'queued' ? 'Failed to queue message' : 'Failed to send message',
       new Error(failure.error)
     );
+  }
+
+  /** A failed submission was discarded for good — release any uploaded attachments. */
+  private _releaseSubmissionAttachments(discarded: FailedAcpSubmission): void {
+    for (const attachment of discarded.attachments) {
+      void this.deleteAttachment(attachment.ref.id);
+    }
   }
 
   private async _sendQueuedPromptNow(id: string): Promise<void> {

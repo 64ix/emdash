@@ -11,6 +11,7 @@ import {
   AcpSubmissionController,
   appendFailedSubmission,
   createSubmissionSnapshot,
+  failedSubmissionPreview,
   removeFailedSubmission,
   resultError,
   toPromptInput,
@@ -203,6 +204,21 @@ describe('appendFailedSubmission', () => {
       text: 'second attempt',
       error: 'second error',
     });
+  });
+});
+
+describe('failedSubmissionPreview', () => {
+  it('shows the first line of the text when non-blank', () => {
+    expect(failedSubmissionPreview(snapshot({ text: 'hello world\nmore' }))).toBe('hello world');
+  });
+
+  it('falls back to an attachment label when the text is blank', () => {
+    const withAttachment = snapshot({ text: '   ', attachments: [attachment('att-1')] });
+    expect(failedSubmissionPreview(withAttachment)).toBe('Attachment-only message');
+  });
+
+  it('falls back to a generic label when there is no text or attachments', () => {
+    expect(failedSubmissionPreview(snapshot({ text: '' }))).toBe('Message');
   });
 });
 
@@ -451,6 +467,30 @@ describe('AcpSubmissionController', () => {
   it('discard on an unknown localId is a no-op that returns null', () => {
     const controller = new AcpSubmissionController(() => new FakeSessionPort());
     expect(controller.discard('missing')).toBeNull();
+  });
+
+  it('discard invokes onDiscard exactly once with the removed snapshot so its attachments can be released', async () => {
+    const port = new FakeSessionPort();
+    const onDiscard = vi.fn();
+    const controller = new AcpSubmissionController(() => port, { onDiscard });
+
+    const atts = [attachment('att-1'), attachment('att-2')];
+    controller.submit('discard me', atts);
+    port.rejectNextSend(new Error('failed'));
+    await flushPromises();
+
+    const localId = controller.failedSubmissions[0].localId;
+    controller.discard(localId);
+
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+    expect(onDiscard).toHaveBeenCalledWith(expect.objectContaining({ localId, attachments: atts }));
+  });
+
+  it('does not call onDiscard when discarding an unknown localId', () => {
+    const onDiscard = vi.fn();
+    const controller = new AcpSubmissionController(() => new FakeSessionPort(), { onDiscard });
+    controller.discard('missing');
+    expect(onDiscard).not.toHaveBeenCalled();
   });
 
   it('two independent queued submissions can fail without losing either snapshot', async () => {
