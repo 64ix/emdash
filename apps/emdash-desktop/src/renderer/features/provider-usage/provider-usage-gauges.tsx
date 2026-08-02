@@ -1,7 +1,7 @@
 import { AlertCircle, Gauge, RefreshCw, X } from 'lucide-react';
 import { useSyncExternalStore } from 'react';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
-import { Popover, PopoverContent, PopoverTrigger } from '@renderer/lib/ui/popover';
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@renderer/lib/ui/popover';
 import { cn } from '@renderer/utils/utils';
 import type { ProviderUsageProvider, ProviderUsageSnapshot } from '@shared/core/provider-usage';
 import {
@@ -69,7 +69,7 @@ function ProviderUsageGauge({
     <Popover onOpenChange={(open) => open && void onRefresh()}>
       <PopoverTrigger
         className="group focus-visible:ring-accent flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground-muted outline-none hover:bg-background-quaternary focus-visible:ring-1"
-        aria-label={`${PROVIDER_LABELS[snapshot.provider]} usage: ${percent}`}
+        aria-label={`${PROVIDER_LABELS[snapshot.provider]} usage: ${percent}${snapshot.error ? `; ${snapshot.error.message}` : ''}`}
       >
         {snapshot.error ? (
           <AlertCircle className="size-3.5 shrink-0 text-foreground-warning" />
@@ -102,9 +102,9 @@ function ProviderUsageGauge({
       <PopoverContent side="right" align="end" className="w-72 gap-3 p-3">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="font-medium text-foreground">
+            <PopoverTitle className="font-medium text-foreground">
               {PROVIDER_LABELS[snapshot.provider]} usage
-            </div>
+            </PopoverTitle>
             <div className="text-[11px] text-foreground-passive">Local account</div>
           </div>
           <div className="flex items-center gap-1">
@@ -158,7 +158,10 @@ function ProviderUsageGauge({
           );
         })}
         {snapshot.error && (
-          <div className="flex items-start gap-1.5 rounded-md bg-background-warning px-2 py-1.5 text-[11px] text-foreground-warning">
+          <div
+            role="status"
+            className="flex items-start gap-1.5 rounded-md bg-background-warning px-2 py-1.5 text-[11px] text-foreground-warning"
+          >
             <AlertCircle className="mt-0.5 size-3 shrink-0" />
             <span>{snapshot.error.message}</span>
           </div>
