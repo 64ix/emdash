@@ -14,6 +14,7 @@ import { providerOverrideSettings } from '@main/core/settings/provider-settings-
 import { log } from '@main/lib/logger';
 import { desktopWorkerPath } from '@main/worker-manifest';
 import { buildAcpSessionEnv } from './acp-session-env';
+import { withConversationAutoTitle } from './conversation-auto-title';
 
 const ACP_WIRE_CHANNEL = 'acp-wire';
 
@@ -33,8 +34,7 @@ const acpWorker = lazyWorker(
     },
   }),
   {
-    onSpawned: (handle) =>
-      installRendererWire(withSessionIdPersistence(withProviderEnv(handle.client))),
+    onSpawned: (handle) => installRendererWire(decorateAcpRuntimeClient(handle.client)),
   }
 );
 
@@ -55,7 +55,11 @@ export async function disposeAcpRuntimeProcess(): Promise<void> {
 }
 
 function decorateAcpRuntimeHandle(handle: WorkerHandle<AcpApiContract>): AcpRuntimeHandle {
-  return { ...handle, client: withSessionIdPersistence(withProviderEnv(handle.client)) };
+  return { ...handle, client: decorateAcpRuntimeClient(handle.client) };
+}
+
+function decorateAcpRuntimeClient(client: AcpRuntimeClient): AcpRuntimeClient {
+  return withConversationAutoTitle(withSessionIdPersistence(withProviderEnv(client)));
 }
 
 /**

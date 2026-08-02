@@ -1,4 +1,5 @@
 import type { PluginFs } from '@emdash/core/agents/plugins';
+import * as toml from 'smol-toml';
 import { describe, expect, it } from 'vitest';
 import { CODEX_CONFIG_PATH, CODEX_LEGACY_HOOKS_PATH, buildCodexHookConfig } from './hooks';
 
@@ -69,6 +70,26 @@ describe('buildCodexHookConfig', () => {
     expect(config).toContain('echo user-prompt');
     expect(config).toContain('notification_type');
     expect(config).toContain('session-start');
+    expect(config).toContain('UserPromptSubmit');
+    expect(config).toContain('X-Emdash-Event-Type: start');
+    const parsed = toml.parse(config!) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+    };
+    expect(parsed.hooks.UserPromptSubmit).toHaveLength(2);
+    expect(parsed.hooks.UserPromptSubmit[0]?.hooks[0]?.command).toBe('echo user-prompt');
+    expect(parsed.hooks.UserPromptSubmit[1]?.hooks[0]?.command).toContain(
+      'X-Emdash-Event-Type: start'
+    );
+  });
+
+  it('preserves the prompt in canonical UserPromptSubmit events', () => {
+    const hooks = buildCodexHookConfig();
+
+    expect(hooks.parseHookEvent('start', { prompt: 'Trace the failing request' })).toMatchObject({
+      kind: 'status',
+      type: 'start',
+      prompt: 'Trace the failing request',
+    });
   });
 
   it('keeps legacy hooks.json when writing config.toml fails', async () => {

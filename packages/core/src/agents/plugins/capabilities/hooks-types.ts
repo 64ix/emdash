@@ -35,6 +35,7 @@ export type CanonicalHookEvent =
       title?: string;
       message?: string;
       lastAssistantMessage?: string;
+      prompt?: string;
     }
   | { kind: 'session'; providerSessionId: string }
   | { kind: 'ignore' };

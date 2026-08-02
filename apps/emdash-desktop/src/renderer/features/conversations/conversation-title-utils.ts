@@ -1,4 +1,5 @@
 import type { AgentProviderId } from '@emdash/plugins/agents';
+import { parseDefaultConversationTitleIndex } from '@shared/core/conversations/conversation-title';
 
 type ConversationTitleInput = {
   providerId: AgentProviderId;
@@ -9,22 +10,11 @@ function capitalizeProviderId(providerId: AgentProviderId): string {
   return `${providerId.charAt(0).toUpperCase()}${providerId.slice(1)}`;
 }
 
-function parseDefaultTitleIndex(title: string, providerId: AgentProviderId): number | null {
-  const match = title.match(new RegExp(`^${providerId} \\(([1-9]\\d*)\\)$`, 'i'));
-  if (!match) return null;
-
-  const rawIndex = match[1];
-  const index = Number(rawIndex);
-  if (!Number.isInteger(index) || index < 1) return null;
-  if (String(index) !== rawIndex) return null;
-  return index;
-}
-
 export function formatConversationTitleForDisplay(
   providerId: AgentProviderId,
   title: string
 ): string {
-  const index = parseDefaultTitleIndex(title, providerId);
+  const index = parseDefaultConversationTitleIndex(title, providerId);
   if (index === null) return title;
   return `${capitalizeProviderId(providerId)} (${index})`;
 }
@@ -37,7 +27,7 @@ export function nextDefaultConversationTitle(
 
   for (const conversation of conversations) {
     if (conversation.providerId !== providerId) continue;
-    const index = parseDefaultTitleIndex(conversation.title, providerId);
+    const index = parseDefaultConversationTitleIndex(conversation.title, providerId);
     if (index !== null) used.add(index);
   }
 

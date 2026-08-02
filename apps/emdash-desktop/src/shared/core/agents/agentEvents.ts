@@ -34,6 +34,7 @@ export interface AgentEvent {
     title?: string;
     message?: string;
     lastAssistantMessage?: string;
+    prompt?: string;
   };
 }
 
