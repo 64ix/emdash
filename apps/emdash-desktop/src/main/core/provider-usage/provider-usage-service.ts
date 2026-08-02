@@ -63,6 +63,7 @@ export class ProviderUsageService {
   }
 
   async setVisibility(provider: ProviderUsageProvider, visible: boolean): Promise<void> {
+    if (this.visibility[provider] === visible) return;
     this.visibility = { ...this.visibility, [provider]: visible };
     if (!visible) {
       this.lastActivity.delete(provider);

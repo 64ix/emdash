@@ -61,6 +61,8 @@ export const SETTINGS_DEFAULTS = {
     showLeftSidebarPrStatus: true,
     showLeftSidebarTimestamps: true,
     hideContextBar: false,
+    showClaudeUsageGauge: true,
+    showCodexUsageGauge: true,
   },
   browserPreview: {
     enabled: true,

@@ -49,6 +49,7 @@ export class CodexUsageAdapter implements ProviderUsageAdapter {
       if (depth > 4 || found.length > 100) return;
       const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
       for (const entry of entries.sort((left, right) => right.name.localeCompare(left.name))) {
+        if (found.length >= 100) break;
         const path = join(directory, entry.name);
         if (entry.isDirectory()) {
           await visit(path, depth + 1);

@@ -19,6 +19,7 @@ import { previewServersController } from './core/preview-servers/controller';
 import { projectSetupController } from './core/project-setup/controller';
 import { projectController } from './core/projects/controller';
 import { promptLibraryController } from './core/prompt-library/controller';
+import { providerUsageController } from './core/provider-usage/controller';
 import { ptyController } from './core/pty/controller';
 import { pullRequestController } from './core/pull-requests/controller';
 import { resourceMonitorController } from './core/resource-monitor/controller';
@@ -60,6 +61,7 @@ export const rpcRouter = createRPCRouter({
   projectSetup: projectSetupController,
   projects: projectController,
   previewServers: previewServersController,
+  providerUsage: providerUsageController,
   tasks: taskController,
   conversations: conversationController,
   terminals: terminalsController,

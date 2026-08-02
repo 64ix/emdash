@@ -5,6 +5,7 @@ import { disposeAgentConfigRuntimeProcess } from '@main/core/agent-config/contro
 import { agentHookService } from '@main/core/agent-hooks/agent-hook-service';
 import { automationsService } from '@main/core/automations/automations-service';
 import { issuesSyncScheduler } from '@main/core/issues/inbound-sync/issues-sync-scheduler';
+import { disposeProviderUsageService } from '@main/core/provider-usage/service-instance';
 import { remoteTmuxReaperService } from '@main/core/pty/remote-tmux-reaper-service';
 import { prSyncScheduler } from '@main/core/pull-requests/pr-sync-scheduler';
 import { stopResourceSampler } from '@main/core/resource-monitor/resource-sampler';
@@ -52,6 +53,7 @@ export async function runQuitCleanup(): Promise<void> {
   boardSyncService.dispose();
   issuesSyncScheduler.dispose();
   remoteTmuxReaperService.dispose();
+  disposeProviderUsageService();
 
   // critical phase
   const criticalSteps: Array<[string, () => Promise<void>]> = [
