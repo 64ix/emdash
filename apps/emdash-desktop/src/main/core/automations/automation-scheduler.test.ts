@@ -5,7 +5,7 @@
  * DB-state tests (recovery, bootstrap self-healing, drain decisions, concurrency, events)
  * live in automation-scheduler.db.test.ts.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { log } from '@main/lib/logger';
 import type { Automation } from '@shared/core/automations/automation';
 import { AutomationScheduler, type SchedulerCallbacks } from './automation-scheduler';
@@ -58,6 +58,15 @@ beforeEach(() => {
   vi.mocked(ensureNextCronRun).mockResolvedValue(null);
   vi.mocked(updateRun).mockResolvedValue(null);
   vi.mocked(runQueuedAutomation).mockResolvedValue({ success: true, data: {} as never });
+});
+
+afterEach(() => {
+  // This file installs fake timers in every test via the beforeEach above
+  // and previously had no matching restore — the confirmed source of the
+  // cross-file fake-timer leak that motivated `tooling/vitest-restore-real-timers.ts`.
+  // The global setupFiles hook now backstops this, but restore locally too
+  // for defence in depth and to document the leak at its source.
+  vi.useRealTimers();
 });
 
 describe('AutomationScheduler bootstrap serialization', () => {
