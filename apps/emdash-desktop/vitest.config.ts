@@ -122,6 +122,12 @@ const toolingAlias = {
 export default defineConfig({
   resolve: { alias },
   test: {
+    // Applies to every project below via `extends: true`. See the file for
+    // why this is needed: Vitest's non-browser environments share a single
+    // global object across test files within a worker, so a file that
+    // installs fake timers and forgets to restore them can leak that state
+    // into whichever unrelated test file runs next.
+    setupFiles: ['./tooling/vitest-restore-real-timers.ts'],
     projects: [
       {
         // All existing tests that run in a Node.js environment.
