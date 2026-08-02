@@ -195,6 +195,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 
   // Interface
   {
+    id: 'claude-usage-gauge',
+    label: 'Claude usage gauge',
+    tab: 'interface',
+    description: 'Show local Claude account rate-limit usage in the left sidebar.',
+    keywords: ['quota', 'rate limit', 'sidebar'],
+  },
+  {
+    id: 'codex-usage-gauge',
+    label: 'Codex usage gauge',
+    tab: 'interface',
+    description: 'Show local Codex rate-limit usage in the left sidebar.',
+    keywords: ['quota', 'rate limit', 'sidebar'],
+  },
+  {
     id: 'color-mode',
     label: 'Color mode',
     tab: 'interface',

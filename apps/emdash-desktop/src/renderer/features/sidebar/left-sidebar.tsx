@@ -1,6 +1,7 @@
 import { Clock, FolderInput, Library, MessageSquareShare, Settings } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
+import { ProviderUsageGauges } from '@renderer/features/provider-usage/provider-usage-gauges';
 import { useWorkspaceLayoutContext } from '@renderer/lib/layout/layout-provider';
 import {
   isCurrentView,
@@ -67,6 +68,7 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
+          <ProviderUsageGauges />
           <SidebarMenu>
             <SidebarSearchTrigger />
             <SidebarMenuButton

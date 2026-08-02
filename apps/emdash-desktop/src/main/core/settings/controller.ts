@@ -1,6 +1,7 @@
 import { applyNativeTheme } from '@main/app/window';
 import { setBrowserCorsRelaxationSettings } from '@main/core/browser/browser-profile-session';
 import { browserWebContentsRegistry } from '@main/core/browser/browser-webcontents-registry';
+import { providerUsageService } from '@main/core/provider-usage/service-instance';
 import { reconcileResourceSampler } from '@main/core/resource-monitor/resource-sampler';
 import { createRPCController } from '@shared/lib/ipc/rpc';
 import { appSettingsService, type AppSettings, type AppSettingsKey } from './settings-service';
@@ -14,6 +15,13 @@ async function reconcileSettingsRuntimeState(key: AppSettingsKey): Promise<void>
   }
   if (key === 'browser') {
     setBrowserCorsRelaxationSettings(await appSettingsService.get('browser'));
+  }
+  if (key === 'interface') {
+    const settings = await appSettingsService.get('interface');
+    await Promise.all([
+      providerUsageService.setVisibility('claude', settings.showClaudeUsageGauge),
+      providerUsageService.setVisibility('codex', settings.showCodexUsageGauge),
+    ]);
   }
 }
 
