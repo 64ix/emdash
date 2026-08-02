@@ -39,9 +39,23 @@ describe('computeLinkSuggestions', () => {
       linkedIssueUrls: new Set(),
       dismissedIssueUrls: new Set(),
     });
-    expect(suggestions).toEqual([
-      { id: issue.url, role: 'spec', issue: remoteIssueToLinkedIssue(issue) },
-    ]);
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({
+      id: issue.url,
+      role: 'spec',
+      issue: {
+        provider: 'github',
+        identifier: '#1',
+        title: issue.title,
+        url: issue.url,
+        status: 'open',
+        updatedAt: issue.updatedAt,
+      },
+    });
+    // `remoteIssueToLinkedIssue` stamps `fetchedAt` with `new Date().toISOString()`
+    // at call time; asserting it exactly against a second, separately-computed
+    // call (as the previous `toEqual` did) can fail on a 1ms boundary under load.
+    expect(suggestions[0].issue.fetchedAt).toBeTruthy();
   });
 
   it('excludes a candidate with any Task Marker, even an unresolved one', () => {

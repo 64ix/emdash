@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserDiagnosticsStore } from './browser-diagnostics-store';
 import { browserSessionStore } from './browser-session-store';
 import { bindBrowserWebviewEvents } from './browser-webview-events';
@@ -64,6 +64,14 @@ describe('bindBrowserWebviewEvents', () => {
     vi.useRealTimers();
     browserDiagnosticsStore.clear();
     browserSessionStore.clear();
+  });
+
+  afterEach(() => {
+    // The last two tests in this file switch to fake timers. Vitest's `node`
+    // environment shares a single global timer implementation across test
+    // files in the same worker, so leaving fake timers installed here leaks
+    // into whichever test file runs next and makes it hang until timeout.
+    vi.useRealTimers();
   });
 
   it('updates browser session state from webview events', () => {
