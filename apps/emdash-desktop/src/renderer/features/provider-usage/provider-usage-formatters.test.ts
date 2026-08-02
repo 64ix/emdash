@@ -3,6 +3,7 @@ import type { ProviderUsageSnapshot } from '@shared/core/provider-usage';
 import {
   formatResetTime,
   formatUpdatedAge,
+  formatUsagePercent,
   getPrimaryUsageWindow,
   isUsageWarning,
 } from './provider-usage-formatters';
@@ -23,6 +24,12 @@ describe('provider usage formatters', () => {
   it('uses the context usage warning threshold', () => {
     expect(isUsageWarning(89.9)).toBe(false);
     expect(isUsageWarning(90)).toBe(true);
+  });
+
+  it('rounds and clamps displayed utilization', () => {
+    expect(formatUsagePercent(37.5)).toBe('38%');
+    expect(formatUsagePercent(-1)).toBe('0%');
+    expect(formatUsagePercent(101)).toBe('100%');
   });
 
   it('humanizes reset timestamps and stale ages', () => {

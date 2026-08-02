@@ -20,7 +20,7 @@ export class CodexUsageAdapter implements ProviderUsageAdapter {
 
   constructor(deps: CodexUsageAdapterDependencies = {}) {
     const env = deps.env ?? process.env;
-    const codexHome = env.CODEX_HOME?.trim() || join(deps.homeDir ?? homedir(), '.codex');
+    const codexHome = env.CODEX_HOME || join(deps.homeDir ?? homedir(), '.codex');
     this.sessionsDir = join(codexHome, 'sessions');
     this.maxFiles = deps.maxFiles ?? 5;
   }

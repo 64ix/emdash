@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { err, ok } from '@emdash/shared';
@@ -87,6 +88,7 @@ describe('ProviderUsageService provider normalization', () => {
         new ClaudeUsageAdapter({
           env: {},
           platform: 'darwin',
+          userName: 'test-user',
           readKeychain,
           readTextFile: vi.fn(async () => {
             throw new Error('file fallback must not run');
@@ -99,8 +101,64 @@ describe('ProviderUsageService provider normalization', () => {
     service.initialize({ claude: true, codex: true });
 
     const snapshots = await service.getSnapshots();
-    expect(readKeychain).toHaveBeenCalledWith('Claude Code-credentials');
+    expect(readKeychain).toHaveBeenCalledWith('Claude Code-credentials', 'test-user');
     expect(JSON.stringify(snapshots)).not.toContain('keychain-secret');
+  });
+
+  it('matches Claude Code keychain scoping and account validation', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'emdash-claude-keychain-'));
+    const readKeychain = vi.fn(async () =>
+      JSON.stringify({ claudeAiOauth: { accessToken: 'keychain-secret' } })
+    );
+    const adapter = new ClaudeUsageAdapter({
+      env: { CLAUDE_CONFIG_DIR: configDir, USER: 'invalid account' },
+      platform: 'darwin',
+      readKeychain,
+      readTextFile: vi.fn(async () => {
+        throw new Error('file fallback must not run');
+      }),
+      http: vi.fn(async () =>
+        Response.json({ five_hour: { utilization: 4, resets_at: null } })
+      ) as typeof fetch,
+      now: () => NOW,
+    });
+    const service = new ProviderUsageService({ adapters: [adapter] });
+    service.initialize({ claude: true, codex: true });
+
+    await service.getSnapshots();
+
+    expect(readKeychain).toHaveBeenCalledWith(
+      `Claude Code-credentials-${createHash('sha256')
+        .update(configDir.normalize('NFC'))
+        .digest('hex')
+        .slice(0, 8)}`,
+      'claude-code-user'
+    );
+  });
+
+  it('treats an empty CLAUDE_CONFIG_DIR as Claude Code does', async () => {
+    const readKeychain = vi.fn(async () =>
+      JSON.stringify({ claudeAiOauth: { accessToken: 'keychain-secret' } })
+    );
+    const service = new ProviderUsageService({
+      adapters: [
+        new ClaudeUsageAdapter({
+          env: { CLAUDE_CONFIG_DIR: '', USER: 'test-user' },
+          platform: 'darwin',
+          homeDir: '/home/test-user',
+          readKeychain,
+          http: vi.fn(async () =>
+            Response.json({ five_hour: { utilization: 4, resets_at: null } })
+          ) as typeof fetch,
+          now: () => NOW,
+        }),
+      ],
+    });
+    service.initialize({ claude: true, codex: true });
+
+    await service.getSnapshots();
+
+    expect(readKeychain).toHaveBeenCalledWith('Claude Code-credentials', 'test-user');
   });
 
   it.each([
@@ -112,6 +170,12 @@ describe('ProviderUsageService provider normalization', () => {
     {
       name: 'malformed payload',
       response: () => Response.json({ five_hour: { utilization: 'unknown' } }),
+      code: 'malformed-data',
+    },
+    {
+      name: 'invalid reset timestamp',
+      response: () =>
+        Response.json({ five_hour: { utilization: 12, resets_at: 'not-a-timestamp' } }),
       code: 'malformed-data',
     },
   ])('surfaces a Claude $name as snapshot state', async ({ response, code }) => {
@@ -176,6 +240,33 @@ describe('ProviderUsageService provider normalization', () => {
         ],
       },
     ]);
+  });
+
+  it('bounds the number of recent Codex session files read', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'emdash-codex-bounded-'));
+    const dayDir = join(codexHome, 'sessions', '2026', '08', '02');
+    await mkdir(dayDir, { recursive: true });
+    const oldUsable = join(dayDir, 'rollout-old-usable.jsonl');
+    await writeFile(oldUsable, tokenCountEvent('2026-08-02T08:00:00.000Z', 12, 22));
+    await utimes(oldUsable, new Date(1_000), new Date(1_000));
+    for (let index = 0; index < 6; index += 1) {
+      const path = join(dayDir, `rollout-new-unusable-${index}.jsonl`);
+      await writeFile(
+        path,
+        JSON.stringify({ type: 'event_msg', payload: { type: 'token_count' } })
+      );
+      await utimes(path, new Date(2_000 + index), new Date(2_000 + index));
+    }
+    const service = new ProviderUsageService({
+      adapters: [new CodexUsageAdapter({ env: { CODEX_HOME: codexHome }, maxFiles: 5 })],
+      now: () => NOW.getTime(),
+    });
+    service.initialize({ claude: true, codex: true });
+
+    const [snapshot] = await service.getSnapshots();
+
+    expect(snapshot.windows).toEqual([]);
+    expect(snapshot.error?.code).toBe('unreadable-data');
   });
 
   it('silently omits providers whose local source is absent', async () => {
@@ -254,6 +345,26 @@ describe('ProviderUsageService activity-aware polling', () => {
     expect(snapshot.windows[0].utilization).toBe(30);
     expect(snapshot.lastUpdated).toBe(NOW.toISOString());
     expect(snapshot.error?.code).toBe('network');
+  });
+
+  it('stops polling a provider immediately when its gauge is hidden', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const read = vi.fn(async () =>
+      ok({ provider: 'claude' as const, windows: [], lastUpdated: new Date().toISOString() })
+    );
+    const service = new ProviderUsageService({
+      adapters: [{ provider: 'claude', isAvailable: async () => true, read }],
+      pollIntervalMs: 30 * 60_000,
+    });
+    service.initialize({ claude: true, codex: true });
+
+    await service.recordActivity('claude');
+    await service.setVisibility('claude', false);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+
+    expect(read).toHaveBeenCalledTimes(1);
+    service.dispose();
   });
 });
 

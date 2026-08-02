@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { err, ok, type Result } from '@emdash/shared';
@@ -16,7 +16,8 @@ export type ClaudeUsageAdapterDependencies = {
   platform?: NodeJS.Platform;
   homeDir?: string;
   readTextFile?: (path: string) => Promise<string>;
-  readKeychain?: (service: string) => Promise<string | null>;
+  userName?: string;
+  readKeychain?: (service: string, account: string) => Promise<string | null>;
   http?: typeof fetch;
   now?: () => Date;
 };
@@ -29,8 +30,9 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
   private readonly env: ClaudeEnvironment;
   private readonly platform: NodeJS.Platform;
   private readonly homeDir: string;
+  private readonly userName: string;
   private readonly readTextFile: (path: string) => Promise<string>;
-  private readonly readKeychain: (service: string) => Promise<string | null>;
+  private readonly readKeychain: (service: string, account: string) => Promise<string | null>;
   private readonly http: typeof fetch;
   private readonly now: () => Date;
 
@@ -38,6 +40,7 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
     this.env = deps.env ?? process.env;
     this.platform = deps.platform ?? process.platform;
     this.homeDir = deps.homeDir ?? homedir();
+    this.userName = deps.userName ?? userInfo().username;
     this.readTextFile = deps.readTextFile ?? ((path) => readFile(path, 'utf8'));
     this.readKeychain = deps.readKeychain ?? readMacOsKeychain;
     this.http = deps.http ?? fetch;
@@ -91,16 +94,17 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
   }
 
   private configDir(): string {
-    return this.env.CLAUDE_CONFIG_DIR?.trim() || join(this.homeDir, '.claude');
+    return this.env.CLAUDE_CONFIG_DIR || join(this.homeDir, '.claude');
   }
 
   private async resolveAccessToken(): Promise<string | null> {
     if (this.platform === 'darwin') {
-      for (const service of claudeKeychainServices(this.env, this.configDir())) {
-        const raw = await this.readKeychain(service).catch(() => null);
-        const token = parseAccessToken(raw);
-        if (token) return token;
-      }
+      const raw = await this.readKeychain(
+        claudeKeychainService(this.env, this.configDir()),
+        claudeKeychainAccount(this.env, this.userName)
+      ).catch(() => null);
+      const token = parseAccessToken(raw);
+      if (token) return token;
     }
 
     const raw = await this.readTextFile(join(this.configDir(), '.credentials.json')).catch(
@@ -110,11 +114,11 @@ export class ClaudeUsageAdapter implements ProviderUsageAdapter {
   }
 }
 
-async function readMacOsKeychain(service: string): Promise<string | null> {
+async function readMacOsKeychain(service: string, account: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(
       'security',
-      ['find-generic-password', '-s', service, '-w'],
+      ['find-generic-password', '-a', account, '-w', '-s', service],
       { timeout: 5_000 }
     );
     return stdout.trim() || null;
@@ -123,12 +127,15 @@ async function readMacOsKeychain(service: string): Promise<string | null> {
   }
 }
 
-function claudeKeychainServices(env: ClaudeEnvironment, configDir: string): string[] {
-  if (env.CLAUDE_CONFIG_DIR !== undefined) {
-    const scope = createHash('sha256').update(configDir).digest('hex').slice(0, 8);
-    return [`Claude Code-credentials-${scope}`];
-  }
-  return ['Claude Code-credentials', 'Claude Code'];
+function claudeKeychainService(env: ClaudeEnvironment, configDir: string): string {
+  if (!env.CLAUDE_CONFIG_DIR) return 'Claude Code-credentials';
+  const scope = createHash('sha256').update(configDir.normalize('NFC')).digest('hex').slice(0, 8);
+  return `Claude Code-credentials-${scope}`;
+}
+
+function claudeKeychainAccount(env: ClaudeEnvironment, fallbackUserName: string): string {
+  const account = env.USER || fallbackUserName;
+  return /^[a-zA-Z0-9._-]+$/.test(account) ? account : 'claude-code-user';
 }
 
 function parseAccessToken(raw: string | null): string | null {
@@ -154,7 +161,12 @@ function parseClaudeWindows(payload: unknown): ProviderUsageSnapshot['windows'] 
     const value = payload[id];
     if (value === null || value === undefined) continue;
     if (!isRecord(value) || !Number.isFinite(value.utilization)) return null;
-    if (value.resets_at !== null && typeof value.resets_at !== 'string') return null;
+    if (
+      value.resets_at !== null &&
+      (typeof value.resets_at !== 'string' || !Number.isFinite(Date.parse(value.resets_at)))
+    ) {
+      return null;
+    }
     windows.push({
       id,
       label,

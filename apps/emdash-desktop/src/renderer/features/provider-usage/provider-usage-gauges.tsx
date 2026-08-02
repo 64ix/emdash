@@ -71,7 +71,7 @@ function ProviderUsageGauge({
         className="group focus-visible:ring-accent flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-foreground-muted outline-none hover:bg-background-quaternary focus-visible:ring-1"
         aria-label={`${PROVIDER_LABELS[snapshot.provider]} usage: ${percent}`}
       >
-        {snapshot.error && !primary ? (
+        {snapshot.error ? (
           <AlertCircle className="size-3.5 shrink-0 text-foreground-warning" />
         ) : (
           <Gauge
@@ -91,7 +91,7 @@ function ProviderUsageGauge({
                 'block h-full rounded-full transition-[width] duration-300',
                 warning ? 'bg-foreground-warning' : 'bg-foreground'
               )}
-              style={{ width: `${Math.max(2, primary.utilization)}%` }}
+              style={{ width: `${Math.max(0, Math.min(100, primary.utilization))}%` }}
             />
           )}
         </span>

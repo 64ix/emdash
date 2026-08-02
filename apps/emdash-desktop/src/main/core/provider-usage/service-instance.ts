@@ -4,6 +4,7 @@ import { events } from '@main/lib/events';
 import { providerUsageUpdatedChannel } from '@shared/events/providerUsageEvents';
 import { ClaudeUsageAdapter } from './claude-adapter';
 import { CodexUsageAdapter } from './codex-adapter';
+import { isLocalProviderUsageTask } from './provider-usage-activity';
 import { ProviderUsageService } from './provider-usage-service';
 
 let unsubscribeActivity: (() => void) | null = null;
@@ -22,7 +23,12 @@ export async function initializeProviderUsageService(): Promise<void> {
   unsubscribeActivity?.();
   unsubscribeActivity = agentHookService.on('agent:event', (event) => {
     if (event.type === 'start' && (event.providerId === 'claude' || event.providerId === 'codex')) {
-      void providerUsageService.recordActivity(event.providerId);
+      const provider = event.providerId;
+      void isLocalProviderUsageTask(event.taskId)
+        .then((isLocal) => {
+          if (isLocal) void providerUsageService.recordActivity(provider);
+        })
+        .catch(() => undefined);
     }
   });
 }
