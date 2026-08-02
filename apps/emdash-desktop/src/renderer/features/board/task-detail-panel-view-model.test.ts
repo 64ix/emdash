@@ -194,6 +194,52 @@ describe('deriveStageSection', () => {
     expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
     expect(section.explanation).toBeNull();
   });
+
+  // `exploring`/`spec` are GitHub-provable stages (CONTEXT.md "Workflow Stage",
+  // docs/adr/0003) the PR-only `tasks.getTaskStageAuthority` RPC can't speak to.
+  // Since they are never offered as a manual choice (DECLARATIVE_WORKFLOW_STAGES
+  // excludes them), a persisted `exploring`/`spec` stage can only have come from
+  // the issue-derived sync pass — the selector must lock using that same link
+  // rather than let a manual write silently and permanently outrank the fact.
+  it('is locked, naming the linked Map issue, when the stage is GitHub-proven by Exploring', () => {
+    const map = makeIssue({ identifier: '#55', title: 'Map issue', url: 'https://x/issues/55' });
+    const declarativeAuthority: TaskStageAuthority = {
+      holdingPr: null,
+      isCurrentStageGithubProven: false,
+    };
+
+    const section = deriveStageSection('exploring', declarativeAuthority, {
+      version: '1',
+      map,
+    });
+
+    expect(section.locked).toBe(true);
+    expect(section.options).toEqual([]);
+    expect(section.explanation).toContain('Exploring');
+    expect(section.explanation).toContain('#55');
+    expect(section.explanationLink).toEqual({ url: 'https://x/issues/55', label: '#55' });
+  });
+
+  it('is locked, naming the linked Spec issue, when the stage is GitHub-proven by Spec', () => {
+    const spec = makeIssue({ identifier: '#56', title: 'Spec issue', url: 'https://x/issues/56' });
+
+    const section = deriveStageSection('spec', undefined, { version: '1', spec });
+
+    expect(section.locked).toBe(true);
+    expect(section.explanation).toContain('Spec');
+    expect(section.explanation).toContain('#56');
+    expect(section.explanationLink).toEqual({ url: 'https://x/issues/56', label: '#56' });
+  });
+
+  it('falls back to unlocked/declarative for exploring/spec when the matching link is missing', () => {
+    // Defensive only — this combination should not occur in practice (the stage
+    // can't be set without the corresponding link), but must never crash or
+    // silently offer an unexplained lock.
+    const section = deriveStageSection('exploring', undefined, { version: '1' });
+
+    expect(section.locked).toBe(false);
+    expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
+  });
 });
 
 describe('deriveGhostDetailViewModel', () => {
@@ -261,5 +307,26 @@ describe('buildTaskDetailPanelViewModel', () => {
     expect(vm.pr).toEqual(pr);
     expect(vm.stage.locked).toBe(true);
     expect(vm.links).toEqual([{ role: 'spec', issue: spec }]);
+  });
+
+  it('locks the stage selector for a task sitting in Spec with no PR yet (issue-derived authority)', () => {
+    const spec = makeIssue({ identifier: '#30', title: 'Spec issue' });
+    const task = makeTask({
+      workflowStage: 'spec',
+      linkedIssues: { version: '1', spec },
+    });
+
+    const vm = buildTaskDetailPanelViewModel({
+      task,
+      branchName: null,
+      sessionCounts: {},
+      agentStatus: null,
+      stageAuthority: { holdingPr: null, isCurrentStageGithubProven: false },
+    });
+
+    expect(vm.pr).toBeNull();
+    expect(vm.stage.locked).toBe(true);
+    expect(vm.stage.explanation).toContain('#30');
+    expect(vm.stage.options).toEqual([]);
   });
 });

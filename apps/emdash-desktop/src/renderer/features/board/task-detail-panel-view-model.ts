@@ -110,10 +110,35 @@ function stageAuthorityExplanation(pr: StageHoldingPr): string {
   }
 }
 
-/** Not yet loaded (`undefined`) reads the same as "no authority fact" — declarative, unlocked. */
+function issueLabel(issue: LinkedIssue): string {
+  return issue.identifier || issue.title;
+}
+
+/** `exploring`/`spec` explanation text using the linked Map/Spec issue itself as the fact. */
+function issueStageAuthorityExplanation(stage: 'exploring' | 'spec', issue: LinkedIssue): string {
+  return stage === 'exploring'
+    ? `Held in Exploring by its linked Map issue: ${issueLabel(issue)}.`
+    : `Held in Spec by its linked Spec issue: ${issueLabel(issue)}.`;
+}
+
+/**
+ * Not yet loaded (`undefined` authority) reads the same as "no PR authority fact" —
+ * declarative, unlocked, *unless* `currentStage` is itself `exploring`/`spec`.
+ *
+ * `exploring` and `spec` are GitHub-provable stages (CONTEXT.md "Workflow Stage",
+ * docs/adr/0003) the `tasks.getTaskStageAuthority` RPC doesn't speak to — it only
+ * derives the PR-provable half. But `DECLARATIVE_WORKFLOW_STAGES` never offers
+ * `exploring`/`spec` as a manual choice, so the *only* way a task's persisted
+ * stage is currently `exploring`/`spec` is the issue-derived sync pass having put
+ * it there — the linked Map/Spec issue is the same fact that pass would use.
+ * Lock the selector using that link instead of silently allowing a manual write
+ * (e.g. straight to `implementing`) that pass could never self-correct, since the
+ * issue-derived stage only ever *advances* rank, never re-asserts an outranked one.
+ */
 export function deriveStageSection(
   currentStage: WorkflowStage | null,
-  authority: TaskStageAuthority | null | undefined
+  authority: TaskStageAuthority | null | undefined,
+  linkedIssues?: LinkedIssueRoles | null
 ): TaskDetailPanelStage {
   const holdingPr = authority?.holdingPr ?? null;
   if (authority?.isCurrentStageGithubProven && holdingPr) {
@@ -124,6 +149,19 @@ export function deriveStageSection(
       explanation: stageAuthorityExplanation(holdingPr),
       explanationLink: { url: holdingPr.url, label: prLabel(holdingPr) },
     };
+  }
+
+  if (currentStage === 'exploring' || currentStage === 'spec') {
+    const holdingIssue = currentStage === 'exploring' ? linkedIssues?.map : linkedIssues?.spec;
+    if (holdingIssue) {
+      return {
+        current: currentStage,
+        locked: true,
+        options: [],
+        explanation: issueStageAuthorityExplanation(currentStage, holdingIssue),
+        explanationLink: { url: holdingIssue.url, label: issueLabel(holdingIssue) },
+      };
+    }
   }
 
   return {
@@ -180,6 +218,10 @@ export function buildTaskDetailPanelViewModel(input: {
     }),
     links: deriveLinkedIssueSections(input.task.linkedIssues),
     pr: input.stageAuthority?.holdingPr ?? null,
-    stage: deriveStageSection(input.task.workflowStage ?? null, input.stageAuthority),
+    stage: deriveStageSection(
+      input.task.workflowStage ?? null,
+      input.stageAuthority,
+      input.task.linkedIssues
+    ),
   };
 }

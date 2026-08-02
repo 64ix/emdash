@@ -630,4 +630,32 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
 
     expect(a.updateBoardPosition).toHaveBeenCalledWith('implementing', null);
   });
+
+  // exploring/spec are GitHub-provable stages the PR-only stage-authority RPC
+  // doesn't cover; since a task can only reach either through the issue-derived
+  // sync pass (never a manual choice — see DECLARATIVE_WORKFLOW_STAGES), the
+  // panel must lock the selector using the linked Map/Spec issue itself rather
+  // than let a manual write silently and permanently override the stage.
+  it('locks the selector and names the linked Spec issue for a task sitting in Spec', async () => {
+    const linkedIssues: LinkedIssueRoles = {
+      version: '1',
+      spec: {
+        provider: 'github',
+        url: 'https://github.com/acme/repo/issues/42',
+        title: 'Spec issue',
+        identifier: '#42',
+      },
+    };
+    const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(stageSelect().disabled).toBe(true);
+    expect(panelText()).toContain('Spec');
+    expect(panelText()).toContain('#42');
+  });
 });
