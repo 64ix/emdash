@@ -200,6 +200,12 @@ export default defineConfig({
             instances: [{ browser: 'chromium' }],
           },
           include: ['src/renderer/tests/browser/**/*.test.{ts,tsx}'],
+          // Each file spins up its own real Chromium instance. Running them
+          // concurrently makes the xterm-backed suites (real render + resize
+          // timing) prone to spurious timeouts under CPU contention. These
+          // files are few and each is fast in isolation, so trade a little
+          // wall-clock time for determinism.
+          fileParallelism: false,
         },
       },
     ],
