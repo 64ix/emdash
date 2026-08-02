@@ -1687,6 +1687,7 @@ export function ChatRoot(props: ChatRootProps) {
   });
 
   const turnStatus = () => state().transcript.state.turnStatus;
+  const isStopPending = () => state().session.state.stopPending;
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -1694,7 +1695,7 @@ export function ChatRoot(props: ChatRootProps) {
       <ThemeContext.Provider value={theme}>
         <CachesContext.Provider value={caches()}>
           <CommandsContext.Provider value={commands}>
-            <TurnStateContext.Provider value={{ currentMessageId, turnStatus }}>
+            <TurnStateContext.Provider value={{ currentMessageId, turnStatus, isStopPending }}>
               <div
                 ref={(el) => {
                   outerEl = el;

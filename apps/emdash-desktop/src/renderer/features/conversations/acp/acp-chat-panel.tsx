@@ -857,6 +857,11 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
       },
       resolveAttachment: (attachment) =>
         store ? resolveAttachmentDataUrl(store, attachment.id) : Promise.resolve(null),
+      onStop: () => {
+        // Same ACP cancellation path as the composer's Stop button — see
+        // handleStop above and AcpChatStore.stop().
+        store?.stop();
+      },
       onViewMermaid: (arg) => {
         setMermaidViewer({
           svg: store?.chatContext.sharedCaches.renderMermaid(arg.chart) ?? null,

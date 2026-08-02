@@ -32,16 +32,13 @@
  * conversationId in AcpChatPanel) — this assumption is intentional.
  */
 
-import { createMemo, createRoot, createSignal } from 'solid-js';
+import { createRoot, createSignal } from 'solid-js';
 import type { ChatContext } from '../chat-context';
 import { createParseCaches } from '../core/caches';
 import type { ParseCaches } from '../core/caches';
-import type {
-  AcpPermissionRequest,
-  ChatImageAttachment,
-  PlanState,
-  TranscriptTurn,
-} from '../model';
+import type { AcpPermissionRequest, PlanState, TranscriptTurn } from '../model';
+import { createSessionState } from './session-state';
+import type { ChatSessionState } from './session-state';
 import { createTranscript } from './transcript';
 import type { TranscriptApi } from './transcript';
 import { createViewState } from './view-state';
@@ -49,8 +46,12 @@ import type { ViewState } from './view-state';
 export type { ScrollMode } from './scroll-mode';
 export { tailMode, pinTopMode } from './scroll-mode';
 
-// ScrollMode type and helpers live in scroll-mode.ts (re-exported above)
-// so unit tests can import them without pulling in DOM-dependent parse caches.
+// Session state (ChatSessionState/ChatSessionSnapshot/PendingPrompt +
+// createSessionState) lives in session-state.ts — re-exported here — and
+// ScrollMode lives in scroll-mode.ts — so unit tests can import them without
+// pulling in the DOM-dependent parse caches this module also imports.
+export { createSessionState } from './session-state';
+export type { ChatSessionState, ChatSessionSnapshot, PendingPrompt } from './session-state';
 import type { ScrollMode } from './scroll-mode';
 
 /**
@@ -72,29 +73,6 @@ export type HeightmapStore = {
   setAll(entries: Iterable<[unitId: string, height: number]>): void;
   /** The container width when the most recent snapshot was taken. 0 = not set. */
   lastWidth: number;
-};
-
-export type ChatSessionState = {
-  readonly state: ChatSessionSnapshot;
-  setPermissions(permissions: readonly AcpPermissionRequest[]): void;
-  setPlan(plan: PlanState | null): void;
-  setPendingPrompt(prompt: PendingPrompt | null): void;
-  setTerminalOutput(terminalId: string, text: string | null): void;
-  setTerminalOutputs(outputs: ReadonlyMap<string, string>): void;
-};
-
-export type ChatSessionSnapshot = {
-  readonly permissions: readonly AcpPermissionRequest[];
-  readonly plan: PlanState | null;
-  readonly pendingToolCallIds: Set<string>;
-  readonly pendingPrompt: PendingPrompt | null;
-  terminalOutputText(terminalId: string): string | null;
-};
-
-export type PendingPrompt = {
-  id: string;
-  text: string;
-  attachments?: ChatImageAttachment[];
 };
 
 type LiveReadable<T> = {
@@ -255,59 +233,6 @@ export function createChatState(ctx: ChatContext, opts?: ChatStateOptions): Chat
       parseCaches.clearAll();
       disposeRoot();
     },
-  };
-}
-
-function createSessionState(): ChatSessionState {
-  const [permissions, setPermissions] = createSignal<readonly AcpPermissionRequest[]>([]);
-  const [plan, setPlan] = createSignal<PlanState | null>(null);
-  const [pendingPrompt, setPendingPrompt] = createSignal<PendingPrompt | null>(null);
-  const [terminalOutputs, setTerminalOutputs] = createSignal<ReadonlyMap<string, string>>(
-    new Map()
-  );
-  const pendingToolCallIds = createMemo(() => {
-    const ids = new Set<string>();
-    for (const request of permissions()) {
-      ids.add(request.toolCall.toolCallId);
-    }
-    return ids;
-  });
-
-  const state: ChatSessionSnapshot = {
-    get permissions() {
-      return permissions();
-    },
-    get plan() {
-      return plan();
-    },
-    get pendingToolCallIds() {
-      return pendingToolCallIds();
-    },
-    get pendingPrompt() {
-      return pendingPrompt();
-    },
-    terminalOutputText(terminalId) {
-      return terminalOutputs().get(terminalId) ?? null;
-    },
-  };
-
-  return {
-    state,
-    setPermissions: (next) => setPermissions([...next]),
-    setPlan,
-    setPendingPrompt,
-    setTerminalOutput(terminalId, text) {
-      setTerminalOutputs((previous) => {
-        const next = new Map(previous);
-        if (text === null) {
-          next.delete(terminalId);
-        } else {
-          next.set(terminalId, text);
-        }
-        return next;
-      });
-    },
-    setTerminalOutputs: (next) => setTerminalOutputs(new Map(next)),
   };
 }
 
