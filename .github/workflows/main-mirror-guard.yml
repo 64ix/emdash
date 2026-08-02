@@ -1,0 +1,62 @@
+name: Main Mirror Guard
+
+# `main` must stay a pristine mirror of `upstream/main` (see FORK.md "Branch model").
+# All fork work targets `fork-main`. This guard exists because a PR merged onto `main`
+# by mistake is otherwise invisible: the feature silently never reaches the branch the
+# app is built from, and the weekly Upstream Sync's `git merge --ff-only` starts failing.
+#
+# Real incident this prevents: PR #13 ([Spec #11] Auto-generated Conversation Titles)
+# was merged to `main` instead of `fork-main`. The feature looked "merged" but was
+# absent from every build for a day, and nobody noticed until the behaviour was
+# reported missing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  verify-pristine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Verify main carries no fork commits
+        id: check
+        run: |
+          git remote add upstream https://github.com/generalaction/emdash.git
+          git fetch --no-tags --quiet upstream main
+          STRAY="$(git log --oneline upstream/main..HEAD)"
+          if [ -n "$STRAY" ]; then
+            {
+              echo "stray<<EOF"
+              echo "$STRAY"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "::error title=main is not a pristine mirror of upstream/main::Commits below exist on main but not upstream. Fork work belongs on fork-main."
+            printf '%s\n' "$STRAY"
+            exit 1
+          fi
+          echo "main is a pristine mirror of upstream/main."
+
+      - name: Open issue on drift
+        if: failure() && steps.check.outputs.stray != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STRAY: ${{ steps.check.outputs.stray }}
+        run: |
+          TITLE="main is not a pristine mirror of upstream/main"
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          BODY=$(printf 'These commits are on `main` but not on `upstream/main`:\n\n```\n%s\n```\n\n`main` must stay a pristine mirror of `upstream/main` (FORK.md). Fork work belongs on `fork-main`.\n\n**This also breaks Upstream Sync**, whose `git merge --ff-only upstream/main` cannot fast-forward past these commits.\n\nRemediation — land the work on `fork-main` first, then restore the mirror:\n\n```bash\ngit fetch origin && git fetch upstream\ngit checkout fork-main\ngit cherry-pick -x <sha>          # for each stray commit\ngit push origin fork-main\n# only once the content is safely on fork-main:\ngit push --force-with-lease=main:<current-main-sha> origin upstream/main:main\n```\n' "$STRAY")
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi

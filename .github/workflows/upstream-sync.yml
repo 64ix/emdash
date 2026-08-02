@@ -22,6 +22,14 @@ jobs:
         run: |
           git remote add upstream https://github.com/generalaction/emdash.git
           git fetch upstream main
+          # `main` must be a pristine mirror of upstream (FORK.md). A fork commit here
+          # makes the fast-forward below fail with an opaque error, so diagnose it first.
+          STRAY="$(git log --oneline upstream/main..HEAD)"
+          if [ -n "$STRAY" ]; then
+            echo "::error title=main is not a pristine mirror of upstream/main::Cannot fast-forward. Commits below are on main but not upstream — they belong on fork-main. See .github/workflows/main-mirror-guard.yml for remediation."
+            printf '%s\n' "$STRAY"
+            exit 1
+          fi
           git merge --ff-only upstream/main
           git push origin main
 

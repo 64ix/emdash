@@ -11,6 +11,34 @@ spec = one PR onto `fork-main`.
 - `fork-main` — default working branch: `main` + our commits. Rebase onto upstream
   release tags (`git fetch upstream --tags && git rebase <tag>`).
 
+> [!WARNING]
+> **Every fork PR must target `fork-main`.** Merging onto `main` is a silent failure
+> mode, not a loud one — nothing errors. The PR shows as merged, but the code never
+> reaches the branch the app is built from, so the feature is simply absent at runtime,
+> and the weekly Upstream Sync's `git merge --ff-only upstream/main` starts failing
+> because `main` can no longer fast-forward.
+>
+> Before opening a PR, check the base:
+>
+> ```bash
+> gh pr create --base fork-main   # never rely on the default
+> gh pr view <n> --json baseRefName -q .baseRefName   # must print: fork-main
+> ```
+>
+> After merging anything, confirm it actually landed:
+>
+> ```bash
+> git fetch origin && git log --oneline origin/main..origin/fork-main | head
+> git log --oneline origin/fork-main..origin/main   # MUST be empty
+> ```
+>
+> `.github/workflows/main-mirror-guard.yml` enforces this on every push to `main`.
+> If it fires, the issue it opens carries the remediation commands.
+>
+> **Happened once:** PR #13 ([Spec #11] Auto-generated Conversation Titles) was merged
+> to `main`. The feature was missing from every build for a day with no error anywhere;
+> the fix was a cherry-pick onto `fork-main` plus restoring `main` to the upstream sha.
+
 ## Automation
 
 - `.github/workflows/fork-ci.yml` — typecheck + lint + tests on push/PR to `fork-main`.

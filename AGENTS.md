@@ -458,7 +458,26 @@ Single-context layout: one root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/
 
 Base branch **`fork-main`** — not `main`. `origin/HEAD` points at `main`, but that
 branch is a pristine mirror of `upstream/main` (see `FORK.md`); all fork work and
-PRs target `fork-main`. Validate a change from the worktree root with:
+PRs target `fork-main`.
+
+> [!WARNING]
+> **Always pass the base explicitly and verify it after merge.** Merging a fork PR
+> onto `main` fails silently — the PR reads as merged, but the code never reaches the
+> branch the app is built from, so the feature is absent at runtime with no error
+> anywhere, and the weekly Upstream Sync breaks because `main` can no longer
+> fast-forward from upstream.
+>
+> ```bash
+> gh pr create --base fork-main ...                    # never rely on the default
+> gh pr view <n> --json baseRefName -q .baseRefName    # must print: fork-main
+> git fetch origin && git log --oneline origin/fork-main..origin/main   # MUST be empty
+> ```
+>
+> Enforced by `.github/workflows/main-mirror-guard.yml` on every push to `main`.
+> **Happened once:** PR #13 ([Spec #11] Auto-generated Conversation Titles) landed on
+> `main`; the feature was missing from every build for a day before anyone noticed.
+
+Validate a change from the worktree root with:
 
 ```bash
 pnpm install --frozen-lockfile

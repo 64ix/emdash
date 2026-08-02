@@ -18,6 +18,29 @@ sub-section of `AGENTS.md`. Facts the runner cannot infer from git alone:
 - **Base branch is `fork-main`, not `main`.** `origin/HEAD` points at `main`,
   which is a pristine mirror of `upstream/main` and must never receive commits
   (see `FORK.md`). Cut branches from and open PRs onto `fork-main`.
+
+  > [!WARNING]
+  > This rule was already documented here when PR #13 ([Spec #11] Auto-generated
+  > Conversation Titles) was still merged onto `main` — so **stating the rule is not
+  > enough; the runner must verify it.** The failure is silent: nothing errors, the PR
+  > reads as merged, and the feature is simply absent from every build.
+  >
+  > Two checks the runner owes on every spec:
+  >
+  > ```bash
+  > # 1. Before opening the PR — pass the base explicitly, then read it back.
+  > gh pr create --base fork-main ...
+  > gh pr view <n> --json baseRefName -q .baseRefName     # must print: fork-main
+  >
+  > # 2. After the PR merges — prove the content reached the working branch.
+  > git fetch origin
+  > git log --oneline origin/fork-main..origin/main       # MUST be empty
+  > ```
+  >
+  > Never repair this by force-pushing `main` first: cherry-pick the commit onto
+  > `fork-main` and push that, and only then restore `main` to the upstream sha —
+  > otherwise the only copy of the work is destroyed.
+  > `.github/workflows/main-mirror-guard.yml` catches it on every push to `main`.
 - **Test command (the gate):** from a fresh worktree, install and build the
   workspace packages first, then run from `apps/emdash-desktop`:
   `pnpm typecheck`, `pnpm exec oxlint .`, and
