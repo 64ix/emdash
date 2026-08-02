@@ -56,6 +56,7 @@ export function defaultHookEventParser(
       kind: 'status',
       type: eventType,
       lastAssistantMessage: typeof rawLam === 'string' ? rawLam : undefined,
+      prompt: typeof body.prompt === 'string' ? body.prompt : undefined,
       title: typeof body.title === 'string' ? body.title : undefined,
       message: typeof body.message === 'string' ? body.message : undefined,
     };

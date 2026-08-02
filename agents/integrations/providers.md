@@ -29,6 +29,18 @@ installed by `src/main/core/agent-hooks/`. Emdash does not infer agent status fr
 output. If a provider has no hook/plugin integration for an event, the renderer should not show
 or notify an inferred status for that event.
 
+## Conversation Title Capture
+
+PTY providers can expose the user's typed prompt for automatic Conversation Titles through an
+explicit prompt-submit hook. The provider hook must pipe the CLI's stdin JSON payload unchanged to
+the Emdash hook server with the canonical `start` event type. Its `parseHookEvent` implementation
+must then preserve the payload's string `prompt` field on the canonical `status`/`start` event.
+
+Claude Code and Codex are the reference implementations. Both install a `UserPromptSubmit` hook
+that forwards stdin with `makeStdinHookCommand('start')`, and both rely on the canonical parser to
+carry `prompt`. Providers without an observable prompt-submit hook keep the default Conversation
+Title; do not scrape PTY output as a fallback.
+
 ## Provider Runtime Notes
 
 - Claude uses deterministic `--session-id` values for conversation isolation.

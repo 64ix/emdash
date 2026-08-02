@@ -1,3 +1,4 @@
+import { asAgentProviderId } from '@emdash/plugins/agents';
 import { describe, expect, it } from 'vitest';
 import {
   formatConversationTitleForDisplay,
@@ -41,5 +42,14 @@ describe('nextDefaultConversationTitle', () => {
 
   it('leaves custom conversation titles unchanged', () => {
     expect(formatConversationTitleForDisplay('codex', 'release-triage')).toBe('release-triage');
+  });
+
+  it('parses provider IDs with regular-expression characters consistently', () => {
+    const providerId = asAgentProviderId('c++');
+
+    expect(formatConversationTitleForDisplay(providerId, 'c++ (2)')).toBe('C++ (2)');
+    expect(nextDefaultConversationTitle(providerId, [{ providerId, title: 'c++ (1)' }])).toBe(
+      'C++ (2)'
+    );
   });
 });

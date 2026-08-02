@@ -69,6 +69,7 @@ function canonicalToAgentEvent(
       title: canonical.title,
       message: canonical.message,
       lastAssistantMessage: canonical.lastAssistantMessage,
+      prompt: canonical.prompt,
     },
   };
 }
