@@ -65,6 +65,7 @@ import { flattenTier, makeUnitsView, collectUserTurnUnits } from './state/flatte
 import type { UnitsView } from './state/flatten';
 import type { LayoutSnapshot, PinSnapshot } from './state/geometry';
 import { samePin, sameRange } from './state/geometry';
+import { captureLoadOlderAnchor, resolveLoadOlderAnchor } from './state/load-older-anchor';
 import {
   canvas,
   composerSlotAnimatingClass,
@@ -1406,9 +1407,9 @@ export function ChatRoot(props: ChatRootProps) {
     const t = theme();
     const prependedUnits = flattenTier(turns, segmentCtx(false), SEGMENTERS, UNIT_REGISTRY);
 
-    const anchorUnitIdx = virt.findIndex(Math.max(0, el.scrollTop - padTop()));
-    const anchorId = units().at(anchorUnitIdx)?.itemId;
-    const anchorOffset = el.scrollTop - (virt.top(anchorUnitIdx) + padTop());
+    // Capture which unit + sub-row offset is visible *before* the prepend
+    // shifts every existing unit to a higher index. See state/load-older-anchor.ts.
+    const anchor = captureLoadOlderAnchor(el.scrollTop, padTop(), units(), virt);
 
     const loadEstimateCtx: MeasureCtx = {
       theme: t,
@@ -1431,19 +1432,9 @@ export function ChatRoot(props: ChatRootProps) {
     state().transcript.history.prepend(turns);
     refreshTotal();
 
-    if (anchorId !== undefined) {
-      const newUs = units();
-      let newUnitIdx = -1;
-      for (let i = 0; i < newUs.length; i++) {
-        if (newUs.at(i)?.itemId === anchorId) {
-          newUnitIdx = i;
-          break;
-        }
-      }
-      if (newUnitIdx >= 0) {
-        const newTop = virt.top(newUnitIdx) + padTop() + anchorOffset;
-        writeScrollTop(newTop);
-      }
+    if (anchor) {
+      const newTop = resolveLoadOlderAnchor(anchor, padTop(), units(), virt);
+      if (newTop !== undefined) writeScrollTop(newTop);
     }
   };
 
