@@ -57,6 +57,37 @@ export type ChatMessage = {
   attachments?: ChatImageAttachment[];
 };
 
+/**
+ * Presentation-level status for the generic tool inspector — richer than the
+ * raw ACP `ToolStatus`. Derived (never stored) by `deriveToolPresentationStatus`
+ * in `tool.presenter.ts` from the raw status, permission/turn context, and
+ * whether the call produced a meaningful result.
+ */
+export type ToolPresentationStatus =
+  | 'running'
+  | 'permission-pending'
+  | 'success'
+  | 'empty'
+  | 'cancelled'
+  | 'error';
+
+/** One normalized, bounded, redacted input parameter shown in the inspector. */
+export type ToolParam = { label: string; value: string };
+
+/** A bounded, redacted text payload (result preview or error detail). */
+export type ToolTextBlock = {
+  text: string;
+  /** True when `text` is a truncated prefix of a larger payload. */
+  truncated: boolean;
+  /** Number of characters omitted from the original payload. */
+  omittedChars: number;
+};
+
+/** An affected resource the tool call touched, surfaced for inspection/open. */
+export type ToolResource =
+  | { kind: 'workspace-file'; path: string; label: string }
+  | { kind: 'url'; url: string; label: string };
+
 export type ChatToolCall = {
   kind: 'tool';
   id: string;
@@ -69,6 +100,32 @@ export type ChatToolCall = {
   inputSummary?: string;
   /** Id of the parent tool call (for hierarchical rendering). */
   parentId?: string;
+  /**
+   * Raw provider-reported tool kind/name (e.g. ACP `toolKind`, or the raw MCP
+   * tool identifier), retained as a secondary diagnostic. Never used as the
+   * display name — `name` already carries the safe, provider-agnostic label.
+   */
+  rawToolKind?: string | null;
+  /** Normalized, bounded, redacted input parameters (search query, URL, ...). */
+  params?: ToolParam[];
+  /** Bounded, redacted preview of the call's successful result output. */
+  result?: ToolTextBlock;
+  /** Bounded, redacted error detail (present only when `status === 'error'`). */
+  errorDetail?: ToolTextBlock;
+  /**
+   * Approximate wall-clock duration in ms, when the underlying data provides
+   * timing. Absent today for generic (search/fetch/mcp/unknown) tool calls —
+   * the ACP protocol carries no duration signal for them yet.
+   */
+  durationMs?: number;
+  /** Affected resources (paths/URLs) surfaced as inspectable/openable targets. */
+  resources?: ToolResource[];
+  /**
+   * Fully derived inspector status (see `deriveToolPresentationStatus`).
+   * Optional — only the generic inspector kinds (search/fetch/mcp/unknown)
+   * populate it; other `ChatToolCall` producers keep relying on raw `status`.
+   */
+  presentationStatus?: ToolPresentationStatus;
 };
 
 export type SubagentPhase = 'spawning' | 'running' | 'completed' | 'failed';

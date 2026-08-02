@@ -49,18 +49,24 @@ export interface SearchToolCall extends BaseToolCallItem {
   kind: 'search-tool-call';
   query: string;
   matchCount?: number;
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText?: string;
 }
 
 export interface McpToolCall extends BaseToolCallItem {
   kind: 'mcp-tool-call';
   server?: string;
   tool: string;
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText?: string;
 }
 
 export interface WebFetchToolCall extends BaseToolCallItem {
   kind: 'web-fetch-tool-call';
   url: string;
   pageTitle?: string;
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText?: string;
 }
 
 export interface SpawnSubagentToolCall extends BaseToolCallItem {
@@ -79,6 +85,8 @@ export interface UnknownToolCall extends BaseToolCallItem {
   kind: 'unknown-tool-call';
   toolKind: string | null;
   name: string;
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText?: string;
 }
 
 export interface ToolGroup {
@@ -163,6 +171,8 @@ export const searchToolCallSchema = baseToolCallItemSchema.extend({
   query: z.string(),
   /** Provider-reported approximate match count when available. */
   matchCount: z.number().int().optional(),
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText: z.string().optional(),
 });
 
 export const mcpToolCallSchema = baseToolCallItemSchema.extend({
@@ -170,12 +180,16 @@ export const mcpToolCallSchema = baseToolCallItemSchema.extend({
   /** MCP server name/id when the provider exposes it separately from the tool name. */
   server: z.string().optional(),
   tool: z.string(),
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText: z.string().optional(),
 });
 
 export const webFetchToolCallSchema = baseToolCallItemSchema.extend({
   kind: z.literal('web-fetch-tool-call'),
   url: z.string(),
   pageTitle: z.string().optional(),
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText: z.string().optional(),
 });
 
 export const spawnSubagentToolCallSchema = baseToolCallItemSchema.extend({
@@ -197,6 +211,8 @@ export const unknownToolCallSchema = baseToolCallItemSchema.extend({
   kind: z.literal('unknown-tool-call'),
   toolKind: z.string().nullable(),
   name: z.string(),
+  /** Text output reported by ACP tool_call_update content (result preview or error detail). */
+  outputText: z.string().optional(),
 });
 
 export const toolCallItemSchema = z.discriminatedUnion('kind', [
