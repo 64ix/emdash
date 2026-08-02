@@ -68,12 +68,7 @@ function turn(id: string, seq: number, items: TranscriptItem[]): TranscriptTurn 
   return { id, seq, initiator: 'agent', items, outcome: { kind: 'done' } };
 }
 
-function gitChange(
-  path: string,
-  status: GitChangeStatus,
-  additions = 0,
-  deletions = 0
-): GitChange {
+function gitChange(path: string, status: GitChangeStatus, additions = 0, deletions = 0): GitChange {
   return { path, status, additions, deletions };
 }
 
@@ -361,7 +356,11 @@ describe('buildChangesFootprint', () => {
     const t = turn('t1', 1, [modifyCall('c1', 1, 'src\\nested\\a.ts')]);
     const changes = [gitChange('src/nested/a.ts', 'modified', 2, 0)];
 
-    const footprint = buildChangesFootprint({ committedTurns: [t], activeTurn: null, gitChanges: changes });
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
 
     expect(footprint.edited).toEqual([
       {

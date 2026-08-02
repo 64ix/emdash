@@ -189,7 +189,8 @@ export function buildChangesFootprint({
     // `gitByPath`, so when `gitEntry` is absent `editEntry` must be present —
     // the 'modified' fallback only guards against that invariant ever
     // silently breaking, it is not expected to be observed.
-    const status = gitEntry?.status ?? (editEntry ? statusForEditKind(editEntry.changeKind) : 'modified');
+    const status =
+      gitEntry?.status ?? (editEntry ? statusForEditKind(editEntry.changeKind) : 'modified');
     const source = editEntry
       ? { turnId: editEntry.turnId, itemId: editEntry.itemId }
       : (readEntry ?? null);

@@ -33,11 +33,6 @@ import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
 import { createStopController, type StopController } from './acp-chat-stop-controller';
 import { AcpHistoryPagination } from './acp-history-pagination';
-import {
-  buildChangesFootprint,
-  EMPTY_CHANGES_FOOTPRINT,
-  type ChangesFootprint,
-} from './changes/acp-changes-footprint';
 import type {
   AcpPromptAttachment,
   AcpSubmissionSessionPort,
@@ -46,6 +41,11 @@ import type {
 } from './acp-submission-recovery';
 import { AcpSubmissionController, resultError } from './acp-submission-recovery';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
+import {
+  buildChangesFootprint,
+  EMPTY_CHANGES_FOOTPRINT,
+  type ChangesFootprint,
+} from './changes/acp-changes-footprint';
 
 export type {
   AcpPromptAttachment,
