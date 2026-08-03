@@ -1,13 +1,26 @@
 import { describe, expect, it } from 'vitest';
+import type { ToolStructuredValue } from '@/model';
 import {
   buildStructuredResult,
   buildStructuredValue,
   MAX_STRUCTURED_DEPTH,
   MAX_STRUCTURED_ENTRIES,
+  MAX_STRUCTURED_NODES,
   MAX_STRUCTURED_SOURCE_CHARS,
   MAX_STRUCTURED_STRING_CHARS,
   structuredLines,
 } from './tool-structured';
+
+/** Count every node (including `truncated`/`circular` leaves) in a built tree. */
+function countNodes(node: ToolStructuredValue): number {
+  if (node.kind === 'object') {
+    return 1 + node.entries.reduce((total, entry) => total + countNodes(entry.value), 0);
+  }
+  if (node.kind === 'array') {
+    return 1 + node.items.reduce((total, item) => total + countNodes(item), 0);
+  }
+  return 1;
+}
 
 // ── buildStructuredValue: bare scalars / null / empty containers ─────────────
 
@@ -208,6 +221,84 @@ describe('buildStructuredValue — hostile payloads never throw and stay bounded
     const value = wide(4);
     expect(() => buildStructuredValue(value)).not.toThrow();
   });
+
+  it('the shared node budget bounds width and depth *combined*, not each dimension alone', () => {
+    // 10 keys per level, 6 levels deep, every child a genuinely distinct
+    // object (no sharing) — individually each axis is well within its own
+    // per-dimension limit (10 < MAX_STRUCTURED_ENTRIES, 6 < MAX_STRUCTURED_DEPTH),
+    // but combined they would produce (10**6 - 1) / 9 ≈ 111k real objects with
+    // no budget at all — only the *shared* node budget, not either dimension
+    // alone, keeps the realized tree cheap.
+    const width = 10;
+    const depth = 6;
+    function wideAndDeep(remaining: number): unknown {
+      if (remaining === 0) return 'leaf';
+      const obj: Record<string, unknown> = {};
+      for (let i = 0; i < width; i++) obj[`k${i}`] = wideAndDeep(remaining - 1);
+      return obj;
+    }
+    const value = wideAndDeep(depth);
+    const result = buildStructuredValue(value);
+    const nodeCount = countNodes(result);
+    // The budget is decremented once per *call*, before that call knows
+    // whether it will expand further — so a container whose own decrement
+    // still leaves it non-negative always finishes fanning out to all of its
+    // (already-invoked) children first, even ones that will immediately find
+    // the budget exhausted. At most ~MAX_STRUCTURED_NODES calls can ever see
+    // a non-negative budget, and each such call can only fan out to at most
+    // one level's worth of children — so the realized tree is bounded by
+    // roughly budget × max-fan-out, a fixed polynomial ceiling, however deep
+    // or wide the *unbounded* input would otherwise have been.
+    expect(nodeCount).toBeLessThan(MAX_STRUCTURED_NODES * (width + 1));
+    expect(() => structuredLines(result)).not.toThrow();
+  });
+
+  it('a diamond-shaped (shared-reference) graph is bounded by the node budget, not exponential in depth', () => {
+    // Every level below the root reuses the *same* object reference for all
+    // MAX_STRUCTURED_ENTRIES children — legitimate sharing (not a cycle: no
+    // node is its own ancestor), the classic shape that blows up to
+    // width**depth distinct visits under naive re-traversal with no shared
+    // budget. If the ancestor-chain check degraded to quadratic/exponential
+    // behavior on this shape, this test would time out rather than merely
+    // assert a wrong value.
+    let shared: unknown = 'leaf';
+    for (let level = 0; level < MAX_STRUCTURED_DEPTH; level++) {
+      const next: Record<string, unknown> = {};
+      for (let i = 0; i < MAX_STRUCTURED_ENTRIES; i++) next[`k${i}`] = shared;
+      shared = next;
+    }
+
+    const start = performance.now();
+    const result = buildStructuredValue(shared);
+    const elapsedMs = performance.now() - start;
+
+    expect(elapsedMs).toBeLessThan(200);
+    // Same reasoning as the width+depth test above: bounded by roughly
+    // budget × max-fan-out, not by width**depth (which here would be
+    // 50**12 — astronomically larger).
+    expect(countNodes(result)).toBeLessThan(MAX_STRUCTURED_NODES * (MAX_STRUCTURED_ENTRIES + 1));
+    // Shared, non-ancestor reuse is never a false-positive circular result.
+    expect(JSON.stringify(result)).not.toContain('"circular"');
+  });
+
+  it('a very long array of near-cap strings is bounded by entries-per-level, not by total item count', () => {
+    const nearCap = 'x'.repeat(MAX_STRUCTURED_STRING_CHARS - 1);
+    const many = Array.from({ length: 5000 }, () => nearCap);
+    const result = buildStructuredValue(many);
+    expect(result.kind).toBe('array');
+    if (result.kind !== 'array') throw new Error('expected array');
+    expect(result.items).toHaveLength(MAX_STRUCTURED_ENTRIES);
+    expect(result.omittedItems).toBe(5000 - MAX_STRUCTURED_ENTRIES);
+  });
+
+  it('deeply nested arrays (not objects) are also capped at MAX_STRUCTURED_DEPTH', () => {
+    let value: unknown = 'leaf';
+    for (let i = 0; i < 1000; i++) value = [value];
+
+    expect(() => buildStructuredValue(value)).not.toThrow();
+    const result = buildStructuredValue(value);
+    expect(countNodes(result)).toBeLessThan(MAX_STRUCTURED_DEPTH + 5);
+  });
 });
 
 // ── Redaction — defense-in-depth for leaf strings/keys passed in directly ────
@@ -272,6 +363,37 @@ describe('buildStructuredResult', () => {
     const huge = `[${Array.from({ length: 50_000 }, (_, i) => `${i}`).join(',')}]`;
     expect(huge.length).toBeGreaterThan(MAX_STRUCTURED_SOURCE_CHARS);
     expect(buildStructuredResult(huge)).toBeUndefined();
+  });
+
+  it('a source just under MAX_STRUCTURED_SOURCE_CHARS that parses into an enormous flat array still stays bounded', () => {
+    // Just under the size cap, so JSON.parse *is* attempted — but the parsed
+    // array has tens of thousands of items; buildStructuredValue's own entry
+    // cap (not the size cap) must be what keeps this cheap and bounded.
+    const items = Array.from({ length: 90_000 }, (_, i) => i % 10).join(',');
+    const raw = `[${items}]`;
+    expect(raw.length).toBeLessThan(MAX_STRUCTURED_SOURCE_CHARS);
+
+    const start = performance.now();
+    const result = buildStructuredResult(raw);
+    const elapsedMs = performance.now() - start;
+
+    expect(elapsedMs).toBeLessThan(500);
+    expect(result?.kind).toBe('array');
+    if (result?.kind !== 'array') throw new Error('expected array');
+    expect(result.items).toHaveLength(MAX_STRUCTURED_ENTRIES);
+    expect(result.omittedItems).toBe(90_000 - MAX_STRUCTURED_ENTRIES);
+  });
+
+  it('a source just under MAX_STRUCTURED_SOURCE_CHARS with pathological nesting depth never throws', () => {
+    // Deeply nested arrays (`[[[...]]]`) rather than a wide flat structure —
+    // JSON.parse itself can throw (e.g. a native stack-depth RangeError) on
+    // sufficiently deep input; the bare `catch` in buildStructuredResult must
+    // still degrade to the safe plain-text fallback rather than propagating.
+    let nested = '0';
+    while (nested.length < MAX_STRUCTURED_SOURCE_CHARS - 10_000) {
+      nested = `[${nested}]`;
+    }
+    expect(() => buildStructuredResult(nested)).not.toThrow();
   });
 
   it('redacts a secret keyed by a known secret field name, before parsing', () => {
