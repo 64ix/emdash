@@ -764,7 +764,11 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     expect(panelText()).toContain('#42');
   });
 
-  it('does not lock the selector for a task sitting in Spec whose linked Spec issue is closed', async () => {
+  // Ticket #48: a closed Spec issue with no merged PR is not a "no authority"
+  // fact — it is exactly the contradiction the next issues-sync pass would
+  // sweep into Triage, so the panel locks the selector on that fact instead
+  // of falsely offering a manual choice the sync would overwrite.
+  it('locks the selector on the Triage contradiction for a task sitting in Spec whose linked Spec issue closed without a merged PR', async () => {
     const linkedIssues: LinkedIssueRoles = {
       version: '1',
       spec: {
@@ -783,10 +787,12 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
     await settle();
 
-    expect(stageSelect().disabled).toBe(false);
-    // The linked issue is still listed in the Linked Issues section (ticket
-    // #41's content) — only the stage-authority claim goes away.
+    expect(stageSelect().disabled).toBe(true);
     expect(panelText()).not.toContain('Held in Spec');
+    expect(panelText()).toContain('Triage');
+    expect(panelText()).toContain('#42');
+    // The linked issue is still listed in the Linked Issues section (ticket
+    // #41's content) regardless of which stage-authority claim it backs.
     expect(linkedIssueRoles()).toEqual(['spec']);
   });
 });

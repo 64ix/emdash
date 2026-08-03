@@ -4,6 +4,7 @@ import type {
   AutomationRunTriggerKind,
 } from '@shared/core/automations/automation-run';
 import type { PullRequestMergeStrategy } from '@shared/core/pull-requests/pull-requests';
+import type { StageAuthorityFactKind } from '@shared/core/tasks/stage-authority';
 import type { TaskLifecycleStatus, WorkflowStage } from '@shared/core/tasks/tasks';
 import type { OpenInAppId } from '@shared/openInApps';
 
@@ -124,6 +125,18 @@ export type TelemetryEventProperties = {
     to_stage: WorkflowStage | null;
     /** True when the Workflow Stage is unchanged and only the Board Rank moved. */
     reordered: boolean;
+  };
+  /**
+   * A drag attempted to move a GitHub-authoritative card into a Workflow
+   * Stage its governing fact would silently overwrite (ticket #48). No move
+   * is persisted for this attempt — carries only stage names and the
+   * governing fact's kind, never issue titles, branch names, PR titles, or
+   * other task content (minimal-payload shape, precedent: `board_opened`).
+   */
+  board_move_blocked: {
+    from_stage: WorkflowStage | null;
+    attempted_stage: WorkflowStage | null;
+    governing_fact: StageAuthorityFactKind;
   };
 
   conversation_created: { provider: AgentProviderId; is_first_in_task: boolean };

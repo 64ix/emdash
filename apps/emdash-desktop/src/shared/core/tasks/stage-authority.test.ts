@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LinkedIssue, LinkedIssueRoles } from '@shared/core/linked-issue';
+import type { LinkedIssue } from '@shared/core/linked-issue';
 import {
   deriveStageAuthority,
   describeStageAuthorityFact,
@@ -35,9 +35,10 @@ function prAuthority(overrides: Partial<TaskStageAuthority> = {}): TaskStageAuth
 
 describe('deriveStageAuthority — manual/unknown placement', () => {
   it('is manual with no linked issues, no PR authority and no workspace', () => {
-    expect(
-      deriveStageAuthority({ currentStage: 'idea', hasWorkspace: false })
-    ).toEqual({ fact: { kind: 'manual' }, governs: false });
+    expect(deriveStageAuthority({ currentStage: 'idea', hasWorkspace: false })).toEqual({
+      fact: { kind: 'manual' },
+      governs: false,
+    });
   });
 
   it('is manual for an unstaged task', () => {

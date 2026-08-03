@@ -38,7 +38,9 @@ export type StageAuthorityFact =
   | { kind: 'merged-pr'; pr: StageHoldingPr }
   | {
       kind: 'triage-contradiction';
-      reason: { kind: 'closed-pr'; pr: StageHoldingPr } | { kind: 'closed-spec'; issue: LinkedIssue };
+      reason:
+        | { kind: 'closed-pr'; pr: StageHoldingPr }
+        | { kind: 'closed-spec'; issue: LinkedIssue };
     };
 
 export type StageAuthorityFactKind = StageAuthorityFact['kind'];
@@ -175,7 +177,12 @@ export function deriveStageAuthority<T extends StageHoldingPr>(
   // argument `isClosedSpecTriageContradiction` needs is structurally
   // guaranteed by this function's own precedence, not re-checked against a
   // fresh PR list.
-  if (currentStage !== 'triage' && currentStage !== 'review' && currentStage !== 'shipped' && specIssue) {
+  if (
+    currentStage !== 'triage' &&
+    currentStage !== 'review' &&
+    currentStage !== 'shipped' &&
+    specIssue
+  ) {
     const specState = githubIssueState(specIssue);
     const specIssueFact: IssueStateFact | undefined = specState ? { state: specState } : undefined;
     if (isClosedSpecTriageContradiction(specIssueFact, false)) {
@@ -263,7 +270,9 @@ export type StageAuthorityExplanation = {
  * criterion). Returns `null` for `manual`/`provisioned-implementation` — a
  * placement with no GitHub fact to explain, or one that already isn't locked.
  */
-export function describeStageAuthorityFact(fact: StageAuthorityFact): StageAuthorityExplanation | null {
+export function describeStageAuthorityFact(
+  fact: StageAuthorityFact
+): StageAuthorityExplanation | null {
   switch (fact.kind) {
     case 'open-pr':
       return {

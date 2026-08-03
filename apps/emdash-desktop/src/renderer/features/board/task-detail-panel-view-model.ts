@@ -1,7 +1,10 @@
 import type { AgentStatus } from '@shared/core/agents/agentEvents';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssue, LinkedIssueRole, LinkedIssueRoles } from '@shared/core/linked-issue';
-import { deriveStageAuthority, describeStageAuthorityFact } from '@shared/core/tasks/stage-authority';
+import {
+  deriveStageAuthority,
+  describeStageAuthorityFact,
+} from '@shared/core/tasks/stage-authority';
 import type {
   StageHoldingPr,
   Task,

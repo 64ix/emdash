@@ -35,6 +35,7 @@ import {
   projectDisplayName,
 } from '@renderer/features/projects/stores/project-selectors';
 import {
+  getTaskGitWorktreeStore,
   getTaskManagerStore,
   taskAgentStatus,
 } from '@renderer/features/tasks/stores/task-selectors';
@@ -43,6 +44,7 @@ import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indi
 import { rpc } from '@renderer/lib/ipc';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
+import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { cn } from '@renderer/utils/utils';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import {
@@ -53,6 +55,17 @@ import {
   type LinkedIssueRole,
 } from '@shared/core/linked-issue';
 import {
+  deriveTaskStageAuthorityFact,
+  parseIssueNumberFromIdentifier,
+} from '@shared/core/pull-requests/pr-workflow-derivation';
+import {
+  deriveStageAuthority,
+  describeStageAuthorityFact,
+  isStageDestinationSafe,
+  type StageAuthority,
+} from '@shared/core/tasks/stage-authority';
+import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
+import {
   COLUMNS,
   computeDropPosition,
   partitionAwaitingInput,
@@ -60,6 +73,42 @@ import {
   stageOf,
   type ColumnId,
 } from './board-ordering';
+
+/** `ColumnId` (which includes the `unstaged` bucket) down to the `WorkflowStage | null`
+ * shape `stage-authority.ts` speaks — `computeDropPosition` uses the same mapping. */
+function columnToStage(column: ColumnId): WorkflowStage | null {
+  return column === 'unstaged' ? null : column;
+}
+
+/**
+ * A card's Workflow Stage authority (ticket #48), computed synchronously from
+ * data already loaded onto the task — `task.prs` (branch-matched PRs; see
+ * `getPullRequestsForTask`) and `task.linkedIssues` — so drag-time evaluation
+ * never waits on a round trip. Reuses `deriveTaskStageAuthorityFact`, the
+ * exact PR-fact precedence `BoardSyncService`/the Task Detail Panel's RPC
+ * already use, rather than re-deriving it.
+ */
+function authorityForTask(
+  task: Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId'>,
+  branchName: string | null
+): StageAuthority {
+  const specIssueNumber = parseIssueNumberFromIdentifier(task.linkedIssues?.spec?.identifier);
+  const currentStage = task.workflowStage ?? null;
+  const prAuthority = deriveTaskStageAuthorityFact({
+    currentStage,
+    specIssueNumber,
+    taskBranch: branchName,
+    // Defensive: `task.prs` is non-optional on `Task`, but older/lighter test
+    // doubles across the board test suites omit it.
+    prFacts: task.prs ?? [],
+  });
+  return deriveStageAuthority({
+    currentStage,
+    linkedIssues: task.linkedIssues,
+    prAuthority,
+    hasWorkspace: task.workspaceId != null,
+  });
+}
 
 /** "Spec #123" (or just "Spec" when the issue has no identifier) for the most-advanced-link badge. */
 function linkedIssueBadgeText(link: { role: LinkedIssueRole; issue: LinkedIssue }): string {
@@ -114,6 +163,14 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // never survives leaving the board (unmount resets it) and writes nothing
   // to the database. `null` means the panel is closed.
   const [panelTarget, setPanelTarget] = useState<TaskDetailPanelTarget | null>(null);
+  // Stage authority (ticket #48): while a GitHub-authoritative card is being
+  // dragged over a column its governing fact would not survive in, this holds
+  // the blocked column and its accessible explanation, so the disabled
+  // destination can be announced (aria-live region) and visually marked.
+  const [blockedHover, setBlockedHover] = useState<{
+    column: ColumnId;
+    explanation: string;
+  } | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   // Board open triggers an immediate derivation pass (PR facts + inbound issues);
@@ -203,6 +260,18 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     if (taskAgentStatus(store) === 'awaiting-input') awaitingInputIds.add(id);
   }
 
+  // Stage authority (ticket #48): computed once per render from data already
+  // on each task (no RPC round trip — see `authorityForTask`), so drag
+  // handlers below can synchronously decide which destinations a
+  // GitHub-authoritative card must keep disabled.
+  const authorityByCardId = new Map<string, StageAuthority>();
+  for (const [id, store] of storeById) {
+    const task = registeredTaskData(store);
+    if (!task) continue;
+    const branchName = getTaskGitWorktreeStore(projectId, id)?.branchName ?? null;
+    authorityByCardId.set(id, authorityForTask(task, branchName));
+  }
+
   // Frozen (un-elevated) order while a drag is active, per column — both for
   // display (ADR 0002) and as the basis for drop-position math, since Board
   // Rank is always relative to manual order, never the awaiting-input view.
@@ -249,6 +318,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   function handleDragCancel() {
     setActiveDragId(null);
     setDragPreview(null);
+    setBlockedHover(null);
   }
 
   function handleDragOver(event: DragOverEvent) {
@@ -257,6 +327,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     const sourceColumn = columnByCardId.get(activeId);
     if (!over || !sourceColumn) {
       setDragPreview(null);
+      setBlockedHover(null);
       return;
     }
     const overId = String(over.id);
@@ -267,8 +338,30 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     const overColumn = overZone ?? effectiveColumnOf(overId);
     if (!overColumn || overColumn === sourceColumn) {
       setDragPreview(null);
+      setBlockedHover(null);
       return;
     }
+
+    // Stage authority (ticket #48): a GitHub-authoritative card stays
+    // reorderable in its own column (handled above — same-column hovers
+    // never reach here), but an invalid cross-stage destination never even
+    // previews the move: the ghost stays put and the destination is marked
+    // disabled instead of promising a drop the next sync pass would silently
+    // overwrite (#56).
+    const authority = authorityByCardId.get(activeId);
+    if (authority?.governs && !isStageDestinationSafe(authority.fact, columnToStage(overColumn))) {
+      setDragPreview(null);
+      const description = describeStageAuthorityFact(authority.fact);
+      setBlockedHover({
+        column: overColumn,
+        explanation: description
+          ? `${description.fact} ${description.action}`
+          : 'This destination is not available for this task right now.',
+      });
+      return;
+    }
+    setBlockedHover(null);
+
     const overRect = over.rect;
     // Only place the ghost when entering a different column; while inside
     // one, dnd-kit's own sortable displacement previews further movement.
@@ -290,17 +383,22 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   function handleDragEnd(event: DragEndEvent) {
     setActiveDragId(null);
     setDragPreview(null);
+    setBlockedHover(null);
     const { active, over } = event;
     if (!over) return;
     const activeId = String(active.id);
     const overId = String(over.id);
     const store = storeById.get(activeId);
     if (!store) return;
+    const sourceColumn = columnByCardId.get(activeId);
 
     if (activeId === overId) {
       // Dropping on the card's own slot. Without a cross-column preview this
       // is a no-op — but when the preview holds the card in a foreign
       // column, the "own slot" IS the ghost: persist the previewed position.
+      // Stage authority (ticket #48): `previewColumn` can never be an unsafe
+      // destination for a governing card — `handleDragOver` refuses to set
+      // the preview there in the first place — so no extra guard is needed.
       if (previewColumn && dragPreview) {
         const entries = (sortedByColumn.get(previewColumn) ?? []).filter(
           (entry) => entry.id !== activeId
@@ -315,6 +413,26 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     const overCardId = overColumn ? undefined : overId;
     const destinationColumn = overColumn ?? columnByCardId.get(overId);
     if (!destinationColumn) return;
+
+    // Stage authority (ticket #48): the authoritative enforcement point — the
+    // preview guard in `handleDragOver` keeps the ghost from ever entering an
+    // unsafe destination, but dnd-kit's own collision detection is untouched
+    // and can still resolve `over` there on a fast gesture. No move is
+    // persisted for a genuinely GitHub-authoritative card's cross-stage drop
+    // unless `isStageDestinationSafe` agrees (#56).
+    if (destinationColumn !== sourceColumn) {
+      const authority = authorityByCardId.get(activeId);
+      const destinationStage = columnToStage(destinationColumn);
+      if (authority?.governs && !isStageDestinationSafe(authority.fact, destinationStage)) {
+        captureTelemetry('board_move_blocked', {
+          from_stage: sourceColumn ? columnToStage(sourceColumn) : null,
+          attempted_stage: destinationStage,
+          governing_fact: authority.fact.kind,
+          project_id: projectId,
+        });
+        return;
+      }
+    }
 
     const destinationEntries = (sortedByColumn.get(destinationColumn) ?? []).filter(
       (entry) => entry.id !== activeId
@@ -449,6 +567,10 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
                 onSelectGhostCard={(ghostCard) => setPanelTarget({ kind: 'ghost', ghostCard })}
                 onAdoptGhostCard={handleAdoptGhostCard}
                 onRejectGhostCard={rejectGhostCard}
+                isBlockedDestination={blockedHover?.column === column}
+                blockedDestinationExplanation={
+                  blockedHover?.column === column ? blockedHover.explanation : null
+                }
               />
             ))}
           </div>
@@ -456,6 +578,14 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
             {activeDragStore ? <BoardCardPreview store={activeDragStore} /> : null}
           </DragOverlay>
         </DndContext>
+        {/* Stage authority (ticket #48): announces the disabled-destination
+            explanation to screen readers as a drag hovers it. Visually
+            hidden — the column itself carries the same text via
+            `aria-label`/`title` for pointer users and assistive tech that
+            reads the hovered element directly. */}
+        <div role="status" aria-live="polite" className="sr-only">
+          {blockedHover?.explanation ?? ''}
+        </div>
         {panelTarget && (
           <TaskDetailPanel
             projectId={projectId}
@@ -483,6 +613,8 @@ const BoardColumn = observer(function BoardColumn({
   onSelectGhostCard,
   onAdoptGhostCard,
   onRejectGhostCard,
+  isBlockedDestination,
+  blockedDestinationExplanation,
 }: {
   column: ColumnId;
   entries: CardEntry[];
@@ -495,6 +627,12 @@ const BoardColumn = observer(function BoardColumn({
   onSelectGhostCard: (ghostCard: GhostCard) => void;
   onAdoptGhostCard: (ghostCard: GhostCard) => void;
   onRejectGhostCard: (ghostCard: GhostCard) => void;
+  /** Stage authority (ticket #48): true while the currently dragged card is
+   * hovering this column and its governing fact forbids the drop. */
+  isBlockedDestination: boolean;
+  /** Accessible explanation naming the governing fact and the action
+   * required to unlock the move — set only while `isBlockedDestination`. */
+  blockedDestinationExplanation: string | null;
 }) {
   const cardCount = entries.length + (ghostCards?.length ?? 0);
   const { setNodeRef, isOver } = useDroppable({ id: columnDropId(column) });
@@ -507,7 +645,15 @@ const BoardColumn = observer(function BoardColumn({
   const cardIds = useMemo(() => (cardIdsKey ? cardIdsKey.split('\n') : []), [cardIdsKey]);
 
   return (
-    <div className="flex w-56 shrink-0 flex-col rounded-lg border border-border bg-background-2/40">
+    <div
+      className="flex w-56 shrink-0 flex-col rounded-lg border border-border bg-background-2/40"
+      // Stage authority (ticket #48): `aria-disabled` and `title` name the
+      // disabled destination for pointer users (native tooltip) and
+      // assistive tech that reads the hovered element directly, alongside
+      // the aria-live announcement rendered once at the board level.
+      aria-disabled={isBlockedDestination || undefined}
+      title={isBlockedDestination ? (blockedDestinationExplanation ?? undefined) : undefined}
+    >
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-medium text-foreground-muted">{STAGE_LABELS[column]}</span>
         <Badge variant="secondary">{cardCount}</Badge>
@@ -517,7 +663,8 @@ const BoardColumn = observer(function BoardColumn({
           ref={setNodeRef}
           className={cn(
             'flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2',
-            isOver && 'bg-foreground/5'
+            isOver && 'bg-foreground/5',
+            isBlockedDestination && 'cursor-not-allowed opacity-50'
           )}
         >
           {entries.map((entry) => {
