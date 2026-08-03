@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useState } from 'react';
 import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
@@ -5,18 +6,22 @@ import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
 import { events, rpc } from '@renderer/lib/ipc';
 import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
+import { cn } from '@renderer/utils/utils';
 import { linkSuggestionsUpdatedChannel } from '@shared/core/issues/issueEvents';
 import type { LinkSuggestion } from '@shared/core/issues/link-suggestion';
 import { linkedIssueRoleLabels } from '@shared/core/linked-issue';
 import type { Task } from '@shared/core/tasks/tasks';
 
 /**
- * "Attach to a task?" surface for orphan Spec/Map-shaped GitHub issues (no
- * Task Marker, no task linking them yet — see ticket #8 and CONTEXT.md
- * "Task Marker"). Each row offers the three answers: attach it to an existing
- * task, adopt it into a task of its own (the issue came from elsewhere and no
- * task covers it), or dismiss it. Modest by design: a compact list above the
- * board columns, refreshed on every inbound issues sync pass.
+ * The board's Inbox (ticket #51, CONTEXT.md "Link Suggestion"): a compact,
+ * count-bearing summary for orphan Spec/Map-shaped GitHub issues (no Task
+ * Marker, no task linking them yet — see ticket #8) that expands on demand
+ * instead of permanently consuming board height. Expanding it keeps the
+ * complete existing reconciliation workflow: attach an existing task, adopt a
+ * task of its own (the issue came from elsewhere and no task covers it), or
+ * dismiss it. Collapsed/expanded is local, ephemeral view state — nothing is
+ * persisted by toggling it, and it never mutates a suggestion. Refreshed on
+ * every inbound issues sync pass, exactly as before.
  */
 export const BoardLinkSuggestions = observer(function BoardLinkSuggestions({
   projectId,
@@ -25,6 +30,10 @@ export const BoardLinkSuggestions = observer(function BoardLinkSuggestions({
 }) {
   const [suggestions, setSuggestions] = useState<LinkSuggestion[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<Record<string, string>>({});
+  // Collapsed by default (ticket #51's "rather than permanently expanded"
+  // criterion) — expanding is an explicit, local gesture that never survives
+  // a fresh board mount and never round-trips through an RPC.
+  const [isExpanded, setIsExpanded] = useState(false);
   const manager = getTaskManagerStore(projectId);
 
   useEffect(() => {
@@ -89,53 +98,75 @@ export const BoardLinkSuggestions = observer(function BoardLinkSuggestions({
     }
   };
 
+  const count = suggestions.length;
+
   return (
     <div className="border-b border-border px-4 py-2">
-      <div className="mb-1.5 text-xs font-medium text-foreground-muted">Link suggestions</div>
-      <div className="flex flex-col gap-1.5">
-        {suggestions.map((suggestion) => (
-          <div key={suggestion.id} className="flex items-center gap-2 text-xs">
-            <Badge variant="outline">{linkedIssueRoleLabels[suggestion.role]}</Badge>
-            <span className="flex-1 truncate" title={suggestion.issue.title}>
-              {suggestion.issue.title}
-            </span>
-            <select
-              className="h-6 rounded border border-border bg-background px-1 text-xs text-foreground"
-              value={selectedTaskId[suggestion.id] ?? ''}
-              onChange={(e) =>
-                setSelectedTaskId((current) => ({ ...current, [suggestion.id]: e.target.value }))
-              }
-              aria-label={`Attach "${suggestion.issue.title}" to a task`}
-            >
-              <option value="">Attach to task…</option>
-              {taskOptions.map((task) => (
-                <option key={task.id} value={task.id}>
-                  {task.name}
-                </option>
-              ))}
-            </select>
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!selectedTaskId[suggestion.id]}
-              onClick={() => void handleAccept(suggestion)}
-            >
-              Attach
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              title={`Create a new task from "${suggestion.issue.title}"`}
-              onClick={() => void handleAdopt(suggestion)}
-            >
-              Adopt
-            </Button>
-            <Button size="xs" variant="ghost" onClick={() => void handleDismiss(suggestion)}>
-              Dismiss
-            </Button>
-          </div>
-        ))}
-      </div>
+      {/* The Inbox toggle (ticket #51): a plain button, not a header wrapped
+          in an interactive element — mirrors the column header's own
+          collapse-toggle seam (#46) of never nesting one interactive element
+          inside another. Its accessible name carries both the action and the
+          count, so browser coverage can query it by role/name alone. */}
+      <button
+        type="button"
+        aria-expanded={isExpanded}
+        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} link suggestions inbox, ${count} pending suggestion${count === 1 ? '' : 's'}`}
+        onClick={() => setIsExpanded((current) => !current)}
+        className="flex items-center gap-1.5 text-xs font-medium text-foreground-muted hover:text-foreground"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn('size-3.5 shrink-0 transition-transform', isExpanded && 'rotate-90')}
+        />
+        <span>Inbox</span>
+        <Badge variant="secondary">{count}</Badge>
+      </button>
+      {isExpanded && (
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {suggestions.map((suggestion) => (
+            <div key={suggestion.id} className="flex items-center gap-2 text-xs">
+              <Badge variant="outline">{linkedIssueRoleLabels[suggestion.role]}</Badge>
+              <span className="flex-1 truncate" title={suggestion.issue.title}>
+                {suggestion.issue.title}
+              </span>
+              <select
+                className="h-6 rounded border border-border bg-background px-1 text-xs text-foreground"
+                value={selectedTaskId[suggestion.id] ?? ''}
+                onChange={(e) =>
+                  setSelectedTaskId((current) => ({ ...current, [suggestion.id]: e.target.value }))
+                }
+                aria-label={`Attach "${suggestion.issue.title}" to a task`}
+              >
+                <option value="">Attach to task…</option>
+                {taskOptions.map((task) => (
+                  <option key={task.id} value={task.id}>
+                    {task.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={!selectedTaskId[suggestion.id]}
+                onClick={() => void handleAccept(suggestion)}
+              >
+                Attach
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                title={`Create a new task from "${suggestion.issue.title}"`}
+                onClick={() => void handleAdopt(suggestion)}
+              >
+                Adopt
+              </Button>
+              <Button size="xs" variant="ghost" onClick={() => void handleDismiss(suggestion)}>
+                Dismiss
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 });

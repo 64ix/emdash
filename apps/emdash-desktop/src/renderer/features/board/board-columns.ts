@@ -1,4 +1,7 @@
-import { isShippedFaded } from '@shared/core/pull-requests/pr-workflow-derivation';
+import {
+  isShippedFaded,
+  SHIPPED_FADE_WINDOW_MS,
+} from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { Task } from '@shared/core/tasks/tasks';
 import { COLUMNS, type ColumnId } from './board-ordering';
 
@@ -82,17 +85,34 @@ export function isBoardDisplayable(task: Task, now?: number): boolean {
  * it out of (CONTEXT.md "Triage") — never a starting point for a new task.
  *
  * This reading is consistent with (never contradicted by)
- * `deriveWorkflowStageFromIssues`
- * (`src/main/core/issues/inbound-sync/stage-derivation.ts`), the authority
- * this ticket was pointed at: that function only ever *derives* `spec`,
- * `exploring`, or `triage` from observable issue facts — all three excluded
- * here — and never derives `idea` or `implementing`.
+ * `deriveWorkflowStageFromIssues` (`src/shared/core/tasks/stage-derivation.ts`
+ * — ticket #48 relocated it there from `src/main/core/issues/inbound-sync/` so
+ * main and renderer share one literal source), the authority this ticket was
+ * pointed at: that function only ever *derives* `spec`, `exploring`, or
+ * `triage` from observable issue facts — all three excluded here — and never
+ * derives `idea` or `implementing`.
  *
  * This is a narrow, single-purpose answer to one question ("can a column
- * offer creation?"), not the general GitHub-authoritative-stage explanation
- * ticket #48's stage-authority contract is building. That contract can
- * absorb this check once it exists — see ticket #45's notes.
+ * offer creation?"), not the general GitHub-authoritative-stage explanation in
+ * ticket #48's `src/shared/core/tasks/stage-authority.ts` contract, which has
+ * since landed. That contract can absorb this check — its own reviewer
+ * confirmed the two models agree.
  */
 export function columnPermitsManualCreation(column: ColumnId): boolean {
   return column === 'unstaged' || column === 'idea' || column === 'implementing';
 }
+
+/**
+ * Shipped Fade's recent-delivery window, in whole days (ticket #51) — derived
+ * from `SHIPPED_FADE_WINDOW_MS`, the exact value `isTaskShippedFaded` checks
+ * against, so the Shipped column's disclosure can never state a duration the
+ * fade logic does not actually implement.
+ */
+export const SHIPPED_FADE_WINDOW_DAYS = SHIPPED_FADE_WINDOW_MS / (24 * 60 * 60 * 1000);
+
+/**
+ * Disclosure text for the Shipped column (ticket #51, CONTEXT.md "Shipped
+ * Fade"): surfaced on the column so older Shipped cards do not appear to
+ * vanish arbitrarily once their pull request has been merged a while.
+ */
+export const SHIPPED_FADE_DISCLOSURE = `Shipped cards are hidden from the board ${SHIPPED_FADE_WINDOW_DAYS} days after their pull request merges. The task keeps its Shipped stage.`;

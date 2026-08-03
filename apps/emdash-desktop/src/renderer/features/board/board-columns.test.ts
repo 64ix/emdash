@@ -8,6 +8,8 @@ import {
   isBoardDisplayable,
   isTaskShippedFaded,
   PIPELINE_COLUMNS,
+  SHIPPED_FADE_DISCLOSURE,
+  SHIPPED_FADE_WINDOW_DAYS,
   STAGE_LABELS,
 } from './board-columns';
 import { COLUMNS, stageOf } from './board-ordering';
@@ -245,5 +247,27 @@ describe('columnPermitsManualCreation', () => {
       'idea',
       'implementing',
     ]);
+  });
+});
+
+// ticket #51: the Shipped column's disclosure must never state a duration
+// the fade logic does not actually implement — both derived constants below
+// are pinned directly to `SHIPPED_FADE_WINDOW_MS`, the same value
+// `isTaskShippedFaded` (tested above) checks against.
+describe('SHIPPED_FADE_WINDOW_DAYS', () => {
+  it('is SHIPPED_FADE_WINDOW_MS converted to whole days, not a second hand-typed duration', () => {
+    expect(SHIPPED_FADE_WINDOW_DAYS).toBe(SHIPPED_FADE_WINDOW_MS / (24 * 60 * 60 * 1000));
+    expect(Number.isInteger(SHIPPED_FADE_WINDOW_DAYS)).toBe(true);
+    expect(SHIPPED_FADE_WINDOW_DAYS).toBe(14);
+  });
+});
+
+describe('SHIPPED_FADE_DISCLOSURE', () => {
+  it('states the same window SHIPPED_FADE_WINDOW_DAYS derives, and that the stage itself is unaffected', () => {
+    expect(SHIPPED_FADE_DISCLOSURE).toContain(`${SHIPPED_FADE_WINDOW_DAYS} days`);
+    expect(SHIPPED_FADE_DISCLOSURE).toMatch(/hidden/i);
+    // Shipped Fade never mutates the task (CONTEXT.md "Shipped Fade") — the
+    // disclosure says so explicitly, not just implicitly via absence.
+    expect(SHIPPED_FADE_DISCLOSURE).toMatch(/keeps its Shipped stage/i);
   });
 });

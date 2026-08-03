@@ -34,7 +34,8 @@ pushes cards in; only the user or an agent moves a card back out.
 
 A display rule, not a stage: `shipped` cards whose PR merged more than a
 fixed window ago are hidden from the Feature Board. The task keeps its
-stage forever.
+stage forever. The Shipped column discloses this window so older cards
+never appear to vanish arbitrarily.
 
 ## Awaiting Input
 
@@ -61,7 +62,8 @@ Sourced from the [Issue Tracker Repository](#issue-tracker-repository) only.
 ## Link Suggestion
 
 An orphan Spec- or Map-shaped GitHub issue — no [Task Marker](#task-marker),
-no task linking it — surfaced above the Feature Board with three answers:
+no task linking it — surfaced in the board's Inbox (a compact, count-bearing
+summary above the Feature Board that expands on demand) with three answers:
 **attach** it to an existing task, **adopt** it into a task of its own (the
 issue came from elsewhere and no task covers it), or **dismiss** it. Adoption
 sets the issue in its suggested [Linked Issue Role](#linked-issue-role), never
