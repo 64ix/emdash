@@ -1,5 +1,17 @@
-import type { ChatContext, ChatImageAttachment, ChatState, ChatView } from '@emdash/chat-ui';
-import { connectSession, createChatState, pinTopMode } from '@emdash/chat-ui';
+import type {
+  ChatContext,
+  ChatImageAttachment,
+  ChatState,
+  ChatView,
+  OutlineEntry,
+  ScrollToItemOptions,
+} from '@emdash/chat-ui';
+import {
+  connectSession,
+  createChatState,
+  deriveTranscriptOutline,
+  pinTopMode,
+} from '@emdash/chat-ui';
 import type {
   AttachmentMimeType,
   AttachmentRef,
@@ -91,6 +103,8 @@ export class AcpChatStore {
    * state (see acp-chat-stop-controller.ts).
    */
   isCancelling = false;
+  /** True while an older-history page requested via `loadOlderHistory` is in flight. */
+  isLoadingOlderHistory = false;
 
   private _view: ChatView | null = null;
   private _bootstrapped = false;
@@ -138,6 +152,7 @@ export class AcpChatStore {
       messageCount: observable,
       draftText: observable,
       isCancelling: observable,
+      isLoadingOlderHistory: observable,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -151,6 +166,7 @@ export class AcpChatStore {
       affordances: computed,
       isEmpty: computed,
       failedSubmissions: computed,
+      outline: computed,
       submitPrompt: action,
       queuePrompt: action,
       retryFailedSubmission: action,
@@ -169,6 +185,7 @@ export class AcpChatStore {
       exportTranscript: action,
       retry: action,
       loadOlderHistory: action,
+      scrollToTranscriptItem: action,
     });
   }
 
@@ -277,6 +294,24 @@ export class AcpChatStore {
     return this._submissions.failedSubmissions;
   }
 
+  /**
+   * Compact outline of user prompts and assistant/agent turns — one stable
+   * entry per prompt and per turn, derived fresh from canonical transcript
+   * state on every read (see `deriveTranscriptOutline`). Reads the same
+   * three-way committed/active/pending-prompt split `ChatRoot` reconciles for
+   * rendering, so the outline always matches what is actually loaded —
+   * extending without duplicates or reordering as older history pages in.
+   */
+  get outline(): readonly OutlineEntry[] {
+    const transcript = this.chatState.transcript.state;
+    return deriveTranscriptOutline(
+      transcript.committedTurns,
+      transcript.activeTurnSnapshot,
+      transcript.turnStatus,
+      this.chatState.session.state.pendingPrompt
+    );
+  }
+
   bootstrap(): void {
     if (this._bootstrapped) return;
     this._bootstrapped = true;
@@ -300,11 +335,54 @@ export class AcpChatStore {
    * transcript is scrolled to its top). A no-op when history is still
    * loading, a page is already in flight, or the start of history has
    * already been reached — see `AcpHistoryPagination`.
+   *
+   * Returns the in-flight (or immediately-resolved) promise so callers that
+   * need to act *after* the page lands — e.g. `scrollToTranscriptItem` below —
+   * can await it. `onReachStart={() => store.loadOlderHistory()}` in
+   * acp-chat-panel.tsx ignores the return value, which is fine: `() => void`
+   * callback props accept a Promise-returning implementation.
    */
-  loadOlderHistory(): void {
+  loadOlderHistory(): Promise<void> {
+    const begin = this._historyPagination.beginLoadOlder();
+    if (!begin) return Promise.resolve();
+    return this._loadOlderPage(begin);
+  }
+
+  /**
+   * Scroll the bound transcript view to the row for `itemId`. If the item is
+   * part of the currently-loaded transcript, this jumps immediately through
+   * the existing virtualizer-aware `ChatView.scrollToItem` seam — correct
+   * even when the destination row is off-DOM, never a manual `scrollTop`
+   * write. Otherwise this pages in older history first (reusing
+   * `loadOlderHistory`, one page at a time) and retries, so a target from a
+   * not-yet-paginated-in page is never a silent no-op.
+   *
+   * Built for the outline (`scrollToOutlineEntry` below), but intentionally
+   * generic and typed for reuse by later transcript-navigation features
+   * (search, durable reading position — see spec #18 tickets #35-#37): any
+   * caller that has a stable canonical item id can resolve a jump through it.
+   */
+  async scrollToTranscriptItem(itemId: string, opts?: ScrollToItemOptions): Promise<void> {
+    if (this.chatState.transcript.findItemById(itemId)) {
+      this._view?.scrollToItem(itemId, opts);
+      return;
+    }
+    // Ask permission the same way `loadOlderHistory` does, rather than
+    // calling it directly: `beginLoadOlder()` returning null (bootstrap not
+    // done yet, a page is already in flight, or history is exhausted) means
+    // no *new* page is coming from this call, so recursing further would
+    // spin forever instead of resolving. The pagination cursor only ever
+    // moves toward exhaustion, so a successful `begin` bounds the recursion
+    // by the number of remaining pages.
     const begin = this._historyPagination.beginLoadOlder();
     if (!begin) return;
-    void this._loadOlderHistory(begin.epoch, begin.before);
+    await this._loadOlderPage(begin);
+    await this.scrollToTranscriptItem(itemId, opts);
+  }
+
+  /** Jump the transcript to an outline entry's anchor item — see `outline`. */
+  scrollToOutlineEntry(entry: OutlineEntry): void {
+    void this.scrollToTranscriptItem(entry.itemId, { align: 'start' });
   }
 
   async uploadAttachment(input: {
@@ -775,6 +853,20 @@ export class AcpChatStore {
       this.chatState.session.setPendingPrompt(null);
       this.chatState.transcript.history.append([...fresh]);
       this._syncMessageCount();
+    });
+  }
+
+  /**
+   * Shared `isLoadingOlderHistory` bookkeeping around `_loadOlderHistory`,
+   * used by both the scroll-driven `loadOlderHistory()` and the itemId-driven
+   * `scrollToTranscriptItem()` retry loop.
+   */
+  private _loadOlderPage(begin: { epoch: number; before: number }): Promise<void> {
+    this.isLoadingOlderHistory = true;
+    return this._loadOlderHistory(begin.epoch, begin.before).finally(() => {
+      runInAction(() => {
+        this.isLoadingOlderHistory = false;
+      });
     });
   }
 

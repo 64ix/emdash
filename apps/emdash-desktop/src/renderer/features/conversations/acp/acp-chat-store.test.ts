@@ -29,6 +29,18 @@ vi.mock('@emdash/chat-ui', () => ({
   connectSession: vi.fn(() => () => {}),
   createChatState: () => makeFakeChatState(),
   pinTopMode: vi.fn(() => ({ kind: 'pin-top' })),
+  // Real derivation semantics are covered by chat-ui's own
+  // `state/outline.test.ts`; this file only needs `AcpChatStore.outline` to
+  // exist and to forward its four arguments unchanged (see the "outline"
+  // describe block below).
+  deriveTranscriptOutline: vi.fn(
+    (
+      committedTurns: unknown,
+      activeTurn: unknown,
+      turnStatus: unknown,
+      pendingPrompt: unknown
+    ) => ({ committedTurns, activeTurn, turnStatus, pendingPrompt })
+  ),
 }));
 vi.mock('@renderer/lib/chat/shared-chat-context', () => ({
   getSharedChatContext: () => ({}),
@@ -69,6 +81,14 @@ function makeFakeChatState() {
           return committed;
         },
         activeTurnSnapshot: null,
+        turnStatus: 'done',
+      },
+      findItemById: (id: string) => {
+        for (const turn of committed) {
+          const item = turn.items.find((candidate) => candidate.id === id);
+          if (item) return item;
+        }
+        return undefined;
       },
     },
     session: {
@@ -85,6 +105,17 @@ function makeTurn(seq: number): TranscriptTurn {
     seq,
     initiator: 'agent',
     items: [],
+    outcome: { kind: 'done' },
+  };
+}
+
+/** A turn with one addressable message item, for `scrollToTranscriptItem` fixtures. */
+function makeMessageTurn(seq: number, itemId: string): TranscriptTurn {
+  return {
+    id: `turn-${seq}`,
+    seq,
+    initiator: 'agent',
+    items: [{ kind: 'message', id: itemId, seq: 0, role: 'assistant', text: `text for ${itemId}` }],
     outcome: { kind: 'done' },
   };
 }
@@ -115,7 +146,7 @@ describe('AcpChatStore.loadOlderHistory', () => {
     const loadOlder = vi.fn();
     store.bindView({ loadOlder } as never);
 
-    store.loadOlderHistory();
+    void store.loadOlderHistory();
     await flushMicrotasks();
 
     // The view handle owns the anchor-preserving prepend; the store must not
@@ -135,7 +166,7 @@ describe('AcpChatStore.loadOlderHistory', () => {
 
     // Tab switched away before the fetch resolves: no view bound.
     store.bindView(null);
-    store.loadOlderHistory();
+    void store.loadOlderHistory();
     await flushMicrotasks();
 
     expect(fakeChatState.transcript.history.get()).toEqual([
@@ -155,7 +186,7 @@ describe('AcpChatStore.loadOlderHistory', () => {
     } as never;
 
     store.bindView(null);
-    store.loadOlderHistory();
+    void store.loadOlderHistory();
     await flushMicrotasks();
 
     // Switching back to this conversation rebinds a fresh view handle. The
@@ -180,7 +211,7 @@ describe('AcpChatStore.loadOlderHistory', () => {
     store.session = {
       getHistory: vi.fn(async () => ({ success: true, data: finalPage })),
     } as never;
-    store.loadOlderHistory();
+    void store.loadOlderHistory();
     await flushMicrotasks();
 
     expect(loadOlder).toHaveBeenCalledTimes(1);
@@ -191,6 +222,139 @@ describe('AcpChatStore.loadOlderHistory', () => {
       makeTurn(10),
       makeTurn(11),
     ]);
+  });
+
+  it('toggles isLoadingOlderHistory around the fetch', async () => {
+    const { store } = setUpStore([makeTurn(10), makeTurn(11)], 10);
+    let resolveHistory!: (value: {
+      success: true;
+      data: { turns: TranscriptTurn[]; nextCursor: null };
+    }) => void;
+    store.session = {
+      getHistory: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveHistory = resolve;
+          })
+      ),
+    } as never;
+
+    expect(store.isLoadingOlderHistory).toBe(false);
+    const pending = store.loadOlderHistory();
+    expect(store.isLoadingOlderHistory).toBe(true);
+
+    resolveHistory({ success: true, data: { turns: [makeTurn(9)], nextCursor: null } });
+    await pending;
+
+    expect(store.isLoadingOlderHistory).toBe(false);
+  });
+});
+
+// ── AcpChatStore.scrollToTranscriptItem / scrollToOutlineEntry ───────────────
+//
+// The outline (ticket #34) selects an entry by calling `scrollToOutlineEntry`,
+// which delegates to this generic, reusable "resolve an itemId then scroll"
+// capability. The interesting case is an itemId that belongs to a page that
+// has not been paginated into `chatState` yet — this must page it in through
+// the existing `loadOlderHistory` path and then land on it, not silently
+// no-op or leave the view scrolled to the wrong row.
+describe('AcpChatStore.scrollToTranscriptItem', () => {
+  function setUpStore(seedTurns: TranscriptTurn[], nextCursor: number | null) {
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    const pagination = (store as unknown as { _historyPagination: AcpHistoryPagination })
+      ._historyPagination;
+    pagination.seed({ turns: seedTurns, nextCursor });
+    const fakeChatState = store.chatState as unknown as FakeChatState;
+    fakeChatState.transcript.history.seed(seedTurns);
+    return { store, fakeChatState };
+  }
+
+  it('scrolls immediately when the item is already loaded, without paging', async () => {
+    const { store } = setUpStore([makeMessageTurn(10, 'target-item'), makeTurn(11)], 10);
+    const getHistory = vi.fn();
+    store.session = { getHistory } as never;
+    const scrollToItem = vi.fn();
+    store.bindView({ scrollToItem } as never);
+
+    await store.scrollToTranscriptItem('target-item');
+
+    expect(scrollToItem).toHaveBeenCalledWith('target-item', undefined);
+    expect(getHistory).not.toHaveBeenCalled();
+  });
+
+  it('pages in older history through loadOlderHistory and lands on the newly-revealed turn', async () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(10), makeTurn(11)], 10);
+    const olderPage = {
+      turns: [makeTurn(8), makeMessageTurn(9, 'target-item')],
+      nextCursor: null,
+    };
+    const getHistory = vi.fn(async () => ({ success: true, data: olderPage }));
+    store.session = { getHistory } as never;
+
+    const scrollToItem = vi.fn();
+    // Simulate the real ChatView.loadOlder contract: prepend into chatState
+    // (see ChatRoot.tsx's doLoadOlder) — a bare spy would not, and the target
+    // item would never become findable.
+    const loadOlder = vi.fn((turns: TranscriptTurn[]) => {
+      fakeChatState.transcript.history.prepend(turns);
+    });
+    store.bindView({ loadOlder, scrollToItem } as never);
+
+    await store.scrollToTranscriptItem('target-item', { align: 'start' });
+
+    // The existing loadOlderHistory path actually ran (not a silent no-op)...
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    expect(loadOlder).toHaveBeenCalledWith(olderPage.turns);
+    // ...and the jump landed on the correct row once it was loaded, aligned
+    // to the top like every other outline selection.
+    expect(scrollToItem).toHaveBeenCalledWith('target-item', { align: 'start' });
+    expect(fakeChatState.transcript.history.get().map((t) => t.id)).toEqual([
+      'turn-8',
+      'turn-9',
+      'turn-10',
+      'turn-11',
+    ]);
+  });
+
+  it('gives up once history is exhausted instead of retrying forever', async () => {
+    // nextCursor null at seed time: pagination is already exhausted.
+    const { store } = setUpStore([makeTurn(10), makeTurn(11)], null);
+    const getHistory = vi.fn();
+    store.session = { getHistory } as never;
+    const scrollToItem = vi.fn();
+    store.bindView({ scrollToItem } as never);
+
+    await store.scrollToTranscriptItem('never-loaded-item');
+
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(scrollToItem).not.toHaveBeenCalled();
+  });
+
+  it('scrollToOutlineEntry delegates to scrollToTranscriptItem, aligned to the top', async () => {
+    const { store } = setUpStore([makeMessageTurn(10, 'entry-item'), makeTurn(11)], 10);
+    const scrollToItem = vi.fn();
+    store.bindView({ scrollToItem } as never);
+
+    store.scrollToOutlineEntry({ itemId: 'entry-item' } as never);
+    await flushMicrotasks();
+
+    expect(scrollToItem).toHaveBeenCalledWith('entry-item', { align: 'start' });
+  });
+});
+
+describe('AcpChatStore.outline', () => {
+  it('derives from the current committed/active/pending-prompt transcript state', () => {
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    const fakeChatState = store.chatState as unknown as FakeChatState;
+    const turns = [makeTurn(1)];
+    fakeChatState.transcript.history.seed(turns);
+
+    expect(store.outline).toEqual({
+      committedTurns: turns,
+      activeTurn: fakeChatState.transcript.state.activeTurnSnapshot,
+      turnStatus: fakeChatState.transcript.state.turnStatus,
+      pendingPrompt: fakeChatState.session.state.pendingPrompt,
+    });
   });
 });
 

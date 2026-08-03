@@ -81,6 +81,11 @@ export type {
 
 export type { TurnStatus, TranscriptApi, ChatHistory } from './state/transcript';
 
+// ── Transcript outline (ticket #34) ──────────────────────────────────────────
+
+export { deriveTranscriptOutline } from './state/outline';
+export type { OutlineEntry, OutlineEntryRole, OutlineEntryStatus } from './state/outline';
+
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 export type {
