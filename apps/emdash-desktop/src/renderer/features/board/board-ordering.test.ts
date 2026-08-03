@@ -169,6 +169,78 @@ describe('computeDropRank', () => {
   });
 });
 
+describe('computeDropRank — hidden-card rank collision (ticket #45 follow-up)', () => {
+  // Stored (unfiltered) order: '4' < '5' < '6'. A filter hides the interior
+  // card ranked '5' — e.g. it doesn't pass an Agent State filter — so the
+  // *visible* list is just ['4', '6']. Dropping between those two visible
+  // neighbours must never produce '5': that's the hidden card's own,
+  // already-in-use Board Rank, a genuine duplicate the stable sort would
+  // then only break by insertion order, and a later drop treating the
+  // resulting ('4', '5') pair as adjacent bounds would throw inside
+  // `rankBetween`'s own "a must sort strictly before b" guard.
+  const visible = [
+    { id: 'keep-a', rank: '4' },
+    { id: 'keep-c', rank: '6' },
+  ];
+  const trueOrder = [
+    { id: 'keep-a', rank: '4' },
+    { id: 'hidden', rank: '5' },
+    { id: 'keep-c', rank: '6' },
+  ];
+
+  it('computes the rank against the true unfiltered neighbours, never colliding with the hidden card between them', () => {
+    const rank = computeDropRank(visible, 1, trueOrder);
+    expect(rank > '4').toBe(true);
+    expect(rank < '6').toBe(true);
+    expect(rank).not.toBe('5');
+  });
+
+  it('leaves the naive (visible-only) interpolation untouched when it does not collide — the common case', () => {
+    // Mirrors the board-header.test.tsx regression: 'D' < 'H' < 'n', 'H'
+    // hidden. rankBetween('D', 'n') doesn't land on 'H', so supplying
+    // `trueEntries` must not change the result versus the 2-arg call.
+    const visibleWide = [
+      { id: 'keep-a', rank: 'D' },
+      { id: 'keep-c', rank: 'n' },
+    ];
+    const trueOrderWide = [
+      { id: 'keep-a', rank: 'D' },
+      { id: 'hidden', rank: 'H' },
+      { id: 'keep-c', rank: 'n' },
+    ];
+    expect(computeDropRank(visibleWide, 1, trueOrderWide)).toBe(computeDropRank(visibleWide, 1));
+  });
+
+  it('a boundary collision at the very top (no visible predecessor) falls back to the true predecessor', () => {
+    // rankBetween(null, '3') === '1' — exactly the hidden card's own rank.
+    const rank = computeDropRank([{ id: 'keep-c', rank: '3' }], 0, [
+      { id: 'hidden', rank: '1' },
+      { id: 'keep-c', rank: '3' },
+    ]);
+    expect(rank > '1').toBe(true);
+    expect(rank < '3').toBe(true);
+    expect(rank).not.toBe('1');
+  });
+
+  it('a boundary collision at the very end (no visible successor) falls back to the true successor', () => {
+    // rankBetween('4', null) === 'X' — exactly the hidden card's own rank.
+    const rank = computeDropRank([{ id: 'keep-a', rank: '4' }], 1, [
+      { id: 'keep-a', rank: '4' },
+      { id: 'hidden', rank: 'X' },
+    ]);
+    expect(rank > '4').toBe(true);
+    expect(rank < 'X').toBe(true);
+    expect(rank).not.toBe('X');
+  });
+
+  it('falls back to the old (visible-only) interpolation when no true order is supplied', () => {
+    // Backward-compatible 2-arg call site — unaffected by this fix.
+    const rank = computeDropRank(visible, 1);
+    expect(rank > '4').toBe(true);
+    expect(rank < '6').toBe(true);
+  });
+});
+
 describe('computeDropPosition', () => {
   it('resolves the destination stage from the column', () => {
     const result = computeDropPosition('spec', [], 0);

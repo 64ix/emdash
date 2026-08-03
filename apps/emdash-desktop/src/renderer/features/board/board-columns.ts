@@ -68,3 +68,31 @@ export function isTaskShippedFaded(task: Task, now?: number): boolean {
 export function isBoardDisplayable(task: Task, now?: number): boolean {
   return task.type === 'task' && !task.archivedAt && !isTaskShippedFaded(task, now);
 }
+
+/**
+ * Column-scoped task creation (ticket #45) may only assign a stage the
+ * domain model treats as *manually declared*. Per CONTEXT.md ("Workflow
+ * Stage"): "Stage authority is hybrid: GitHub is authoritative for every
+ * stage it can prove (`exploring` = open Map, `spec` = open Spec issue,
+ * `review` = open PR referencing the Spec, `shipped` = that PR merged); the
+ * agent or user declares the rest (`idea`, `implementing`)." `unstaged` (no
+ * stage at all) is always a manual starting point — it is the default a task
+ * lands in without any placement decision. `triage` is an out-of-flow sink a
+ * contradicted GitHub fact pushes a card into, or a user/agent gesture moves
+ * it out of (CONTEXT.md "Triage") — never a starting point for a new task.
+ *
+ * This reading is consistent with (never contradicted by)
+ * `deriveWorkflowStageFromIssues`
+ * (`src/main/core/issues/inbound-sync/stage-derivation.ts`), the authority
+ * this ticket was pointed at: that function only ever *derives* `spec`,
+ * `exploring`, or `triage` from observable issue facts — all three excluded
+ * here — and never derives `idea` or `implementing`.
+ *
+ * This is a narrow, single-purpose answer to one question ("can a column
+ * offer creation?"), not the general GitHub-authoritative-stage explanation
+ * ticket #48's stage-authority contract is building. That contract can
+ * absorb this check once it exists — see ticket #45's notes.
+ */
+export function columnPermitsManualCreation(column: ColumnId): boolean {
+  return column === 'unstaged' || column === 'idea' || column === 'implementing';
+}

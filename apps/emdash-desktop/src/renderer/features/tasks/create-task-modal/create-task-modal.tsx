@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from '@renderer/lib/ui/dialog';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { LinkedEntitySection } from './linked-entity-section';
 import { TaskNameField } from './task-name-field';
 import { useCreateTaskCallback } from './use-create-task-callback';
@@ -54,11 +55,15 @@ export const CreateTaskModal = observer(function CreateTaskModal({
   projectId,
   strategy: initialStrategy = 'from-branch',
   initialPR,
+  initialWorkflowStage,
   onClose,
 }: BaseModalProps & {
   projectId?: string;
   strategy?: 'from-branch' | 'from-issue' | 'from-pull-request';
   initialPR?: PullRequest;
+  /** Set when opened from an eligible Feature Board column (ticket #45) — see
+   * `columnPermitsManualCreation` (board-columns.ts) for which stages are eligible. */
+  initialWorkflowStage?: WorkflowStage;
 }) {
   const selectedProjectId = useDefaultProjectId(projectId);
 
@@ -113,6 +118,7 @@ export const CreateTaskModal = observer(function CreateTaskModal({
     initialConversation,
     navigate,
     onClose,
+    initialWorkflowStage,
   });
 
   return (

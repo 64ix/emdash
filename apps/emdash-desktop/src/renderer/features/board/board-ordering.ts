@@ -65,18 +65,75 @@ export function partitionAwaitingInput<T extends IdentifiedEntry>(
  * "inside" the unranked tail clamps to the end of the ranked prefix, since an
  * unranked card has no rank to slot next to. Dropping into an empty column
  * (or an all-unranked column) produces the first rank in that column.
+ *
+ * `destinationEntries` may be a *filtered* (Board filters, ticket #45) view —
+ * it decides the drop *slot*, i.e. which two visible cards the user actually
+ * aimed between. Interpolating a rank strictly between those two visible
+ * neighbours' own stored ranks is correct in the common case, but it can
+ * exactly reproduce a *hidden* card's own rank when one genuinely sits
+ * between them (e.g. visible '4' and '6' with a filtered-out '5' in between:
+ * `rankBetween('4', '6') === '5'`, the hidden card's own rank — a real
+ * duplicate Board Rank, and a later drop next to it would then violate
+ * `rankBetween`'s own ordering guard). The optional `trueEntries` — the same
+ * column's *unfiltered* cards, sorted the same way, with the dragged card
+ * excluded — lets this be detected: only when the naive candidate collides
+ * with a true (possibly hidden) entry does this fall back to interpolating
+ * against the true immediate neighbour of whichever visible anchor bounds the
+ * slot instead. Two truly-adjacent stored entries can never have a third rank
+ * between them, so that fallback can never collide with anything already on
+ * the board. This leaves the common case — no hidden card in the gap, or a
+ * hidden card whose rank the naive midpoint simply doesn't land on — exactly
+ * as before. Omitting `trueEntries` also keeps the old (filtered-only)
+ * behavior, for callers that have no unfiltered view.
  */
-export function computeDropRank(
-  destinationEntries: readonly RankedEntry[],
-  dropIndex: number
+export function computeDropRank<T extends RankedEntry>(
+  destinationEntries: readonly T[],
+  dropIndex: number,
+  trueEntries?: readonly (T & { id: string })[]
 ): string {
   let rankedLength = destinationEntries.findIndex((entry) => entry.rank === null);
   if (rankedLength === -1) rankedLength = destinationEntries.length;
 
   const clampedIndex = Math.min(Math.max(dropIndex, 0), rankedLength);
-  const prev = clampedIndex > 0 ? destinationEntries[clampedIndex - 1]!.rank : null;
-  const next = clampedIndex < rankedLength ? destinationEntries[clampedIndex]!.rank : null;
-  return rankBetween(prev, next);
+  const leftAnchor = clampedIndex > 0 ? destinationEntries[clampedIndex - 1]! : null;
+  const rightAnchor = clampedIndex < rankedLength ? destinationEntries[clampedIndex]! : null;
+  const candidate = rankBetween(leftAnchor?.rank ?? null, rightAnchor?.rank ?? null);
+
+  if (!trueEntries) return candidate;
+
+  let trueRankedLength = trueEntries.findIndex((entry) => entry.rank === null);
+  if (trueRankedLength === -1) trueRankedLength = trueEntries.length;
+  const trueRanked = trueEntries.slice(0, trueRankedLength);
+
+  // No true entry — hidden or otherwise — already holds `candidate`'s rank:
+  // the naive, visible-only interpolation above is safe as is. (A match here
+  // is only possible for an entry strictly between the two visible anchors,
+  // since `candidate` itself always sorts strictly between them.)
+  if (!trueRanked.some((entry) => entry.rank === candidate)) return candidate;
+
+  if (leftAnchor) {
+    // `leftAnchor` is drawn from `destinationEntries`, which — whenever
+    // `trueEntries` is supplied — is itself an id-bearing subset of
+    // `trueEntries` (see the board-main-panel.tsx call site); the cast just
+    // recovers the `id` TypeScript otherwise erases via the plain `T` bound.
+    const anchor = leftAnchor as T & { id: string };
+    const trueIndex = trueRanked.findIndex((entry) => entry.id === anchor.id);
+    const upper =
+      trueIndex !== -1 && trueIndex + 1 < trueRanked.length
+        ? trueRanked[trueIndex + 1]!.rank
+        : (rightAnchor?.rank ?? null);
+    return rankBetween(anchor.rank, upper);
+  }
+  if (rightAnchor) {
+    const anchor = rightAnchor as T & { id: string };
+    const trueIndex = trueRanked.findIndex((entry) => entry.id === anchor.id);
+    const lower = trueIndex > 0 ? trueRanked[trueIndex - 1]!.rank : null;
+    return rankBetween(lower, anchor.rank);
+  }
+  // Nothing visible in this column (it may still hold hidden cards) — append
+  // after the true order's last ranked entry, if any.
+  const lower = trueRanked.length > 0 ? trueRanked[trueRanked.length - 1]!.rank : null;
+  return rankBetween(lower, null);
 }
 
 /**
@@ -84,15 +141,17 @@ export function computeDropRank(
  * dropped at `dropIndex` inside `destinationColumn`. `destinationEntries` must
  * be that column's cards, sorted via `sortColumn`, with the dragged card
  * itself already removed. Dropping into the `unstaged` column clears the
- * Workflow Stage.
+ * Workflow Stage. See `computeDropRank` for `trueEntries` (the same column's
+ * unfiltered cards, same sort, dragged card excluded).
  */
-export function computeDropPosition(
+export function computeDropPosition<T extends RankedEntry>(
   destinationColumn: ColumnId,
-  destinationEntries: readonly RankedEntry[],
-  dropIndex: number
+  destinationEntries: readonly T[],
+  dropIndex: number,
+  trueEntries?: readonly (T & { id: string })[]
 ): { stage: WorkflowStage | null; rank: string } {
   return {
     stage: destinationColumn === 'unstaged' ? null : destinationColumn,
-    rank: computeDropRank(destinationEntries, dropIndex),
+    rank: computeDropRank(destinationEntries, dropIndex, trueEntries),
   };
 }

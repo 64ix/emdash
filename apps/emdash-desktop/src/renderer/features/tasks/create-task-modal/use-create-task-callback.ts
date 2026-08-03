@@ -3,7 +3,9 @@ import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-select
 import type { InitialConversationState } from '@renderer/features/tasks/task-config/initial-conversation-section';
 import type { NavigateFnTyped } from '@renderer/lib/layout/navigation-provider';
 import { log } from '@renderer/utils/logger';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { buildInitialConversation, deriveInitialStatus } from './build-create-task-params';
+import { placeCreatedTaskInColumn } from './place-created-task-in-column';
 import type { CreateTaskState } from './use-create-task-state';
 
 interface UseCreateTaskCallbackParams {
@@ -12,6 +14,10 @@ interface UseCreateTaskCallbackParams {
   initialConversation: InitialConversationState;
   navigate: NavigateFnTyped;
   onClose: () => void;
+  /** Set when the modal was opened from an eligible Feature Board column (ticket #45) —
+   * the new task's initial manual Workflow Stage placement, applied after creation via
+   * the existing board-position write, not a parallel creation path. */
+  initialWorkflowStage?: WorkflowStage;
 }
 
 export function useCreateTaskCallback({
@@ -20,6 +26,7 @@ export function useCreateTaskCallback({
   initialConversation,
   navigate,
   onClose,
+  initialWorkflowStage,
 }: UseCreateTaskCallbackParams): { handleCreateTask: () => void; canCreate: boolean } {
   const canCreate = !!selectedProjectId && state.isValid;
 
@@ -44,9 +51,13 @@ export function useCreateTaskCallback({
       })
       .catch((e) => log.error('create task failed', e));
 
+    if (initialWorkflowStage) {
+      placeCreatedTaskInColumn(taskManager, id, initialWorkflowStage);
+    }
+
     navigate('task', { projectId: selectedProjectId, taskId: id });
     onClose();
-  }, [selectedProjectId, state, initialConversation, navigate, onClose]);
+  }, [selectedProjectId, state, initialConversation, navigate, onClose, initialWorkflowStage]);
 
   return { handleCreateTask, canCreate };
 }

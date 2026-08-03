@@ -22,8 +22,9 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // MessageSquare is gone with #47's removal of the old inline linked-issue badge;
-// AlertTriangle/ChevronRight are #46's Triage warning and collapse toggle.
-import { AlertTriangle, ArrowUpRight, ChevronRight } from 'lucide-react';
+// AlertTriangle/ChevronRight are #46's Triage warning and collapse toggle; Plus is
+// #45's per-column create button.
+import { AlertTriangle, ArrowUpRight, ChevronRight, Plus } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -35,11 +36,18 @@ import {
 } from '@renderer/features/board/board-card-view-model';
 import {
   columnEmphasis,
+  columnPermitsManualCreation,
   isBoardDisplayable,
   PIPELINE_COLUMNS,
   STAGE_LABELS,
   type ColumnEmphasis,
 } from '@renderer/features/board/board-columns';
+import {
+  EMPTY_BOARD_FILTERS,
+  taskPassesBoardFilters,
+  type BoardFilterState,
+} from '@renderer/features/board/board-filters';
+import { BoardHeader } from '@renderer/features/board/board-header';
 import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
 import {
@@ -62,6 +70,7 @@ import { StatusIcon } from '@renderer/lib/components/pr-status-icon';
 import { StackedAgentLogos } from '@renderer/lib/components/stacked-agent-logos';
 import { rpc } from '@renderer/lib/ipc';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
+import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { RelativeTime } from '@renderer/lib/ui/relative-time';
 import { captureTelemetry } from '@renderer/utils/telemetryClient';
@@ -194,7 +203,22 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     column: ColumnId;
     explanation: string;
   } | null>(null);
+  // Board workspace header (ticket #45): search + Needs Attention + compact
+  // filters. Ephemeral, presentation-only view state — like `panelTarget`,
+  // local to this component and never written to the database; it only ever
+  // narrows which already-loaded cards populate `rawByColumn` below, never
+  // their persisted Board Rank or Workflow Stage.
+  const [filters, setFilters] = useState<BoardFilterState>(EMPTY_BOARD_FILTERS);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const showCreateTaskModal = useShowModal('taskModal');
+
+  // Task creation (ticket #45): the header's "New task" button opens the
+  // existing Create Task flow unchanged; an eligible column's "+" (gated by
+  // `columnPermitsManualCreation`) opens the same flow with that column's
+  // stage as the new task's initial manual placement.
+  const handleCreateTask = (initialWorkflowStage?: WorkflowStage) => {
+    showCreateTaskModal({ projectId, initialWorkflowStage });
+  };
 
   // Board open triggers an immediate derivation pass (PR facts + inbound issues);
   // background derivation otherwise follows the existing sync cadences
@@ -208,13 +232,45 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // Built unconditionally, ahead of the `!manager` early return below, so the
   // disappearance effect that follows always runs in the same hook order
   // regardless of whether the project's task manager is mounted yet.
+  //
+  // `storeById` deliberately stays unfiltered by the board's own filters
+  // (ticket #45) below: the Task Detail Panel's disappearance handling (just
+  // below) and direct-navigation actions key off it, and a filter must never
+  // silently close an already-open panel or break "Open task" for its target.
   const storeById = new Map<string, TaskStore>();
+  // Agent status per task (ticket #45): computed once here, reused by the
+  // awaiting-input elevation (unchanged behavior) below and by the board's
+  // own filters, so the two can never read a different status for one card.
+  const agentStatusById = new Map<string, AgentStatus | null>();
   const rawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
+  // True (unfiltered) per-column membership — every displayable task,
+  // regardless of the board's own filters. Kept alongside the filtered
+  // `rawByColumn` above purely so drop-rank math (`computeDropRank`'s
+  // `trueEntries`) can interpolate against a filtered-out card's *real*
+  // neighbours when a filter hides an interior card, instead of colliding
+  // with its stored rank — see `board-ordering.ts`. Never itself used to
+  // decide what's on screen; `rawByColumn`/`displayByColumn` still own that.
+  const trueRawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
   if (manager) {
     for (const [, store] of manager.tasks) {
       const task = registeredTaskData(store);
       if (!task || !isBoardDisplayable(task)) continue;
       storeById.set(task.id, store);
+      agentStatusById.set(task.id, taskAgentStatus(store));
+      trueRawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
+    }
+    // Filtering (ticket #45) is applied here, at the source: every downstream
+    // drag-and-drop computation (sorting, awaiting-input partition,
+    // cross-column preview, collision detection, drop-position rank math)
+    // only ever sees already-filtered cards, so a drop's fractional Board
+    // Rank is always interpolated between the *visible* neighbors the user
+    // actually saw — never misaligned against a hidden one. This never
+    // writes anything by itself — see `board-filters.test.ts` and the
+    // mutation-seam assertion in `board-header.test.tsx`.
+    for (const [id, store] of storeById) {
+      const task = registeredTaskData(store);
+      if (!task) continue;
+      if (!taskPassesBoardFilters(task, agentStatusById.get(id) ?? null, filters)) continue;
       rawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
     }
   }
@@ -279,8 +335,8 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   };
 
   const awaitingInputIds = new Set<string>();
-  for (const [id, store] of storeById) {
-    if (taskAgentStatus(store) === 'awaiting-input') awaitingInputIds.add(id);
+  for (const [id, status] of agentStatusById) {
+    if (status === 'awaiting-input') awaitingInputIds.add(id);
   }
 
   // Stage authority (ticket #48): computed once per render from data already
@@ -300,11 +356,16 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // Rank is always relative to manual order, never the awaiting-input view.
   const isDragActive = activeDragId !== null;
   const sortedByColumn = new Map<ColumnId, CardEntry[]>();
+  // The true (unfiltered) per-column order, sorted the same way — the basis
+  // `computeDropRank`'s `trueEntries` uses to find a visible drop anchor's
+  // *real* neighbour when the board's filters hide a card between them.
+  const trueSortedByColumn = new Map<ColumnId, CardEntry[]>();
   const displayByColumn = new Map<ColumnId, CardEntry[]>();
   const columnByCardId = new Map<string, ColumnId>();
   for (const column of COLUMNS) {
     const sorted = sortColumn(rawByColumn.get(column) ?? []);
     sortedByColumn.set(column, sorted);
+    trueSortedByColumn.set(column, sortColumn(trueRawByColumn.get(column) ?? []));
     displayByColumn.set(column, partitionAwaitingInput(sorted, awaitingInputIds, isDragActive));
     for (const entry of sorted) columnByCardId.set(entry.id, column);
   }
@@ -426,7 +487,15 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
         const entries = (sortedByColumn.get(previewColumn) ?? []).filter(
           (entry) => entry.id !== activeId
         );
-        const position = computeDropPosition(previewColumn, entries, dragPreview.index);
+        const trueEntries = (trueSortedByColumn.get(previewColumn) ?? []).filter(
+          (entry) => entry.id !== activeId
+        );
+        const position = computeDropPosition(
+          previewColumn,
+          entries,
+          dragPreview.index,
+          trueEntries
+        );
         void store.updateBoardPosition(position.stage, position.rank);
       }
       return;
@@ -490,7 +559,15 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
       dropIndex = dragPreview.index;
     }
 
-    const { stage, rank } = computeDropPosition(destinationColumn, destinationEntries, dropIndex);
+    const trueDestinationEntries = (trueSortedByColumn.get(destinationColumn) ?? []).filter(
+      (entry) => entry.id !== activeId
+    );
+    const { stage, rank } = computeDropPosition(
+      destinationColumn,
+      destinationEntries,
+      dropIndex,
+      trueDestinationEntries
+    );
     void store.updateBoardPosition(stage, rank);
   }
 
@@ -557,6 +634,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
       selectedTaskId={panelTarget?.kind === 'task' ? panelTarget.taskId : null}
       onSelectTask={(taskId) => setPanelTarget({ kind: 'task', taskId })}
       onOpenTask={handleOpenTask}
+      onCreateTask={handleCreateTask}
       // Ghost Cards (ticket #9) are not tasks and never sort/drag — they
       // only ever live in the `idea` column, after real cards.
       ghostCards={column === 'idea' ? ghostCards : undefined}
@@ -582,10 +660,12 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
-      <div className="flex items-baseline gap-2 px-4 pt-4 pb-2">
-        <h1 className="text-sm font-medium">Feature board</h1>
-        <span className="text-xs text-foreground-muted">{projectName}</span>
-      </div>
+      <BoardHeader
+        projectName={projectName}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onCreateTask={() => handleCreateTask()}
+      />
       <BoardLinkSuggestions projectId={projectId} />
       {/* Task Detail Panel (CONTEXT.md): a fixed-width sibling to the right of
           the board, not an overlay — the board stays fully interactive
@@ -678,6 +758,7 @@ const BoardColumn = observer(function BoardColumn({
   selectedTaskId,
   onSelectTask,
   onOpenTask,
+  onCreateTask,
   ghostCards,
   selectedGhostCardId,
   onSelectGhostCard,
@@ -695,6 +776,7 @@ const BoardColumn = observer(function BoardColumn({
   selectedTaskId: string | null;
   onSelectTask: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
+  onCreateTask: (initialWorkflowStage?: WorkflowStage) => void;
   ghostCards?: GhostCard[];
   selectedGhostCardId?: string | null;
   onSelectGhostCard: (ghostCard: GhostCard) => void;
@@ -729,11 +811,17 @@ const BoardColumn = observer(function BoardColumn({
   // no React state round-trip needed for that path.
   const isCollapsible = cardCount === 0;
   const effectiveCollapsed = isCollapsed && isCollapsible && !isDragHovered;
+  // Column-scoped creation (ticket #45): only offered when the column's stage
+  // is a permitted manual initial placement (`columnPermitsManualCreation`) —
+  // a GitHub-authoritative stage (Exploring, Spec, Review, Shipped) or the
+  // out-of-flow Triage sink offers no creation action here.
+  const canCreateHere = columnPermitsManualCreation(column);
+  const stageLabel = STAGE_LABELS[column];
 
   return (
     <div
       role="group"
-      aria-label={`${STAGE_LABELS[column]} column${EMPHASIS_ARIA_SUFFIX[emphasis]}`}
+      aria-label={`${stageLabel} column${EMPHASIS_ARIA_SUFFIX[emphasis]}`}
       className={cn(
         'flex shrink-0 flex-col rounded-lg border',
         effectiveCollapsed ? 'w-14' : 'w-56',
@@ -757,7 +845,7 @@ const BoardColumn = observer(function BoardColumn({
         {isCollapsible && (
           <button
             type="button"
-            aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${STAGE_LABELS[column]} column`}
+            aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${stageLabel} column`}
             aria-expanded={!effectiveCollapsed}
             onClick={onToggleCollapsed}
             className="-ml-1 shrink-0 rounded p-0.5 text-foreground-muted hover:text-foreground"
@@ -777,13 +865,24 @@ const BoardColumn = observer(function BoardColumn({
             'truncate text-xs font-medium',
             emphasis === 'triage' ? 'text-foreground-warning' : 'text-foreground-muted'
           )}
-          title={STAGE_LABELS[column]}
+          title={stageLabel}
         >
-          {STAGE_LABELS[column]}
+          {stageLabel}
         </span>
         <Badge variant="secondary" className="ml-auto shrink-0">
           {cardCount}
         </Badge>
+        {canCreateHere && (
+          <button
+            type="button"
+            aria-label={`New task in ${stageLabel}`}
+            title={`New task in ${stageLabel}`}
+            onClick={() => onCreateTask(column === 'unstaged' ? undefined : column)}
+            className="rounded p-0.5 text-foreground-muted hover:bg-background-1 hover:text-foreground"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        )}
       </div>
       <SortableContext items={cardIds} strategy={verticalListSortingStrategy}>
         <div
