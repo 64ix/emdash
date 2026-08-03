@@ -1,6 +1,10 @@
 import { observer } from 'mobx-react-lite';
 import { Sheet, SheetContent } from '@renderer/lib/ui/sheet';
-import type { ChangesFootprint, ChangesFootprintEntry } from './acp-changes-footprint';
+import type {
+  ChangesFootprint,
+  ChangesFootprintEntry,
+  EditedChangesFootprintEntry,
+} from './acp-changes-footprint';
 import { ChangesRailContent } from './changes-rail-content';
 import type { ChangesRailViewStore } from './changes-rail-store';
 
@@ -8,6 +12,8 @@ export interface ChangesDrawerProps {
   store: ChangesRailViewStore;
   footprint: ChangesFootprint;
   onSelectEntry: (entry: ChangesFootprintEntry) => void;
+  onOpenFile: (entry: ChangesFootprintEntry) => void;
+  onOpenDiff: (entry: EditedChangesFootprintEntry) => void;
 }
 
 /**
@@ -20,6 +26,8 @@ export const ChangesDrawer = observer(function ChangesDrawer({
   store,
   footprint,
   onSelectEntry,
+  onOpenFile,
+  onOpenDiff,
 }: ChangesDrawerProps) {
   return (
     <Sheet open={store.isOpen} onOpenChange={(open) => store.setOpen(open)}>
@@ -37,6 +45,16 @@ export const ChangesDrawer = observer(function ChangesDrawer({
           onSelectEntry={(entry) => {
             store.setSelectedPath(entry.path);
             onSelectEntry(entry);
+            store.setOpen(false);
+          }}
+          onOpenFile={(entry) => {
+            store.setSelectedPath(entry.path);
+            onOpenFile(entry);
+            store.setOpen(false);
+          }}
+          onOpenDiff={(entry) => {
+            store.setSelectedPath(entry.path);
+            onOpenDiff(entry);
             store.setOpen(false);
           }}
           onClose={() => store.setOpen(false)}

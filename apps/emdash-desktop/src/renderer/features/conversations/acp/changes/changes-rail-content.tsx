@@ -2,7 +2,11 @@ import { XIcon } from 'lucide-react';
 import { Button } from '@renderer/lib/ui/button';
 import { cn } from '@renderer/utils/utils';
 import type { ChangesRailFilter } from '@shared/view-state';
-import type { ChangesFootprint, ChangesFootprintEntry } from './acp-changes-footprint';
+import type {
+  ChangesFootprint,
+  ChangesFootprintEntry,
+  EditedChangesFootprintEntry,
+} from './acp-changes-footprint';
 import { ChangesRailList } from './changes-rail-list';
 
 const FILTERS: Array<{ value: ChangesRailFilter; label: string }> = [
@@ -17,6 +21,8 @@ export interface ChangesRailContentProps {
   onFilterChange: (filter: ChangesRailFilter) => void;
   selectedPath: string | null;
   onSelectEntry: (entry: ChangesFootprintEntry) => void;
+  onOpenFile: (entry: ChangesFootprintEntry) => void;
+  onOpenDiff: (entry: EditedChangesFootprintEntry) => void;
   onClose?: () => void;
 }
 
@@ -30,6 +36,8 @@ export function ChangesRailContent({
   onFilterChange,
   selectedPath,
   onSelectEntry,
+  onOpenFile,
+  onOpenDiff,
   onClose,
 }: ChangesRailContentProps) {
   return (
@@ -74,6 +82,8 @@ export function ChangesRailContent({
         filter={filter}
         selectedPath={selectedPath}
         onSelect={onSelectEntry}
+        onOpenFile={onOpenFile}
+        onOpenDiff={onOpenDiff}
       />
     </div>
   );
