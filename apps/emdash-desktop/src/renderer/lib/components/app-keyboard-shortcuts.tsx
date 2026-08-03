@@ -7,6 +7,7 @@ import {
   getEffectiveHotkey,
   getHotkeyRegistration,
 } from '@renderer/lib/hooks/useKeyboardShortcuts';
+import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import { useWorkspaceLayoutContext } from '@renderer/lib/layout/layout-provider';
 import {
   useNavigate,
@@ -30,13 +31,15 @@ export function AppKeyboardShortcuts() {
   const { currentView, lastNonSettingsView } = useWorkspaceSlots();
   const { params: taskParams } = useParams('task');
   const { params: projectParams } = useParams('project');
+  const { params: boardParams } = useParams('board');
 
-  const currentProjectId =
-    currentView === 'task'
-      ? taskParams.projectId
-      : currentView === 'project'
-        ? projectParams.projectId
-        : undefined;
+  // `board` (ticket #43) resolves here too, so Cmd+K from the Feature Board
+  // opens the palette scoped to that project.
+  const currentProjectId = activeProjectIdForView(currentView, {
+    task: taskParams.projectId,
+    project: projectParams.projectId,
+    board: boardParams.projectId,
+  });
   const currentTaskId = currentView === 'task' ? taskParams.taskId : undefined;
 
   const currentWorkspaceId = useObserver(() => {

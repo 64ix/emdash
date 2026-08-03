@@ -3,8 +3,11 @@
 ## Feature Board
 
 The kanban view (fork-only) that shows a project's tasks as cards grouped in
-columns by **Workflow Stage**. Reached from the project titlebar dropdown.
-Not part of the settings/options UI.
+columns by **Workflow Stage**. Project-scoped: every entry point resolves an
+explicit project, never an implicit or last-used one. Reached from the
+project's Board row in the left sidebar (shown before its task rows while
+the project is expanded) or the command palette's Open Feature Board
+command. Not part of the settings/options UI.
 
 ## Workflow Stage
 
