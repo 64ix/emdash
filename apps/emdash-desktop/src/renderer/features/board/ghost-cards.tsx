@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { events, rpc } from '@renderer/lib/ipc';
 import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
+import { cn } from '@renderer/utils/utils';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import { ghostCardsUpdatedChannel } from '@shared/core/issues/issueEvents';
 
@@ -63,18 +64,31 @@ export function useGhostCards(projectId: string) {
 /**
  * A lightweight adopt/reject candidate card — visually distinct (muted,
  * dashed border) from real task cards so it reads as "not yet a task".
+ * Clicking it opens the Task Detail Panel in ghost mode (CONTEXT.md); the
+ * Adopt/Reject buttons stop that click from also (re)selecting it.
  */
 export function GhostCardView({
   ghostCard,
+  isSelected,
+  onSelect,
   onAdopt,
   onReject,
 }: {
   ghostCard: GhostCard;
+  isSelected: boolean;
+  onSelect: () => void;
   onAdopt: () => void;
   onReject: () => void;
 }) {
   return (
-    <div className="rounded-md border border-dashed border-border/70 bg-background-2/30 p-2 opacity-80">
+    <div
+      data-ghost-card={ghostCard.id}
+      onClick={onSelect}
+      className={cn(
+        'cursor-pointer rounded-md border border-dashed border-border/70 bg-background-2/30 p-2 opacity-80',
+        isSelected && 'border-primary ring-1 ring-primary/50'
+      )}
+    >
       <div
         className="truncate text-xs font-medium text-foreground-muted"
         title={ghostCard.issue.title}
@@ -84,10 +98,24 @@ export function GhostCardView({
       <div className="mt-1.5 flex items-center justify-between">
         <Badge variant="outline">Ghost</Badge>
         <div className="flex items-center gap-1">
-          <Button size="xs" variant="outline" onClick={onAdopt}>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAdopt();
+            }}
+          >
             Adopt
           </Button>
-          <Button size="xs" variant="ghost" onClick={onReject}>
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={(event) => {
+              event.stopPropagation();
+              onReject();
+            }}
+          >
             Reject
           </Button>
         </div>

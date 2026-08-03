@@ -1,13 +1,25 @@
-import { ExternalLink, GitBranch, MessageSquare, X } from 'lucide-react';
+import {
+  Archive,
+  ArrowUpRight,
+  ExternalLink,
+  GitBranch,
+  MessageSquare,
+  Pencil,
+  Pin,
+  PinOff,
+  X,
+} from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { type ReactNode, useEffect, useState } from 'react';
 import { STAGE_LABELS } from '@renderer/features/board/board-columns';
 import {
   buildTaskDetailPanelViewModel,
+  deriveGhostDetailViewModel,
   type TaskDetailPanelLink,
 } from '@renderer/features/board/task-detail-panel-view-model';
 import {
   getTaskGitWorktreeStore,
+  getTaskManagerStore,
   getTaskStore,
   taskAgentStatus,
 } from '@renderer/features/tasks/stores/task-selectors';
@@ -15,8 +27,12 @@ import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { StatusIcon } from '@renderer/lib/components/pr-status-icon';
 import { rpc } from '@renderer/lib/ipc';
+import { useNavigate } from '@renderer/lib/layout/navigation-provider';
+import { useShowModal } from '@renderer/lib/modal/modal-provider';
+import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
 import { RelativeTime } from '@renderer/lib/ui/relative-time';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
 import { linkedIssueRoleLabels } from '@shared/core/linked-issue';
 import type { StageHoldingPr, TaskStageAuthority, WorkflowStage } from '@shared/core/tasks/tasks';
 
@@ -77,19 +93,56 @@ function SpecDerivedPrRow({ pr }: { pr: StageHoldingPr }) {
   );
 }
 
+/** Which task or ghost card the panel is currently showing (CONTEXT.md "Task Detail Panel"). */
+export type TaskDetailPanelTarget =
+  | { kind: 'task'; taskId: string }
+  | { kind: 'ghost'; ghostCard: GhostCard };
+
 /**
  * Task Detail Panel (CONTEXT.md): the side panel that opens on the right of
  * the Feature Board when a card is clicked. Shows the task's vitals, typed
- * Linked Issue Roles, the Spec-derived PR, and the Workflow Stage with its
- * authority (ticket #41). Management actions and ghost mode land in ticket #42.
+ * Linked Issue Roles, the Spec-derived PR, the Workflow Stage with its
+ * authority, management actions (rename, pin/unpin, archive, "Open task"),
+ * and — for a Ghost Card — the issue's own details with Adopt/Reject.
  *
  * All display logic lives in the pure `task-detail-panel-view-model` module;
  * this component only renders what it computes.
- *
- * Store access follows the documented selectors: `getTaskStore` plus an
- * explicit null check, never `asProvisioned(...)!` / `asMounted(...)!`.
  */
 export const TaskDetailPanel = observer(function TaskDetailPanel({
+  projectId,
+  target,
+  onClose,
+  onAdoptGhostCard,
+  onRejectGhostCard,
+}: {
+  projectId: string;
+  target: TaskDetailPanelTarget;
+  onClose: () => void;
+  onAdoptGhostCard: (ghostCard: GhostCard) => void;
+  onRejectGhostCard: (ghostCard: GhostCard) => void;
+}) {
+  if (target.kind === 'ghost') {
+    return (
+      <GhostDetailPanel
+        ghostCard={target.ghostCard}
+        onClose={onClose}
+        onAdopt={() => onAdoptGhostCard(target.ghostCard)}
+        onReject={() => onRejectGhostCard(target.ghostCard)}
+      />
+    );
+  }
+
+  return <TaskDetailPanelBody projectId={projectId} taskId={target.taskId} onClose={onClose} />;
+});
+
+/**
+ * The real-task half of the Task Detail Panel: vitals, typed links, derived
+ * PR and stage authority (ticket #41), plus management actions and direct
+ * navigation (ticket #42). Store access follows the documented selectors:
+ * `getTaskStore`/`getTaskManagerStore` plus explicit null checks, never
+ * `asProvisioned(...)!` / `asMounted(...)!`.
+ */
+const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
   projectId,
   taskId,
   onClose,
@@ -98,6 +151,8 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
   taskId: string;
   onClose: () => void;
 }) {
+  const { navigate } = useNavigate();
+  const showRenameTask = useShowModal('renameTaskModal');
   const store = getTaskStore(projectId, taskId);
   const task = store ? registeredTaskData(store) : undefined;
 
@@ -122,6 +177,7 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
   // disappearance handling). This guards the render in the interim.
   if (!store || !task) return null;
 
+  const manager = getTaskManagerStore(projectId);
   const branchName = getTaskGitWorktreeStore(projectId, taskId)?.branchName ?? null;
   const vm = buildTaskDetailPanelViewModel({
     task,
@@ -133,6 +189,26 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
 
   const handleStageChange = (next: string) => {
     void store.updateBoardPosition(next === '' ? null : (next as WorkflowStage), null);
+  };
+
+  const handleRename = () => showRenameTask({ projectId, taskId, currentName: task.name });
+
+  const handleTogglePin = () => void store.setPinned(!task.isPinned);
+
+  // Reuses the existing archive RPC via the task manager. Safe if the task
+  // disappears mid-interaction: `archiveTask` itself re-reads the task from
+  // the manager and no-ops if it is already gone, and once archived the task
+  // stops being board-displayable — `BoardMainPanel`'s disappearance effect
+  // then closes this very panel on its own.
+  const handleArchive = () => void manager?.archiveTask(taskId);
+
+  // Mirrors `SidebarTaskItem`'s open gesture: provision first when the task
+  // has never been provisioned and isn't already busy, then navigate.
+  const handleOpenTask = () => {
+    if (store.state === 'unprovisioned' && store.phase === 'idle') {
+      void manager?.provisionTask(taskId);
+    }
+    navigate('task', { projectId, taskId });
   };
 
   // The current stage stays selectable even when it falls outside the
@@ -151,12 +227,33 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
     <div
       className={`flex h-full ${TASK_DETAIL_PANEL_WIDTH_CLASS} shrink-0 flex-col overflow-y-auto border-l border-border bg-background`}
     >
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <h2 className="min-w-0 truncate text-sm font-medium" title={task.name}>
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-4 py-3">
+        <h2 className="min-w-0 flex-1 truncate text-sm font-medium" title={task.name}>
           {task.name}
         </h2>
+        <Button size="icon-sm" variant="ghost" aria-label="Rename task" onClick={handleRename}>
+          <Pencil className="size-3.5" />
+        </Button>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={task.isPinned ? 'Unpin task' : 'Pin task'}
+          onClick={handleTogglePin}
+        >
+          {task.isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+        </Button>
+        <Button size="icon-sm" variant="ghost" aria-label="Archive task" onClick={handleArchive}>
+          <Archive className="size-3.5" />
+        </Button>
         <Button size="icon-sm" variant="ghost" aria-label="Close task details" onClick={onClose}>
           <X className="size-4" />
+        </Button>
+      </div>
+
+      <div className="shrink-0 border-b border-border px-4 py-2">
+        <Button size="sm" variant="outline" className="w-full" onClick={handleOpenTask}>
+          Open task
+          <ArrowUpRight className="size-3.5" />
         </Button>
       </div>
 
@@ -232,3 +329,60 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
     </div>
   );
 });
+
+/**
+ * Ghost mode (CONTEXT.md "Task Detail Panel", "Ghost Card"): shown when a
+ * Ghost Card is clicked instead of a real task. Reads directly off the
+ * candidate issue — there is no task yet — and offers Adopt/Reject, which
+ * reuse the same ghost-card actions the card itself exposes (`useGhostCards`).
+ */
+function GhostDetailPanel({
+  ghostCard,
+  onClose,
+  onAdopt,
+  onReject,
+}: {
+  ghostCard: GhostCard;
+  onClose: () => void;
+  onAdopt: () => void;
+  onReject: () => void;
+}) {
+  const vm = deriveGhostDetailViewModel(ghostCard);
+
+  return (
+    <div
+      className={`flex h-full ${TASK_DETAIL_PANEL_WIDTH_CLASS} shrink-0 flex-col overflow-y-auto border-l border-border bg-background`}
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
+        <Badge variant="outline" className="shrink-0">
+          Ghost
+        </Badge>
+        <h2 className="min-w-0 flex-1 truncate text-sm font-medium" title={vm.title}>
+          {vm.title}
+        </h2>
+        <Button size="icon-sm" variant="ghost" aria-label="Close task details" onClick={onClose}>
+          <X className="size-4" />
+        </Button>
+      </div>
+
+      <PanelSection id="ghost-issue" title="Issue">
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="min-w-0 flex-1 truncate" title={vm.url}>
+            {vm.url}
+          </span>
+          <ExternalLinkButton url={vm.url} label={`Open ${vm.title} on GitHub`} />
+        </div>
+        {vm.body && <p className="text-xs whitespace-pre-wrap text-foreground-muted">{vm.body}</p>}
+      </PanelSection>
+
+      <div className="flex shrink-0 items-center gap-2 border-t border-border px-4 py-3">
+        <Button size="sm" variant="outline" className="flex-1" onClick={onAdopt}>
+          Adopt
+        </Button>
+        <Button size="sm" variant="ghost" className="flex-1" onClick={onReject}>
+          Reject
+        </Button>
+      </div>
+    </div>
+  );
+}

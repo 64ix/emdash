@@ -1,9 +1,11 @@
 /**
  * Browser-mode tests for the Task Detail Panel: the shell's gestures
  * (CONTEXT.md, ticket #40 — open, switch, close, highlight, drag-with-panel-
- * open, disappearance) and its content (ticket #41 — vitals, typed links,
- * derived PR, stage authority). Panel *actions* (rename, pin, archive, the
- * hover arrow, "Open task", ghost mode — ticket #42) are out of scope here.
+ * open, disappearance), its content (ticket #41 — vitals, typed links,
+ * derived PR, stage authority), and its actions (ticket #42 — the hover
+ * arrow, the "Open task" button, and the ghost adopt-then-switch path).
+ * Rename/pin/archive reuse pre-existing RPCs already covered where they
+ * live, so this file does not re-test them (ticket #42's own criterion).
  *
  * Mounts the real BoardMainPanel in Chromium (real layout, real
  * getBoundingClientRect) with mocked stores and genuine PointerEvent/click
@@ -12,13 +14,21 @@
  * directly rather than the generic `electronAPI.invoke` stub, so
  * `tasks.getTaskStageAuthority` can return a distinct fixture per test.
  */
+import type { Result } from '@emdash/shared';
 import { observable, runInAction } from 'mobx';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssueRoles } from '@shared/core/linked-issue';
-import type { StageHoldingPr, TaskStageAuthority } from '@shared/core/tasks/tasks';
+import type {
+  CreateTaskError,
+  CreateTaskSuccess,
+  StageHoldingPr,
+  Task,
+  TaskStageAuthority,
+} from '@shared/core/tasks/tasks';
 
 // ── Store mocks (mirrors board-dnd.test.tsx) ───────────────────────────────
 
@@ -32,6 +42,7 @@ type MockStore = {
     workflowStage?: string;
     boardRank?: string;
     archivedAt?: string;
+    isPinned?: boolean;
     linkedIssues?: LinkedIssueRoles;
   };
   conversationStats: Record<string, number>;
@@ -53,15 +64,31 @@ const DECLARATIVE_AUTHORITY: TaskStageAuthority = {
 // zone when the factory runs (mirrors the `mocks` pattern in
 // board-sync-service.db.test.ts). Overridden per test via
 // `.mockResolvedValueOnce` / `.mockImplementation`.
+//
+// `navigate` (ticket #42) is shared across every `useNavigate()` call site
+// (BoardCard's hover arrow, BoardMainPanel's own handler, the panel's "Open
+// task" button) so a single stable mock can assert on whichever call fires.
 const mocks = vi.hoisted(() => ({
   getTaskStageAuthority: vi.fn(() =>
     Promise.resolve<TaskStageAuthority>({ holdingPr: null, isCurrentStageGithubProven: false })
   ),
+  navigate: vi.fn(),
+  provisionTask: vi.fn(() => Promise.resolve()),
+  archiveTask: vi.fn(() => Promise.resolve()),
+  getGhostCards: vi.fn(() => Promise.resolve<GhostCard[]>([])),
+  adoptGhostCard:
+    vi.fn<
+      (
+        projectId: string,
+        ghostCard: GhostCard
+      ) => Promise<Result<CreateTaskSuccess, CreateTaskError>>
+    >(),
+  rejectGhostCard: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
   useParams: () => ({ params: { projectId: 'p1' } }),
-  useNavigate: () => ({ navigate: vi.fn() }),
+  useNavigate: () => ({ navigate: mocks.navigate }),
 }));
 
 vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
@@ -70,7 +97,11 @@ vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
-  getTaskManagerStore: () => ({ tasks: managerTasks }),
+  getTaskManagerStore: () => ({
+    tasks: managerTasks,
+    provisionTask: mocks.provisionTask,
+    archiveTask: mocks.archiveTask,
+  }),
   taskAgentStatus: () => 'idle',
   getTaskStore: (_projectId: string, taskId: string) => managerTasks.get(taskId),
   getTaskGitWorktreeStore: (_projectId: string, taskId: string) => {
@@ -96,7 +127,9 @@ vi.mock('@renderer/lib/ipc', () => ({
   rpc: {
     issues: {
       getLinkSuggestions: vi.fn(() => Promise.resolve([])),
-      getGhostCards: vi.fn(() => Promise.resolve([])),
+      getGhostCards: mocks.getGhostCards,
+      adoptGhostCard: mocks.adoptGhostCard,
+      rejectGhostCard: mocks.rejectGhostCard,
       syncIssuesNow: vi.fn(() => Promise.resolve()),
     },
     tasks: {
@@ -238,10 +271,15 @@ function setupDom() {
     root = createRoot(host);
     await page.viewport(1280, 800);
     // `vi.clearAllMocks()` (afterEach, below) clears call history but not a
-    // mock's implementation — reset the default here so a prior test's
+    // mock's implementation — reset the defaults here so a prior test's
     // `.mockResolvedValue` override (a persistent one, unlike `...Once`) can
     // never leak into the next test.
     mocks.getTaskStageAuthority.mockImplementation(() => Promise.resolve(DECLARATIVE_AUTHORITY));
+    mocks.provisionTask.mockImplementation(() => Promise.resolve());
+    mocks.archiveTask.mockImplementation(() => Promise.resolve());
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([]));
+    mocks.adoptGhostCard.mockReset();
+    mocks.rejectGhostCard.mockImplementation(() => Promise.resolve());
   });
 
   afterEach(() => {
@@ -308,6 +346,63 @@ function linkedIssueRoles(): string[] {
   return Array.from(host.querySelectorAll('[data-linked-issue-role]')).map(
     (el) => el.getAttribute('data-linked-issue-role') ?? ''
   );
+}
+
+/** A card's hover-revealed direct-navigation arrow (ticket #42). */
+function hoverArrowFor(taskName: string): HTMLElement {
+  return host.querySelector(`button[aria-label="Open ${taskName}"]`) as HTMLElement;
+}
+
+/** The panel's "Open task" button (ticket #42). */
+function openTaskButton(): HTMLElement {
+  return Array.from(host.querySelectorAll('button')).find((b) =>
+    b.textContent?.includes('Open task')
+  ) as HTMLElement;
+}
+
+/** A Ghost Card's root element on the board, located by its stable id (ticket #9). */
+function ghostCardEl(id: string): Element {
+  return host.querySelector(`[data-ghost-card="${CSS.escape(id)}"]`)!;
+}
+
+/** The panel's own Adopt/Reject buttons in ghost mode (ticket #42). */
+function panelGhostActionButton(label: 'Adopt' | 'Reject'): HTMLElement {
+  return Array.from(host.querySelectorAll('button')).find(
+    (b) => b.textContent === label
+  ) as HTMLElement;
+}
+
+function makeGhostCard(overrides: Partial<GhostCard['issue']> = {}): GhostCard {
+  const url = overrides.url ?? 'https://github.com/acme/repo/issues/5';
+  return {
+    id: url,
+    issue: {
+      provider: 'github',
+      url,
+      title: 'A candidate idea',
+      identifier: '#5',
+      description: 'Some body text',
+      ...overrides,
+    },
+  };
+}
+
+function makeCreatedTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'new-task',
+    projectId: 'p1',
+    name: 'A candidate idea',
+    status: 'todo',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    statusChangedAt: '2026-01-01T00:00:00.000Z',
+    isPinned: false,
+    prs: [],
+    conversations: {},
+    type: 'task',
+    workflowStage: 'idea',
+    ...overrides,
+  };
 }
 
 describe('Task Detail Panel — open, switch, close', () => {
@@ -657,5 +752,143 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     expect(stageSelect().disabled).toBe(true);
     expect(panelText()).toContain('Spec');
     expect(panelText()).toContain('#42');
+  });
+});
+
+describe('Task Detail Panel — direct navigation (ticket #42)', () => {
+  setupDom();
+
+  it('the hover arrow on a card navigates straight to the full task view', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(hoverArrowFor('card-a'));
+    await settle();
+
+    expect(mocks.navigate).toHaveBeenCalledWith('task', { projectId: 'p1', taskId: 'card-a' });
+    // It must not fight the card's click-to-open-panel gesture: the arrow's
+    // own click handler stops it from bubbling into a card selection.
+    expect(panelHeading()).toBeNull();
+  });
+
+  it('the hover arrow does not select the card it navigates away from', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    // Open the panel on a different card first, then use card-a's arrow.
+    click(cardEl('card-b'));
+    await settle();
+    expect(panelHeading()).toBe('card-b');
+
+    click(hoverArrowFor('card-a'));
+    await settle();
+
+    expect(mocks.navigate).toHaveBeenCalledWith('task', { projectId: 'p1', taskId: 'card-a' });
+    expect(panelHeading()).toBe('card-b');
+  });
+
+  it('the panel\'s "Open task" button navigates straight to the full task view', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelHeading()).toBe('card-a');
+
+    click(openTaskButton());
+    await settle();
+
+    expect(mocks.navigate).toHaveBeenCalledWith('task', { projectId: 'p1', taskId: 'card-a' });
+  });
+});
+
+describe('Task Detail Panel — ghost mode (ticket #42)', () => {
+  setupDom();
+
+  it("clicking a Ghost Card opens the panel in ghost mode with the issue's title, body and URL", async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+
+    expect(panelHeading()).toBe(ghostCard.issue.title);
+    expect(panelText()).toContain(ghostCard.issue.title);
+    expect(panelText()).toContain(ghostCard.issue.description);
+    expect(panelText()).toContain(ghostCard.issue.url);
+    // Ghost mode has no task sections — there is no task yet.
+    expect(panelSection('vitals')).toBeNull();
+  });
+
+  it('re-clicking a different real task card switches the panel away from ghost mode', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+    expect(panelHeading()).toBe(ghostCard.issue.title);
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+    expect(panelSection('vitals')).not.toBeNull();
+  });
+
+  it('Reject reuses the existing ghost-card action and closes the panel', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+    expect(panelHeading()).toBe(ghostCard.issue.title);
+
+    click(panelGhostActionButton('Reject'));
+    await settle();
+
+    expect(mocks.rejectGhostCard).toHaveBeenCalledWith('p1', ghostCard);
+    expect(panelHeading()).toBeNull();
+  });
+
+  it('Adopt creates the task and the panel switches to it', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    const createdTask = makeCreatedTask({ id: 'new-task', name: ghostCard.issue.title });
+    mocks.adoptGhostCard.mockResolvedValueOnce({ success: true, data: { task: createdTask } });
+    // Mirrors the real app: by the time the panel renders the new task, the
+    // task manager has already learned about it (via the `task:created`
+    // event this same RPC triggers main-side) — simulated here by seeding
+    // the store the mocked `getTaskStore` reads from.
+    managerTasks.set(createdTask.id, makeStore(createdTask.id, { name: createdTask.name }));
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+    expect(panelHeading()).toBe(ghostCard.issue.title);
+
+    click(panelGhostActionButton('Adopt'));
+    await settle();
+    await settle();
+
+    expect(mocks.adoptGhostCard).toHaveBeenCalledWith('p1', ghostCard);
+    expect(panelHeading()).toBe(createdTask.name);
+    // Switched to real-task mode, not still showing ghost details.
+    expect(panelSection('vitals')).not.toBeNull();
   });
 });

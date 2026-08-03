@@ -20,13 +20,16 @@ import {
   type AnimateLayoutChanges,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { MessageSquare } from 'lucide-react';
+import { ArrowUpRight, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
 import { isBoardDisplayable, STAGE_LABELS } from '@renderer/features/board/board-columns';
 import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
-import { TaskDetailPanel } from '@renderer/features/board/task-detail-panel';
+import {
+  TaskDetailPanel,
+  type TaskDetailPanelTarget,
+} from '@renderer/features/board/task-detail-panel';
 import {
   getProjectStore,
   projectDisplayName,
@@ -38,7 +41,7 @@ import {
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { rpc } from '@renderer/lib/ipc';
-import { useParams } from '@renderer/lib/layout/navigation-provider';
+import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { cn } from '@renderer/utils/utils';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
@@ -96,6 +99,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   const {
     params: { projectId },
   } = useParams('board');
+  const { navigate } = useNavigate();
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
   const { ghostCards, adopt: adoptGhostCard, reject: rejectGhostCard } = useGhostCards(projectId);
@@ -105,11 +109,11 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // slot and make-room displacement then work across columns exactly like
   // they do within one. Persistence still derives from store data at drop.
   const [dragPreview, setDragPreview] = useState<{ column: ColumnId; index: number } | null>(null);
-  // Task Detail Panel (CONTEXT.md): ephemeral board view state — which task's
-  // details are shown on the right. Local to this component, so it never
-  // survives leaving the board (unmount resets it) and writes nothing to the
-  // database. `null` means the panel is closed.
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Task Detail Panel (CONTEXT.md): ephemeral board view state — which task
+  // (or Ghost Card) is shown on the right. Local to this component, so it
+  // never survives leaving the board (unmount resets it) and writes nothing
+  // to the database. `null` means the panel is closed.
+  const [panelTarget, setPanelTarget] = useState<TaskDetailPanelTarget | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   // Board open triggers an immediate derivation pass (PR facts + inbound issues);
@@ -136,25 +140,32 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   }
 
   // Disappearance handling (CONTEXT.md "Task Detail Panel"): a task archived
-  // elsewhere, or faded out by Shipped Fade, must never keep the panel open
-  // rendering stale or missing data — close it instead.
-  const selectedTaskGone = selectedTaskId !== null && !storeById.has(selectedTaskId);
+  // elsewhere, or faded out by Shipped Fade, or a Ghost Card that stopped
+  // being a candidate (adopted, rejected, or dropped by a sync pass) must
+  // never keep the panel open rendering stale or missing data — close it
+  // instead. Adopting the very ghost the panel shows is handled separately
+  // (`handleAdoptGhostCard` below switches the target before this can fire).
+  const panelTargetGone =
+    panelTarget !== null &&
+    (panelTarget.kind === 'task'
+      ? !storeById.has(panelTarget.taskId)
+      : !ghostCards.some((card) => card.id === panelTarget.ghostCard.id));
   useEffect(() => {
-    if (selectedTaskGone) setSelectedTaskId(null);
-  }, [selectedTaskGone]);
+    if (panelTargetGone) setPanelTarget(null);
+  }, [panelTargetGone]);
 
   // Escape closes the panel (alongside the close button rendered in it).
   useEffect(() => {
-    if (selectedTaskId === null) return;
+    if (panelTarget === null) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        setSelectedTaskId(null);
+        setPanelTarget(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedTaskId]);
+  }, [panelTarget]);
 
   if (!manager) {
     return (
@@ -163,6 +174,29 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
       </div>
     );
   }
+
+  // Direct navigation (CONTEXT.md "Task Detail Panel"): the hover arrow on a
+  // card and the panel's "Open task" button both land here. Mirrors
+  // `SidebarTaskItem`'s open gesture — provision first when the task has
+  // never been provisioned and isn't already busy, then navigate straight to
+  // the full task view.
+  const handleOpenTask = (taskId: string) => {
+    const store = storeById.get(taskId);
+    if (store?.state === 'unprovisioned' && store.phase === 'idle') {
+      void manager.provisionTask(taskId);
+    }
+    navigate('task', { projectId, taskId });
+  };
+
+  // Adopting a Ghost Card creates the real task and switches the panel to it
+  // (CONTEXT.md "Task Detail Panel", "Ghost Card") so management can continue
+  // immediately — the ghost-card action itself is unchanged (`useGhostCards`).
+  const handleAdoptGhostCard = async (ghostCard: GhostCard) => {
+    const result = await adoptGhostCard(ghostCard);
+    if (result?.success) {
+      setPanelTarget({ kind: 'task', taskId: result.data.task.id });
+    }
+  };
 
   const awaitingInputIds = new Set<string>();
   for (const [id, store] of storeById) {
@@ -403,12 +437,17 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
                 column={column}
                 entries={displayByColumn.get(column) ?? []}
                 storeById={storeById}
-                selectedTaskId={selectedTaskId}
-                onSelectTask={setSelectedTaskId}
+                selectedTaskId={panelTarget?.kind === 'task' ? panelTarget.taskId : null}
+                onSelectTask={(taskId) => setPanelTarget({ kind: 'task', taskId })}
+                onOpenTask={handleOpenTask}
                 // Ghost Cards (ticket #9) are not tasks and never sort/drag —
                 // they only ever live in the `idea` column, after real cards.
                 ghostCards={column === 'idea' ? ghostCards : undefined}
-                onAdoptGhostCard={adoptGhostCard}
+                selectedGhostCardId={
+                  panelTarget?.kind === 'ghost' ? panelTarget.ghostCard.id : null
+                }
+                onSelectGhostCard={(ghostCard) => setPanelTarget({ kind: 'ghost', ghostCard })}
+                onAdoptGhostCard={handleAdoptGhostCard}
                 onRejectGhostCard={rejectGhostCard}
               />
             ))}
@@ -417,11 +456,13 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
             {activeDragStore ? <BoardCardPreview store={activeDragStore} /> : null}
           </DragOverlay>
         </DndContext>
-        {selectedTaskId && (
+        {panelTarget && (
           <TaskDetailPanel
             projectId={projectId}
-            taskId={selectedTaskId}
-            onClose={() => setSelectedTaskId(null)}
+            target={panelTarget}
+            onClose={() => setPanelTarget(null)}
+            onAdoptGhostCard={handleAdoptGhostCard}
+            onRejectGhostCard={rejectGhostCard}
           />
         )}
       </div>
@@ -435,7 +476,10 @@ const BoardColumn = observer(function BoardColumn({
   storeById,
   selectedTaskId,
   onSelectTask,
+  onOpenTask,
   ghostCards,
+  selectedGhostCardId,
+  onSelectGhostCard,
   onAdoptGhostCard,
   onRejectGhostCard,
 }: {
@@ -444,7 +488,10 @@ const BoardColumn = observer(function BoardColumn({
   storeById: Map<string, TaskStore>;
   selectedTaskId: string | null;
   onSelectTask: (taskId: string) => void;
+  onOpenTask: (taskId: string) => void;
   ghostCards?: GhostCard[];
+  selectedGhostCardId?: string | null;
+  onSelectGhostCard: (ghostCard: GhostCard) => void;
   onAdoptGhostCard: (ghostCard: GhostCard) => void;
   onRejectGhostCard: (ghostCard: GhostCard) => void;
 }) {
@@ -481,6 +528,7 @@ const BoardColumn = observer(function BoardColumn({
                 store={store}
                 isSelected={entry.id === selectedTaskId}
                 onSelect={onSelectTask}
+                onOpenTask={onOpenTask}
               />
             );
           })}
@@ -489,6 +537,8 @@ const BoardColumn = observer(function BoardColumn({
             <GhostCardView
               key={ghostCard.id}
               ghostCard={ghostCard}
+              isSelected={ghostCard.id === selectedGhostCardId}
+              onSelect={() => onSelectGhostCard(ghostCard)}
               onAdopt={() => onAdoptGhostCard(ghostCard)}
               onReject={() => onRejectGhostCard(ghostCard)}
             />
@@ -503,10 +553,12 @@ const BoardCard = observer(function BoardCard({
   store,
   isSelected,
   onSelect,
+  onOpenTask,
 }: {
   store: TaskStore;
   isSelected: boolean;
   onSelect: (taskId: string) => void;
+  onOpenTask: (taskId: string) => void;
 }) {
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: store.data.id,
@@ -543,12 +595,30 @@ const BoardCard = observer(function BoardCard({
         }
       }}
       className={cn(
-        'cursor-grab touch-none rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing',
+        'group relative cursor-grab touch-none rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing',
         // The card backing the open Task Detail Panel (CONTEXT.md) is highlighted.
         isSelected && 'border-primary ring-1 ring-primary/50'
       )}
     >
-      <span className="block w-full text-left text-xs font-medium">{task.name}</span>
+      {/* Direct navigation (CONTEXT.md "Task Detail Panel"): hover-revealed,
+          navigates straight to the full task view instead of the panel.
+          `onPointerDown` stops here so dnd-kit's drag activation (attached to
+          this card via `listeners`) never sees the press, and the click
+          itself stops here too so it never also opens/switches the panel. */}
+      <button
+        type="button"
+        aria-label={`Open ${task.name}`}
+        title="Open task"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenTask(task.id);
+        }}
+        className="absolute top-1 right-1 rounded p-0.5 text-foreground-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
+      >
+        <ArrowUpRight className="size-3.5" />
+      </button>
+      <span className="block w-full pr-4 text-left text-xs font-medium">{task.name}</span>
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           {linkedIssue && (
