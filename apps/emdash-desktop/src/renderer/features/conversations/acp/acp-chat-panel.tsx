@@ -10,7 +10,7 @@ import type {
   MentionItem,
   PromptEditorRef,
 } from '@emdash/ui/react/components';
-import { ArrowDown, ListTree, PanelRight } from 'lucide-react';
+import { ArrowDown, ListTree, PanelRight, Undo2 } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -49,6 +49,7 @@ import { rpc } from '@renderer/lib/ipc';
 import { showModal } from '@renderer/lib/modal/modal-provider';
 import { isHeicLikeFile, isUnstableDropPath } from '@renderer/lib/pty/terminal-image-paths';
 import { useAgents } from '@renderer/lib/stores/use-agents';
+import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
 import { log } from '@renderer/utils/logger';
 import {
@@ -975,7 +976,10 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
           pinUserMessages
           onReady={handleReady}
           commands={transcriptCommands}
-          onAtBottomChange={setAtBottom}
+          onAtBottomChange={(value) => {
+            setAtBottom(value);
+            store.setAtBottom(value);
+          }}
           onReachStart={() => store.loadOlderHistory()}
           style={{ position: 'absolute', inset: 0 }}
         />
@@ -1056,6 +1060,9 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
           />
         )}
 
+        {/* Reading position (ticket #37): jumping to the newest event saves
+          the exact reading position so "Return to reading position" below
+          can restore it precisely — see AcpChatStore.visitNewestEvent. */}
         {showComposer &&
           composerSlot &&
           !atBottom &&
@@ -1063,12 +1070,41 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
             <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
               <Button
                 variant="secondary"
-                size="icon-md"
-                aria-label="Scroll to bottom"
-                onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
+                size={store.newEventCount > 0 ? 'sm' : 'icon-md'}
+                aria-label={
+                  store.newEventCount > 0
+                    ? `${store.newEventCount} new — jump to newest`
+                    : 'Scroll to bottom'
+                }
+                onClick={() => store.visitNewestEvent()}
                 className="pointer-events-auto rounded-full shadow-md"
               >
                 <ArrowDown />
+                {store.newEventCount > 0 && (
+                  <Badge variant="default" aria-hidden="true">
+                    {store.newEventCount}
+                  </Badge>
+                )}
+              </Button>
+            </div>,
+            composerSlot
+          )}
+
+        {showComposer &&
+          composerSlot &&
+          atBottom &&
+          store.canReturnToReadingPosition &&
+          createPortal(
+            <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
+              <Button
+                variant="secondary"
+                size="sm"
+                aria-label="Return to reading position"
+                onClick={() => store.returnToReadingPosition()}
+                className="pointer-events-auto rounded-full shadow-md"
+              >
+                <Undo2 className="size-4" />
+                Return to reading position
               </Button>
             </div>,
             composerSlot

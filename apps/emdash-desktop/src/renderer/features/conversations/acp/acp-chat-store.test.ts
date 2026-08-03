@@ -41,6 +41,37 @@ vi.mock('@emdash/chat-ui', () => ({
       pendingPrompt: unknown
     ) => ({ committedTurns, activeTurn, turnStatus, pendingPrompt })
   ),
+  // Real (simplified) semantics rather than a passthrough echo — ticket #37's
+  // wiring tests below assert actual counts across setAtBottom/transcript-
+  // growth transitions. The turn-identity math itself is unit-tested in
+  // chat-ui's own `state/reading-position.test.ts`.
+  captureReadWatermark: (committedTurns: TranscriptTurn[], activeTurn: TranscriptTurn | null) => ({
+    lastCommittedTurnId: committedTurns[committedTurns.length - 1]?.id ?? null,
+    activeTurnId: activeTurn?.id ?? null,
+  }),
+  countNewTranscriptEvents: (
+    watermark: { lastCommittedTurnId: string | null; activeTurnId: string | null },
+    committedTurns: TranscriptTurn[],
+    activeTurn: TranscriptTurn | null
+  ) => {
+    const lastCommittedIdx =
+      watermark.lastCommittedTurnId === null
+        ? -1
+        : committedTurns.findIndex((turn) => turn.id === watermark.lastCommittedTurnId);
+    let newCommittedCount: number;
+    if (watermark.lastCommittedTurnId !== null && lastCommittedIdx === -1) {
+      newCommittedCount = committedTurns.length;
+    } else {
+      const settledActiveIdx =
+        watermark.activeTurnId === null
+          ? -1
+          : committedTurns.findIndex((turn) => turn.id === watermark.activeTurnId);
+      const baselineIdx = Math.max(lastCommittedIdx, settledActiveIdx);
+      newCommittedCount = committedTurns.length - 1 - baselineIdx;
+    }
+    const hasNewActiveTurn = activeTurn !== null && activeTurn.id !== watermark.activeTurnId;
+    return newCommittedCount + (hasNewActiveTurn ? 1 : 0);
+  },
 }));
 vi.mock('@renderer/lib/chat/shared-chat-context', () => ({
   getSharedChatContext: () => ({}),
@@ -67,7 +98,14 @@ type FakeChatState = ReturnType<typeof makeFakeChatState>;
 
 function makeFakeChatState() {
   let committed: TranscriptTurn[] = [];
+  let scrollMode: unknown = { kind: 'tail' };
   return {
+    scroll: {
+      get: () => scrollMode,
+      set: (mode: unknown) => {
+        scrollMode = mode;
+      },
+    },
     transcript: {
       history: {
         get: () => committed,
@@ -437,6 +475,132 @@ describe('AcpChatStore.changesFootprint', () => {
       'src/a.ts',
       'src/b.ts',
     ]);
+  });
+});
+
+// ── AcpChatStore reading position — ticket #37 ───────────────────────────────
+//
+// `connectSession` is mocked as a no-op in this file (see the top-of-file
+// comment), so these tests exercise the wiring directly: `setAtBottom` (the
+// `onAtBottomChange` seam), `visitNewestEvent`/`returnToReadingPosition` (the
+// scroll-mode save/restore round trip), and `newEventCount` (recomputed via
+// the private `_syncNewEventCount`, called automatically by `setAtBottom` and
+// exposed here for tests that grow the transcript directly). The turn-
+// identity counting math itself is unit-tested in chat-ui's own
+// `state/reading-position.test.ts` — this file's mock of `captureReadWatermark`/
+// `countNewTranscriptEvents` mirrors that real logic (see the `vi.mock` above).
+describe('AcpChatStore reading position', () => {
+  function syncNewEventCount(store: AcpChatStore): void {
+    (store as unknown as { _syncNewEventCount: () => void })._syncNewEventCount();
+  }
+
+  it('stays at zero while following the tail, even as the transcript grows', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    expect(store.newEventCount).toBe(0);
+    fakeChatState.transcript.history.append([makeTurn(2)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(0);
+  });
+
+  it('counts turns appended after leaving tail mode, without duplicating on repeated false calls', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+
+    store.setAtBottom(false);
+    expect(store.newEventCount).toBe(0);
+
+    fakeChatState.transcript.history.append([makeTurn(2)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(1);
+
+    // A repeated "still not at bottom" report must not slide the baseline
+    // forward and hide the turn already counted as new.
+    store.setAtBottom(false);
+    expect(store.newEventCount).toBe(1);
+
+    fakeChatState.transcript.history.append([makeTurn(3)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(2);
+  });
+
+  it('clears the count once the view reports it is back at the tail', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    store.setAtBottom(false);
+    fakeChatState.transcript.history.append([makeTurn(2)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(1);
+
+    store.setAtBottom(true);
+    expect(store.newEventCount).toBe(0);
+
+    // Leaving tail again establishes a fresh baseline — already-seen content
+    // is not "new" a second time.
+    store.setAtBottom(false);
+    expect(store.newEventCount).toBe(0);
+  });
+
+  it('visitNewestEvent saves the exact scroll intent and returnToReadingPosition restores it', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    const anchor = { kind: 'anchor', itemId: 'msg-1', edge: 'top', offset: 42 };
+    fakeChatState.scroll.set(anchor);
+    store.setAtBottom(false);
+    fakeChatState.transcript.history.append([makeTurn(2)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(1);
+
+    const scrollToBottom = vi.fn();
+    const setScrollMode = vi.fn();
+    store.bindView({ scrollToBottom, setScrollMode } as never);
+
+    expect(store.canReturnToReadingPosition).toBe(false);
+    store.visitNewestEvent();
+
+    expect(scrollToBottom).toHaveBeenCalledWith({ behavior: 'smooth' });
+    expect(store.canReturnToReadingPosition).toBe(true);
+    // Visiting the newest event clears the badge immediately rather than
+    // waiting for the async onAtBottomChange callback the scroll triggers.
+    expect(store.newEventCount).toBe(0);
+
+    store.returnToReadingPosition();
+    expect(setScrollMode).toHaveBeenCalledExactlyOnceWith(anchor);
+    expect(store.canReturnToReadingPosition).toBe(false);
+
+    // Consumed: a second call is a no-op.
+    store.returnToReadingPosition();
+    expect(setScrollMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('visitNewestEvent is a no-op for the return anchor when already at the tail', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    fakeChatState.scroll.set({ kind: 'tail' });
+
+    const scrollToBottom = vi.fn();
+    store.bindView({ scrollToBottom } as never);
+    store.visitNewestEvent();
+
+    expect(store.canReturnToReadingPosition).toBe(false);
+  });
+
+  it('_resetReadingPosition (called on a fresh bootstrap seed) clears the watermark, return anchor, and count', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    fakeChatState.scroll.set({ kind: 'anchor', itemId: 'msg-1', edge: 'top', offset: 0 });
+    store.setAtBottom(false);
+    fakeChatState.transcript.history.append([makeTurn(2)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(1);
+
+    store.bindView({ scrollToBottom: vi.fn(), setScrollMode: vi.fn() } as never);
+    store.visitNewestEvent();
+    expect(store.canReturnToReadingPosition).toBe(true);
+
+    (store as unknown as { _resetReadingPosition: () => void })._resetReadingPosition();
+
+    expect(store.newEventCount).toBe(0);
+    expect(store.canReturnToReadingPosition).toBe(false);
+    // A prior baseline must not resurface once the transcript is reseeded:
+    // leaving tail mode again establishes a fresh baseline at whatever the
+    // (new) transcript looks like now, not the old one.
+    store.setAtBottom(false);
+    expect(store.newEventCount).toBe(0);
   });
 });
 

@@ -86,6 +86,11 @@ export type { TurnStatus, TranscriptApi, ChatHistory } from './state/transcript'
 export { deriveTranscriptOutline } from './state/outline';
 export type { OutlineEntry, OutlineEntryRole, OutlineEntryStatus } from './state/outline';
 
+// ── Reading position (ticket #37) ────────────────────────────────────────────
+
+export { captureReadWatermark, countNewTranscriptEvents } from './state/reading-position';
+export type { ReadWatermark } from './state/reading-position';
+
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 export type {

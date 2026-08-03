@@ -4,10 +4,14 @@ import type {
   ChatState,
   ChatView,
   OutlineEntry,
+  ReadWatermark,
+  ScrollMode,
   ScrollToItemOptions,
 } from '@emdash/chat-ui';
 import {
+  captureReadWatermark,
   connectSession,
+  countNewTranscriptEvents,
   createChatState,
   deriveTranscriptOutline,
   pinTopMode,
@@ -110,6 +114,23 @@ export class AcpChatStore {
    */
   changesFootprint: ChangesFootprint = EMPTY_CHANGES_FOOTPRINT;
   /**
+   * Count of transcript turns that have arrived since the user last left tail
+   * mode (see `setAtBottom` / `state/reading-position.ts`). Zero while
+   * following the tail. Recomputed via `_syncNewEventCount` at every point
+   * the transcript can grow — mirrors `changesFootprint`'s explicit-field
+   * pattern rather than a lazy `computed` getter, deliberately: this value's
+   * inputs (`chatState.transcript.state`) are Solid signals, not MobX
+   * observables, so a `computed` reading them directly would go stale once
+   * "hot" (observed) with no MobX-tracked dependency to invalidate it on.
+   */
+  newEventCount = 0;
+  /**
+   * True while a "return to reading position" jump (see `visitNewestEvent`)
+   * is available. Ticket #37: visiting the newest event must not lose the
+   * exact prior item + offset.
+   */
+  canReturnToReadingPosition = false;
+  /**
    * True while a Stop/cancel request for the active turn is in flight.
    * Mirrored into `chatState.session.setStopPending` so the transcript's
    * active-message Stop control can disable itself and communicate a busy
@@ -128,6 +149,18 @@ export class AcpChatStore {
   private readonly _submissions: AcpSubmissionController;
   private readonly _stopController: StopController;
   private readonly _historyPagination = new AcpHistoryPagination();
+  /**
+   * Frozen "seen up to here" baseline captured when the user leaves tail
+   * mode; null while following the tail (or before it is first left). See
+   * `setAtBottom` and `state/reading-position.ts`.
+   */
+  private _readWatermark: ReadWatermark | null = null;
+  /**
+   * The exact scroll intent to restore when the user is done visiting the
+   * newest event — set by `visitNewestEvent`, consumed by
+   * `returnToReadingPosition`.
+   */
+  private _returnAnchor: ScrollMode | null = null;
 
   constructor(
     readonly conversationId: string,
@@ -167,6 +200,8 @@ export class AcpChatStore {
       isCancelling: observable,
       isLoadingOlderHistory: observable,
       changesFootprint: observable.ref,
+      newEventCount: observable,
+      canReturnToReadingPosition: observable,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -200,6 +235,9 @@ export class AcpChatStore {
       retry: action,
       loadOlderHistory: action,
       scrollToTranscriptItem: action,
+      setAtBottom: action,
+      visitNewestEvent: action,
+      returnToReadingPosition: action,
     });
   }
 
@@ -397,6 +435,56 @@ export class AcpChatStore {
   /** Jump the transcript to an outline entry's anchor item — see `outline`. */
   scrollToOutlineEntry(entry: OutlineEntry): void {
     void this.scrollToTranscriptItem(entry.itemId, { align: 'start' });
+  }
+
+  /**
+   * Report the bound view's "at bottom" state (see `onAtBottomChange` in
+   * `ChatRoot`/`ChatView`, which only fires on a genuine true/false
+   * transition — never redundantly). Leaving the tail freezes a new-events
+   * baseline; returning to the tail clears it, so the count only ever
+   * reflects turns that arrived while the user was actually reading history —
+   * ticket #37 (spec #18).
+   */
+  setAtBottom(atBottom: boolean): void {
+    if (atBottom) {
+      this._readWatermark = null;
+    } else if (!this._readWatermark) {
+      const state = this.chatState.transcript.state;
+      this._readWatermark = captureReadWatermark(state.committedTurns, state.activeTurnSnapshot);
+    }
+    this._syncNewEventCount();
+  }
+
+  /**
+   * Jump to the newest transcript content without losing the current reading
+   * position: the exact scroll intent is saved so `returnToReadingPosition`
+   * can restore the same item and offset afterwards. Clears the new-event
+   * count immediately (the user is about to see everything up to now) rather
+   * than waiting for the async `setAtBottom(true)` callback that follows the
+   * scroll animation, so the badge never lingers stale mid-jump.
+   */
+  visitNewestEvent(): void {
+    const current = this.chatState.scroll.get();
+    if (current.kind === 'anchor') {
+      this._returnAnchor = current;
+      this.canReturnToReadingPosition = true;
+    }
+    this._readWatermark = null;
+    this._syncNewEventCount();
+    this._view?.scrollToBottom({ behavior: 'smooth' });
+  }
+
+  /**
+   * Restore the exact item + offset saved by `visitNewestEvent`. A no-op
+   * when nothing was saved (e.g. already consumed, or the view never left
+   * the tail in the first place).
+   */
+  returnToReadingPosition(): void {
+    const anchor = this._returnAnchor;
+    if (!anchor) return;
+    this._returnAnchor = null;
+    this.canReturnToReadingPosition = false;
+    this._view?.setScrollMode(anchor);
   }
 
   async uploadAttachment(input: {
@@ -601,6 +689,9 @@ export class AcpChatStore {
         this._applyDraftSnapshot(clientSession.draft.current());
         this.historyLoading = false;
         this.loadError = null;
+        // A (re)seed starts a fresh transcript identity — any reading
+        // position saved from a prior session/attempt no longer applies.
+        this._resetReadingPosition();
         this._syncMessageCount();
         this._syncChangesFootprint();
       });
@@ -799,6 +890,7 @@ export class AcpChatStore {
         runInAction(() => {
           this._syncMessageCount();
           this._syncChangesFootprint();
+          this._syncNewEventCount();
         })
       ),
       session.draft.onChange((draft) =>
@@ -882,6 +974,7 @@ export class AcpChatStore {
       this.chatState.transcript.history.append([...fresh]);
       this._syncMessageCount();
       this._syncChangesFootprint();
+      this._syncNewEventCount();
     });
   }
 
@@ -930,6 +1023,7 @@ export class AcpChatStore {
         }
         this._syncMessageCount();
         this._syncChangesFootprint();
+        this._syncNewEventCount();
       });
     } catch (error) {
       this._historyPagination.abortLoadOlder(epoch);
@@ -977,6 +1071,40 @@ export class AcpChatStore {
       gitChanges: workspace?.gitWorktree.fileChanges ?? [],
       workspacePath: workspace?.path ?? null,
     });
+  }
+
+  /**
+   * Recompute `newEventCount` against the frozen `_readWatermark` baseline
+   * (see `setAtBottom`). A no-op value of 0 while following the tail (no
+   * watermark set). Called at every point the transcript can grow: live
+   * active-turn updates (streaming + turn commit), the post-commit history
+   * refresh, and history load-older — mirrors `_syncChangesFootprint`'s call
+   * sites. Ticket #37 (spec #18).
+   */
+  private _syncNewEventCount(): void {
+    if (!this._readWatermark) {
+      this.newEventCount = 0;
+      return;
+    }
+    const state = this.chatState.transcript.state;
+    this.newEventCount = countNewTranscriptEvents(
+      this._readWatermark,
+      state.committedTurns,
+      state.activeTurnSnapshot
+    );
+  }
+
+  /**
+   * Clear any saved reading position/watermark/return-anchor. Called when a
+   * (re)seed starts a fresh transcript identity (initial bootstrap or
+   * `retry()` after a load error) — a position saved against the prior
+   * transcript no longer applies.
+   */
+  private _resetReadingPosition(): void {
+    this._readWatermark = null;
+    this._returnAnchor = null;
+    this.canReturnToReadingPosition = false;
+    this.newEventCount = 0;
   }
 
   private _toastError(title: string, error: unknown): void {
