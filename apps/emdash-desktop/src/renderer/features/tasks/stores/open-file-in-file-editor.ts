@@ -146,7 +146,9 @@ export async function openDiffInReviewSurface(
     resolvedPath
   );
   if (!exists.success || !exists.data.exists) {
-    toast.error(`File not found in workspace: ${filePath}`);
+    // Ticket #20's shared reporter: names the resolved target and offers Copy,
+    // rather than a bare message the user cannot act on.
+    reportMissingWorkspaceFile(resolvedPath);
     return;
   }
 

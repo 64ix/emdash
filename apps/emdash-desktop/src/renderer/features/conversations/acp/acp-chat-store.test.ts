@@ -429,7 +429,7 @@ describe('AcpChatStore.changesFootprint', () => {
     } as never;
 
     store.bindView(null);
-    store.loadOlderHistory();
+    void store.loadOlderHistory();
     await flushMicrotasks();
 
     expect(fakeChatState.transcript.history.get()).toEqual([olderTurn, turnWithEdit]);

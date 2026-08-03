@@ -46,8 +46,6 @@ vi.mock('@renderer/lib/hooks/use-toast', () => ({
   toast: mocks.toast,
 }));
 
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
-
 vi.mock('@renderer/lib/ipc', () => ({
   rpc: {
     workspace: { files: { fileExists: mocks.fileExists } },

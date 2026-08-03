@@ -60,12 +60,12 @@ import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
 import { failedSubmissionPreview } from './acp-submission-recovery';
-import { activateChatLink } from './chat-link-activation';
 import type { ChangesFootprintEntry } from './changes/acp-changes-footprint';
 import { ChangesDrawer } from './changes/changes-drawer';
 import { ChangesRail } from './changes/changes-rail';
 import { openChangesFootprintEntry } from './changes/changes-rail-actions';
 import { isChangesRailNarrow } from './changes/changes-rail-layout';
+import { activateChatLink } from './chat-link-activation';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 import { OUTLINE_NARROW_BREAKPOINT_PX, TranscriptOutlinePanel } from './transcript-outline-panel';
 
