@@ -10,7 +10,7 @@ import type {
   MentionItem,
   PromptEditorRef,
 } from '@emdash/ui/react/components';
-import { ArrowDown, ListTree, PanelRight, Undo2 } from 'lucide-react';
+import { ArrowDown, ListTree, PanelRight, Search, Undo2 } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -59,7 +59,11 @@ import {
 } from '@shared/core/linked-issue';
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
-import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
+import {
+  chatViewCommandForShortcut,
+  executeChatViewCommand,
+  isOpenSearchShortcut,
+} from './acp-chat-view-commands';
 import { failedSubmissionPreview } from './acp-submission-recovery';
 import type {
   ChangesFootprintEntry,
@@ -81,6 +85,7 @@ import {
   TranscriptOutlineDrawer,
   TranscriptOutlineRail,
 } from './transcript-outline-panel';
+import { TranscriptSearchBar } from './transcript-search-panel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -800,6 +805,9 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
   // pane can be narrow even in a wide window. Drives rail-vs-drawer layout.
   const [panelWidth, setPanelWidth] = useState(0);
 
+  // ── Transcript search (ticket #36) ─────────────────────────────────────────
+  const searchToggleRef = useRef<HTMLButtonElement | null>(null);
+
   const handleReady = useCallback((view: ChatView) => {
     viewRef.current = view;
     setComposerSlot(view.composerSlot);
@@ -872,6 +880,16 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
     const handleKeyDown = (event: KeyboardEvent) => {
       const root = rootRef.current;
       if (!root || !eventComposedPathContains(event, root)) return;
+
+      if (isOpenSearchShortcut(event)) {
+        // Idempotent: if search is already open this only keeps it open —
+        // see `AcpChatSearchController.open()`. `preventDefault` still runs
+        // so Mod+F never falls through to the browser's own find-in-page.
+        store.openSearch();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       const commandId = chatViewCommandForShortcut(event);
       if (!commandId) return;
@@ -1163,6 +1181,19 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
         <div className="pointer-events-none absolute top-3 right-3 z-20 flex items-center gap-1.5">
           {showComposer && (
             <Button
+              ref={searchToggleRef}
+              variant="secondary"
+              size="icon-md"
+              aria-label={store.searchOpen ? 'Hide search' : 'Search transcript'}
+              aria-pressed={store.searchOpen}
+              onClick={() => (store.searchOpen ? store.closeSearch() : store.openSearch())}
+              className="pointer-events-auto rounded-full shadow-md"
+            >
+              <Search />
+            </Button>
+          )}
+          {showComposer && (
+            <Button
               ref={outlineToggleRef}
               variant="secondary"
               size="icon-md"
@@ -1187,6 +1218,23 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
             </Button>
           )}
         </div>
+
+        {store.searchOpen && (
+          <TranscriptSearchBar
+            query={store.searchQuery}
+            onQueryChange={(query) => store.setSearchQuery(query)}
+            results={store.searchResults}
+            currentIndex={store.searchCurrentIndex}
+            onNext={() => store.searchNext()}
+            onPrevious={() => store.searchPrevious()}
+            onSelectResult={(result) => store.selectSearchResult(result)}
+            onClose={() => store.closeSearch()}
+            historyExhausted={store.searchHistoryExhausted}
+            isLoadingOlderHistory={store.isLoadingOlderHistory}
+            onLoadOlderHistory={() => store.loadOlderHistory()}
+            returnFocusRef={searchToggleRef}
+          />
+        )}
       </div>
 
       {outlineWide ? (
