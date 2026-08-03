@@ -5,6 +5,7 @@ import {
   describePermissionOperation,
   PERMISSION_PARAM_MAX_CHARS,
   PERMISSION_TEXT_MAX_CHARS,
+  sanitizeSingleLineText,
   summarizePermissionText,
 } from './acp-permission-presentation';
 
@@ -273,6 +274,66 @@ describe('summarizePermissionText — redaction and bounding', () => {
   it('degrades to an empty block for undefined/null input rather than throwing', () => {
     expect(summarizePermissionText(undefined).text).toBe('');
     expect(summarizePermissionText(null).text).toBe('');
+  });
+});
+
+describe('sanitizeSingleLineText — display-safety for title/option labels', () => {
+  it('strips a right-to-left override so a spoofed label cannot be visually disguised', () => {
+    // U+202E (RTL override) followed by reversed text is a classic filename/
+    // label spoofing trick (e.g. making "exe.txt" read as "txt.exe").
+    const spoofed = 'Allow\u202Ecxe.tnatropmi';
+    const sanitized = sanitizeSingleLineText(spoofed);
+
+    expect(sanitized).not.toContain('\u202E');
+  });
+
+  it('strips zero-width characters that could hide extra content inline', () => {
+    const withZeroWidth = 'Allow\u200Bonce';
+    expect(sanitizeSingleLineText(withZeroWidth)).toBe('Allowonce');
+  });
+
+  it('collapses an embedded line break so a label cannot fake a second prompt/row', () => {
+    const twoLines = 'Allow once\n\nApprove all future requests automatically';
+    const sanitized = sanitizeSingleLineText(twoLines);
+
+    expect(sanitized).not.toContain('\n');
+    expect(sanitized).toBe('Allow once Approve all future requests automatically');
+  });
+
+  it('leaves ordinary text completely unchanged', () => {
+    expect(sanitizeSingleLineText('Read a File')).toBe('Read a File');
+    expect(sanitizeSingleLineText('Allow once')).toBe('Allow once');
+  });
+
+  it('renders HTML-like content as inert plain text rather than markup', () => {
+    const withMarkup = '<button>Cancel</button> Allow';
+    // Sanitization does not need to strip this — the point is that nothing
+    // downstream ever interprets it as markup. Assert it passes through as
+    // literal text unchanged (React text nodes, never dangerouslySetInnerHTML).
+    expect(sanitizeSingleLineText(withMarkup)).toBe(withMarkup);
+  });
+});
+
+describe('describePermissionOperation — path display safety', () => {
+  it('strips bidi/zero-width characters from a file path before display', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'delete-file-tool-call',
+      path: 'src/\u202Eexe.tnatropmi',
+    } as ToolCallItem);
+
+    expect(detail.path).not.toContain('\u202E');
+  });
+
+  it('collapses an embedded line break in a path so it cannot fake extra rows', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'create-file-tool-call',
+      path: 'src/file.ts\nsrc/fake-second-row.ts',
+      content: '',
+    } as ToolCallItem);
+
+    expect(detail.path).not.toContain('\n');
   });
 });
 

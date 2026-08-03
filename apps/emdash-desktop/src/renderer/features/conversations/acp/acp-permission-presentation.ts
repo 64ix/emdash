@@ -46,6 +46,37 @@ function toDisplayString(value: unknown): string {
   }
 }
 
+// ── Display-safety (bidi/zero-width spoofing) ────────────────────────────────
+//
+// A permission request is a security decision surface: provider-authored text
+// (command, path, params, option labels) must never be able to visually
+// disguise itself — e.g. a right-to-left override making a destructive
+// command read as something benign, or an embedded line break making a label
+// impersonate a second prompt/button. Mirrors the equivalent mitigation for
+// link display in `chat-link-classification.ts`'s `BIDI_CONTROL_CHARS`.
+// U+200B-200F (zero-width space/joiner/non-joiner + LTR/RTL marks),
+// U+202A-202E (LTR/RTL embedding/override/pop), U+2060-2069 (word joiner +
+// invisible operators), U+FEFF (zero-width no-break space / BOM).
+const UNSAFE_DISPLAY_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+
+function stripUnsafeDisplayChars(value: string): string {
+  return value.replace(UNSAFE_DISPLAY_CHARS, '');
+}
+
+/**
+ * Sanitize a short, single-line provider-authored label — a permission
+ * request's `title` or an option's `name` — for safe display: strips bidi/
+ * zero-width spoofing characters and collapses any embedded line break to a
+ * single space so multi-line input can never fake a second prompt or row.
+ * Used by `AcpChatStore.permissionQueue` for `title`/`options[].name`, which
+ * are not routed through `describePermissionOperation` below.
+ */
+export function sanitizeSingleLineText(value: string): string {
+  return stripUnsafeDisplayChars(value)
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+}
+
 /**
  * Bound `text` to at most `max` Unicode code points via the string iterator
  * (`Array.from`) rather than slicing UTF-16 code units, so an astral-plane
@@ -94,14 +125,24 @@ export function summarizePermissionText(
   raw: unknown,
   max = PERMISSION_TEXT_MAX_CHARS
 ): PermissionTextBlock {
-  const redacted = redactSecrets(toDisplayString(raw));
+  const redacted = redactSecrets(stripUnsafeDisplayChars(toDisplayString(raw)));
   const bounded = boundCodePoints(redacted, max);
   return { ...bounded, fullText: redacted };
 }
 
-/** Bound + redact a single normalized parameter value for the params list. */
+/**
+ * Bound + redact a single normalized parameter value for the params list.
+ * Params render in a single-line flex row, so — unlike `summarizePermissionText`
+ * — embedded line breaks are collapsed too (see `sanitizeSingleLineText`).
+ */
 function paramValue(raw: unknown): string {
-  return boundCodePoints(redactSecrets(toDisplayString(raw)), PERMISSION_PARAM_MAX_CHARS).text;
+  const singleLine = sanitizeSingleLineText(toDisplayString(raw));
+  return boundCodePoints(redactSecrets(singleLine), PERMISSION_PARAM_MAX_CHARS).text;
+}
+
+/** Sanitize a path for single-line display — see `sanitizeSingleLineText`. */
+function sanitizePath(path: string): string {
+  return redactSecrets(sanitizeSingleLineText(path));
 }
 
 // ── Normalized operation model ───────────────────────────────────────────────
@@ -176,55 +217,59 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
     }
 
     case 'read-tool-call': {
-      const path = toolCall.path ?? toolCall.resource;
+      const rawPath = toolCall.path ?? toolCall.resource;
+      const path = rawPath ? sanitizePath(rawPath) : undefined;
       return {
         kind: 'read',
         operationLabel: 'Read file',
         scope: WORKSPACE_SCOPE,
         path,
-        params: path ? [{ label: 'Path', value: paramValue(path) }] : [],
+        params: path ? [{ label: 'Path', value: path }] : [],
         resources: path ? [{ kind: 'path', path }] : [],
         riskCues: ['Reads the contents of a file or resource.'],
       };
     }
 
     case 'create-file-tool-call': {
+      const path = sanitizePath(toolCall.path);
       return {
         kind: 'write',
         operationLabel: 'Create file',
         scope: WORKSPACE_SCOPE,
-        path: toolCall.path,
+        path,
         content: summarizePermissionText(toolCall.content),
-        params: [{ label: 'Path', value: paramValue(toolCall.path) }],
-        resources: [{ kind: 'path', path: toolCall.path }],
+        params: [{ label: 'Path', value: path }],
+        resources: [{ kind: 'path', path }],
         riskCues: ['Creates a new file with the content shown below.'],
       };
     }
 
     case 'modify-file-tool-call': {
+      const path = sanitizePath(toolCall.path);
       return {
         kind: 'write',
         operationLabel: 'Modify file',
         scope: WORKSPACE_SCOPE,
-        path: toolCall.path,
+        path,
         diff: {
           oldText: summarizePermissionText(toolCall.oldText),
           newText: summarizePermissionText(toolCall.newText),
         },
-        params: [{ label: 'Path', value: paramValue(toolCall.path) }],
-        resources: [{ kind: 'path', path: toolCall.path }],
+        params: [{ label: 'Path', value: path }],
+        resources: [{ kind: 'path', path }],
         riskCues: ['Overwrites part of an existing file.'],
       };
     }
 
     case 'delete-file-tool-call': {
+      const path = sanitizePath(toolCall.path);
       return {
         kind: 'delete',
         operationLabel: 'Delete file',
         scope: WORKSPACE_SCOPE,
-        path: toolCall.path,
-        params: [{ label: 'Path', value: paramValue(toolCall.path) }],
-        resources: [{ kind: 'path', path: toolCall.path }],
+        path,
+        params: [{ label: 'Path', value: path }],
+        resources: [{ kind: 'path', path }],
         riskCues: ['Permanently deletes a file. Emdash does not provide an undo for this action.'],
       };
     }

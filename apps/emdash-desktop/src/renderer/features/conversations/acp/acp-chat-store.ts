@@ -47,6 +47,7 @@ import { createStopController, type StopController } from './acp-chat-stop-contr
 import { AcpHistoryPagination } from './acp-history-pagination';
 import {
   describePermissionOperation,
+  sanitizeSingleLineText,
   type PermissionOperationDetail,
 } from './acp-permission-presentation';
 import {
@@ -298,12 +299,17 @@ export class AcpChatStore {
   get permissionQueue(): PermissionQueueItem[] {
     return (this.session?.sessionState.current().pendingPermissions ?? []).map((request) => ({
       requestId: request.requestId,
-      title: request.toolCall.title,
+      // Sanitized (not routed through describePermissionOperation, which only
+      // covers the toolCall payload): a permission request is a security
+      // decision surface, so title/option labels can never be allowed to
+      // spoof via bidi overrides or an embedded line break — see
+      // `sanitizeSingleLineText`.
+      title: sanitizeSingleLineText(request.toolCall.title),
       itemId: request.toolCall.id,
       operation: describePermissionOperation(request.toolCall),
       options: request.options.map((option) => ({
         optionId: option.optionId,
-        name: option.name,
+        name: sanitizeSingleLineText(option.name),
         kind: option.kind,
       })),
     }));
