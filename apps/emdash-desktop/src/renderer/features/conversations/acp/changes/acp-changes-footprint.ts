@@ -40,12 +40,16 @@ import { relativeToWorkspace } from '@renderer/features/tasks/stores/workspace-p
  *    over read, same as everywhere else) is carried forward onto the new
  *    path instead. A new path that already earned its own provenance from
  *    direct tracked activity keeps it; forwarding only ever fills a `null`
- *    source. A rename chain within one snapshot (e.g. a staged A->B plus
- *    an unstaged B->C) resolves by walking each hop's `oldPath` back to the
- *    nearest tracked ancestor, so every surviving row in the chain — not
- *    only the final one — inherits it. An absent `oldPath` (older
- *    producers, or an SSH host status) or an old path equal to the new path
- *    disables reconciliation entirely, leaving today's behavior unchanged.
+ *    source. Reconciliation walks each hop's `oldPath` back to the nearest
+ *    tracked ancestor, so a multi-hop chain would resolve too — but that is
+ *    defensive depth, not a case real Git produces: `git status` never marks
+ *    a purely unstaged rename as `renamed`, and successive staged renames
+ *    collapse into a single A->C entry (verified empirically against
+ *    `git status --porcelain=v2`, see `git-worktree.test.ts`). Treat the
+ *    chain walk as a guard against a future producer, not as the motivating
+ *    case. An absent `oldPath` (older producers, or an SSH host status) or
+ *    an old path equal to the new path disables reconciliation entirely,
+ *    leaving today's behavior unchanged.
  */
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -211,11 +215,16 @@ export function buildChangesFootprint({
   }
 
   /**
-   * Walks a renamed path's `oldPath` chain backward (A->B->C resolves from
-   * C through B to A) looking for the nearest ancestor the transcript
-   * tracked, and returns that ancestor's provenance (edit wins over read,
-   * mirroring the direct-path precedence below). Returns `null` when no
-   * ancestor was ever tracked, or when this path has no `oldPath` at all.
+   * Walks a renamed path's `oldPath` chain backward looking for the nearest
+   * ancestor the transcript tracked, and returns that ancestor's provenance
+   * (edit wins over read, mirroring the direct-path precedence below).
+   * Returns `null` when no ancestor was ever tracked, or when this path has
+   * no `oldPath` at all.
+   *
+   * In practice Git only ever hands us a single hop (A->B): successive staged
+   * renames collapse, and unstaged renames are never reported as `renamed`.
+   * The loop and its `seen` guard exist so a future producer emitting a real
+   * chain — or a cycle — degrades safely rather than surprising us.
    */
   function forwardedRenameSource(path: string): ChangesFootprintProvenance | null {
     const seen = new Set<string>([path]);
