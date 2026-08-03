@@ -105,7 +105,12 @@ describe('isAttentionTargetVisible', () => {
 
 // ── deriveErrorAttentionSources ───────────────────────────────────────────────
 
-function message(id: string, seq: number, role: 'user' | 'assistant', text: string): TranscriptItem {
+function message(
+  id: string,
+  seq: number,
+  role: 'user' | 'assistant',
+  text: string
+): TranscriptItem {
   return { kind: 'message', id, seq, role, text };
 }
 
@@ -248,7 +253,10 @@ describe('deriveErrorAttentionSources', () => {
         toolCall({ id: 'committed-tool', status: 'error' }),
       ],
     });
-    const active = turn({ id: 'turn-active', items: [toolCall({ id: 'active-tool', status: 'error' })] });
+    const active = turn({
+      id: 'turn-active',
+      items: [toolCall({ id: 'active-tool', status: 'error' })],
+    });
 
     expect(deriveErrorAttentionSources(last, active).map((e) => e.id)).toEqual([
       'turn:turn-committed',

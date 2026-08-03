@@ -47,7 +47,11 @@
  * and can still be reached through traversal).
  */
 
-import type { TranscriptItem, TranscriptTurn, TranscriptTurnOutcome } from '@emdash/core/acp/client';
+import type {
+  TranscriptItem,
+  TranscriptTurn,
+  TranscriptTurnOutcome,
+} from '@emdash/core/acp/client';
 import { sanitizePermissionTitle } from './acp-permission-presentation';
 
 // ── Model ─────────────────────────────────────────────────────────────────────

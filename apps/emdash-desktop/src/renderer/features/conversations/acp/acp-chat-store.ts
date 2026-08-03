@@ -475,7 +475,10 @@ export class AcpChatStore {
    */
   get attentionFocusedItem(): AttentionItem | null {
     if (this.attentionQueue.length === 0) return null;
-    return this.attentionQueue.find((item) => item.id === this.attentionFocusId) ?? this.attentionQueue[0];
+    return (
+      this.attentionQueue.find((item) => item.id === this.attentionFocusId) ??
+      this.attentionQueue[0]
+    );
   }
 
   /**

@@ -1105,7 +1105,12 @@ describe('AcpChatStore.attentionQueue', () => {
 
     store.session = {
       sessionState: {
-        current: () => ({ pendingPermissions: [], isGenerating: false, canSubmit: true, canCancel: false }),
+        current: () => ({
+          pendingPermissions: [],
+          isGenerating: false,
+          canSubmit: true,
+          canCancel: false,
+        }),
       },
       sendPrompt: vi.fn(async () => ({ success: true, data: { queued: false } })),
     } as never;

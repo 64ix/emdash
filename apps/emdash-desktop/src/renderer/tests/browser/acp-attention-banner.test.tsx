@@ -13,8 +13,8 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
-import type { AttentionItem } from '@renderer/features/conversations/acp/acp-attention-queue';
 import { AttentionBanner } from '@renderer/features/conversations/acp/acp-attention-banner';
+import type { AttentionItem } from '@renderer/features/conversations/acp/acp-attention-queue';
 
 beforeAll(() => {
   (
@@ -168,7 +168,9 @@ describe('AttentionBanner', () => {
     expect(host.textContent).toContain('2 of 2');
     expect(host.textContent).toContain('Turn failed');
 
-    const next = host.querySelector('[aria-label="Next item needing attention"]') as HTMLButtonElement;
+    const next = host.querySelector(
+      '[aria-label="Next item needing attention"]'
+    ) as HTMLButtonElement;
     const previous = host.querySelector(
       '[aria-label="Previous item needing attention"]'
     ) as HTMLButtonElement;
@@ -195,7 +197,10 @@ describe('AttentionBanner', () => {
   });
 
   it('activates via real keyboard input (focus + Enter), not just a mouse click', async () => {
-    const { onActivate } = await renderBanner({ queue: [PERMISSION_ITEM], focusedItem: PERMISSION_ITEM });
+    const { onActivate } = await renderBanner({
+      queue: [PERMISSION_ITEM],
+      focusedItem: PERMISSION_ITEM,
+    });
 
     const action = host.querySelector('button:not([aria-label])') as HTMLButtonElement;
     action.focus();
