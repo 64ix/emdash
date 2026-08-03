@@ -46,9 +46,7 @@ function ChangesRailSection({
             isSelected={selectedPath === entry.path}
             onSelect={() => onSelect(entry)}
             onOpenFile={() => onOpenFile(entry)}
-            onOpenDiff={
-              entry.kind === 'edited' && onOpenDiff ? () => onOpenDiff(entry) : undefined
-            }
+            onOpenDiff={entry.kind === 'edited' && onOpenDiff ? () => onOpenDiff(entry) : undefined}
           />
         ))}
       </div>

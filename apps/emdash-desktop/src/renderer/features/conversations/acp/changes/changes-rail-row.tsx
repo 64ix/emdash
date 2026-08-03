@@ -59,7 +59,7 @@ export function ChangesRailRow({
           <span className="min-w-0 shrink truncate text-xs text-foreground-muted">{directory}</span>
         )}
       </span>
-      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
+      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within/item:opacity-100 group-hover/item:opacity-100">
         <Button
           variant="ghost"
           size="icon-xs"

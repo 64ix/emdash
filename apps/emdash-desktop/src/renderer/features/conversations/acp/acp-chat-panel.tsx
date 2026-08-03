@@ -64,8 +64,8 @@ import type {
   ChangesFootprintEntry,
   EditedChangesFootprintEntry,
 } from './changes/acp-changes-footprint';
-import { changesProvenanceJumpTarget } from './changes/changes-provenance';
 import { ChangesDrawer } from './changes/changes-drawer';
+import { changesProvenanceJumpTarget } from './changes/changes-provenance';
 import { ChangesRail } from './changes/changes-rail';
 import {
   openChangesFootprintDiff,

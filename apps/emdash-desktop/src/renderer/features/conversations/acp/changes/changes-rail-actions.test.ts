@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EditedChangesFootprintEntry, ReadChangesFootprintEntry } from './acp-changes-footprint';
+import type {
+  EditedChangesFootprintEntry,
+  ReadChangesFootprintEntry,
+} from './acp-changes-footprint';
 import {
   openChangesFootprintDiff,
   openChangesFootprintEntry,
@@ -21,7 +24,9 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   getWorkspaceForTask: mocks.getWorkspaceForTask,
 }));
 
-function editedEntry(overrides: Partial<EditedChangesFootprintEntry> = {}): EditedChangesFootprintEntry {
+function editedEntry(
+  overrides: Partial<EditedChangesFootprintEntry> = {}
+): EditedChangesFootprintEntry {
   return {
     kind: 'edited',
     path: 'src/a.ts',

@@ -438,6 +438,108 @@ describe('AcpChatStore.changesFootprint', () => {
       'src/b.ts',
     ]);
   });
+
+  // Ticket #35's "interesting case": a file touched by several turns must
+  // resolve to exactly one entry, whose provenance deterministically points
+  // at the *latest* (by seq, not array/load order) occurrence — see
+  // `buildChangesFootprint`'s "last wins" rule. Exercised here through the
+  // store's real `loadOlderHistory` update path (an older page arriving
+  // after the newer turn is already loaded), not just the pure function.
+  it('keeps one entry with the latest provenance when an older page also touches an already-edited path', async () => {
+    const newerTurn: TranscriptTurn = {
+      ...makeTurn(10),
+      items: [modifyItem('newer-edit', 1, 'src/a.ts')],
+    };
+    const { store, fakeChatState } = setUpStore([newerTurn], 10);
+    (store as unknown as { _syncChangesFootprint: () => void })._syncChangesFootprint();
+    expect(store.changesFootprint.edited).toEqual([
+      expect.objectContaining({
+        path: 'src/a.ts',
+        source: { turnId: 'turn-10', itemId: 'newer-edit' },
+      }),
+    ]);
+
+    const olderTurn: TranscriptTurn = {
+      ...makeTurn(9),
+      items: [modifyItem('older-edit', 1, 'src/a.ts')],
+    };
+    store.session = {
+      getHistory: vi.fn(async () => ({
+        success: true,
+        data: { turns: [olderTurn], nextCursor: null },
+      })),
+    } as never;
+
+    store.bindView(null);
+    void store.loadOlderHistory();
+    await flushMicrotasks();
+
+    // Still a single entry for src/a.ts — the older page's edit never
+    // duplicates the file — and provenance still points at the newer turn's
+    // item, never silently overwritten by array-order (the older page was
+    // prepended, so a naive "last processed" rule would have picked it).
+    expect(store.changesFootprint.edited).toHaveLength(1);
+    expect(store.changesFootprint.edited[0]).toMatchObject({
+      path: 'src/a.ts',
+      source: { turnId: 'turn-10', itemId: 'newer-edit' },
+    });
+  });
+});
+
+// ── Changes rail provenance jump (ticket #35) ────────────────────────────────
+//
+// The Changes rail's "jump to provenance" action (acp-chat-panel.tsx's
+// handleSelectChangesEntry) calls `store.scrollToTranscriptItem` directly
+// with a footprint entry's `source.itemId` — the same generic, reusable seam
+// `scrollToOutlineEntry` uses (see the describe block above). This closes the
+// loop for this ticket's specific consumer: a provenance target that belongs
+// to a turn not yet paginated into `chatState` must still page in and land
+// correctly, not silently no-op.
+describe('AcpChatStore.scrollToTranscriptItem — Changes rail provenance target', () => {
+  it('pages in older history to reach a Changes entry provenance item not yet loaded', async () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(10), makeTurn(11)], 10);
+    const olderTurn: TranscriptTurn = {
+      ...makeTurn(9),
+      items: [
+        {
+          kind: 'modify-file-tool-call',
+          id: 'edit-item',
+          seq: 1,
+          toolCallId: 'edit-item',
+          title: 'Edit src/a.ts',
+          status: 'done',
+          path: 'src/a.ts',
+          oldText: '',
+          newText: '',
+        },
+      ],
+    };
+    const getHistory = vi.fn(async () => ({
+      success: true,
+      data: { turns: [olderTurn], nextCursor: null },
+    }));
+    store.session = { getHistory } as never;
+
+    const scrollToItem = vi.fn();
+    const loadOlder = vi.fn((turns: TranscriptTurn[]) => {
+      fakeChatState.transcript.history.prepend(turns);
+    });
+    store.bindView({ loadOlder, scrollToItem } as never);
+
+    // A Changes footprint entry for src/a.ts whose provenance is the tool
+    // call above — as if computed before this page was ever loaded.
+    const provenanceItemId = 'edit-item';
+
+    await store.scrollToTranscriptItem(provenanceItemId, { align: 'start' });
+
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    expect(scrollToItem).toHaveBeenCalledWith(provenanceItemId, { align: 'start' });
+    expect(fakeChatState.transcript.history.get().map((t) => t.id)).toEqual([
+      'turn-9',
+      'turn-10',
+      'turn-11',
+    ]);
+  });
 });
 
 class FakeLiveList<T> {
