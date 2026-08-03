@@ -16,6 +16,8 @@
  * unrecognized target is always `blocked`, never silently allowed through.
  */
 
+import { classifyArtifactExtension } from '@shared/core/fs/artifact-preview';
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export type ChatLinkClassificationContext = {
@@ -31,6 +33,16 @@ export type ChatLinkClassificationContext = {
  * `workspace-file` — resolves (after `.`/`..` normalization) inside the
  *   active workspace root. `path` is the fully resolved, forward-slash
  *   normalized absolute path, ready for the existing editor-open command.
+ * `local-artifact` — an *absolute* (or drive-letter) filesystem path outside
+ *   the workspace with a previewable extension (raster image, text,
+ *   Markdown, or CSV). `path` is the resolved candidate — not yet trusted;
+ *   the host must still run it through the main-process preview policy
+ *   (`previewArtifact` RPC), which independently re-validates containment,
+ *   size, and real content before ever returning bytes, and requires
+ *   explicit confirmation outside every trusted root (see ticket #21).
+ *   A *relative* reference that nets outside the workspace via `..` never
+ *   reaches this kind — that stays `blocked`/`outside-workspace` regardless
+ *   of extension, since traversal is refused outright, not confirmable.
  * `external-http` — a well-formed `http:`/`https:` URL with no embedded
  *   userinfo. `url` is the canonicalized `URL#href` (e.g. IDNA-normalized,
  *   so a Unicode look-alike hostname surfaces in its safe punycode form).
@@ -40,6 +52,7 @@ export type ChatLinkClassificationContext = {
  */
 export type ChatLinkAction =
   | { readonly kind: 'workspace-file'; readonly path: string }
+  | { readonly kind: 'local-artifact'; readonly path: string }
   | { readonly kind: 'external-http'; readonly url: string }
   | { readonly kind: 'blocked'; readonly reason: ChatLinkBlockReason; readonly target: string };
 
@@ -53,11 +66,10 @@ export type ChatLinkAction =
  * `suspicious-authority` — an `http(s)` URL with userinfo embedded in the
  *   authority (`https://user@host` / `https://user:pass@host`), a classic
  *   phishing shape where the visible text and the navigated host diverge.
- * `outside-workspace` — a filesystem-shaped path (absolute, home `~`, or a
- *   relative reference that walks above the root) that does not resolve
- *   inside the active workspace. This is the seam ticket #21 (local artifact
- *   preview) extends into a confirmed local-file/preview flow; for now it is
- *   blocked.
+ * `outside-workspace` — a filesystem-shaped path (home `~`, a relative
+ *   reference that walks above the root, or an absolute/drive-letter path
+ *   with no previewable extension) that does not resolve inside the active
+ *   workspace and is not a `local-artifact` candidate either.
  */
 export type ChatLinkBlockReason =
   | 'malformed'
@@ -184,7 +196,8 @@ function classifyWorkspacePath(
   const root = normalizeRoot(workspaceRoot);
   const isDriveAbsolute = DRIVE_LETTER_PATH.test(decoded);
   const isPosixAbsolute = decoded.startsWith('/') && !decoded.startsWith('//');
-  const combined = isDriveAbsolute || isPosixAbsolute ? decoded : `${root}/${decoded}`;
+  const isAbsoluteInput = isDriveAbsolute || isPosixAbsolute;
+  const combined = isAbsoluteInput ? decoded : `${root}/${decoded}`;
 
   const resolved = resolvePathSegments(combined);
   if (resolved === null) {
@@ -194,6 +207,18 @@ function classifyWorkspacePath(
 
   if (resolved === root || resolved.startsWith(`${root}/`)) {
     return { kind: 'workspace-file', path: resolved };
+  }
+
+  // Outside the workspace. A *relative* input only ever nets outside via `..`
+  // traversal — that stays a hard block regardless of extension (ticket #21
+  // does not soften traversal into a confirmable preview). Only a candidate
+  // that was already absolute/drive-letter-shaped can legitimately name a
+  // path elsewhere on disk; when it also has a previewable extension, defer
+  // the real trust decision (workspace/app-temp/elsewhere, size, content) to
+  // the main process via the local-artifact preview flow instead of blocking
+  // outright.
+  if (isAbsoluteInput && classifyArtifactExtension(resolved) !== 'unsupported') {
+    return { kind: 'local-artifact', path: resolved };
   }
 
   return blocked('outside-workspace', resolved);
