@@ -14,6 +14,7 @@ import {
   failedSubmissionPreview,
   removeFailedSubmission,
   resultError,
+  submissionFailureKindOf,
   toPromptInput,
 } from './acp-submission-recovery';
 
@@ -37,7 +38,7 @@ function snapshot(overrides: Partial<AcpSubmissionSnapshot> = {}): AcpSubmission
 }
 
 function failed(overrides: Partial<FailedAcpSubmission> = {}): FailedAcpSubmission {
-  return { ...snapshot(overrides), error: 'boom', ...overrides };
+  return { ...snapshot(overrides), error: 'boom', errorKind: 'unknown', ...overrides };
 }
 
 async function flushPromises(): Promise<void> {
@@ -180,11 +181,52 @@ describe('resultError', () => {
   });
 });
 
+// ── submissionFailureKindOf — typed evidence, never message-string guessing ──
+
+describe('submissionFailureKindOf', () => {
+  it.each(['conversation_not_found', 'invalid_state', 'prompt_failed'] as const)(
+    'recognizes the typed Result-error tag %s',
+    (type) => {
+      expect(submissionFailureKindOf({ type })).toBe(type);
+    }
+  );
+
+  it('falls back to unknown for an untagged object (an opaque thrown exception)', () => {
+    expect(submissionFailureKindOf(new Error('network down'))).toBe('unknown');
+    expect(submissionFailureKindOf({ message: 'no type here' })).toBe('unknown');
+  });
+
+  it('falls back to unknown for an unrecognized type tag', () => {
+    expect(submissionFailureKindOf({ type: 'auth_required' })).toBe('unknown');
+  });
+
+  it('falls back to unknown for a raw string or nullish value', () => {
+    expect(submissionFailureKindOf('raw string')).toBe('unknown');
+    expect(submissionFailureKindOf(null)).toBe('unknown');
+    expect(submissionFailureKindOf(undefined)).toBe('unknown');
+  });
+});
+
 describe('appendFailedSubmission', () => {
   it('appends a new failed submission', () => {
     const entries = appendFailedSubmission([], snapshot({ localId: 'submission:1' }), 'boom');
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ localId: 'submission:1', error: 'boom' });
+  });
+
+  it('defaults errorKind to unknown when the caller omits it', () => {
+    const entries = appendFailedSubmission([], snapshot({ localId: 'submission:1' }), 'boom');
+    expect(entries[0].errorKind).toBe('unknown');
+  });
+
+  it('preserves an explicit errorKind', () => {
+    const entries = appendFailedSubmission(
+      [],
+      snapshot({ localId: 'submission:1' }),
+      'boom',
+      'invalid_state'
+    );
+    expect(entries[0].errorKind).toBe('invalid_state');
   });
 
   it('replaces (never duplicates) an existing entry with the same localId', () => {
@@ -301,8 +343,25 @@ describe('AcpSubmissionController', () => {
     expect(entry.hiddenContext).toBe('hidden ctx');
     expect(entry.kind).toBe('direct');
     expect(entry.error).toBe('rejected');
+    // A bare string Result-error carries no typed `.type` tag — 'unknown' is
+    // the honest classification, not a guess from the message text.
+    expect(entry.errorKind).toBe('unknown');
     expect(onFailure).toHaveBeenCalledTimes(1);
     expect(onFailure).toHaveBeenCalledWith(entry);
+  });
+
+  it('classifies a typed Result-error tag end-to-end through the controller', async () => {
+    const port = new FakeSessionPort();
+    const controller = new AcpSubmissionController(() => port);
+
+    controller.submit('bad state');
+    port.resolveNextSend({
+      success: false,
+      error: { type: 'invalid_state', message: 'Cannot send a prompt now' },
+    });
+    await flushPromises();
+
+    expect(controller.failedSubmissions[0].errorKind).toBe('invalid_state');
   });
 
   it('restores the snapshot exactly once on a thrown/rejected promise', async () => {
@@ -315,6 +374,9 @@ describe('AcpSubmissionController', () => {
 
     expect(controller.failedSubmissions).toHaveLength(1);
     expect(controller.failedSubmissions[0].error).toBe('network down');
+    // A thrown exception (no `.type` tag) is the one submission-failure shape
+    // with genuinely no typed evidence of why — 'unknown' is honest here.
+    expect(controller.failedSubmissions[0].errorKind).toBe('unknown');
   });
 
   it('fails immediately (without calling the session) when no session is connected', async () => {
@@ -325,6 +387,8 @@ describe('AcpSubmissionController', () => {
 
     expect(controller.failedSubmissions).toHaveLength(1);
     expect(controller.failedSubmissions[0].error).toBe('ACP session is not connected');
+    // Authored locally by `_send` (not the runtime) but fully known — never 'unknown'.
+    expect(controller.failedSubmissions[0].errorKind).toBe('session-unavailable');
   });
 
   it('captures queue position and restores a failed queued submission', async () => {

@@ -50,8 +50,55 @@ export interface AcpSubmissionSnapshot {
   readonly queuePosition?: number;
 }
 
+/**
+ * Typed tag for *why* a submission failed — the evidence
+ * `acp-recovery-card.ts#categorizeSubmissionFailure` classifies into a
+ * `RecoveryCategory`, kept separate from `error` (a human-readable message)
+ * so that classification never has to parse the message string (ticket #39's
+ * "derive from typed runtime evidence" guardrail).
+ *
+ *   - 'session-unavailable'   — `sessionPort()` returned null; authored
+ *     locally by `AcpSubmissionController._send`, not from the runtime, but
+ *     fully known at the call site (not a guess).
+ *   - 'conversation_not_found' | 'invalid_state' | 'prompt_failed' — the
+ *     ACP runtime returned one of `AcpSendPromptError`/`AcpQueuePromptError`'s
+ *     typed tags (`packages/core/.../acp/errors.ts`) via a `Result` failure.
+ *   - 'unknown' — the send/queue call rejected with an opaque thrown value
+ *     (no recognizable `.type` tag) — most commonly a transport/IPC
+ *     exception. This is the one submission-failure shape with genuinely no
+ *     typed evidence of *why* it failed, hence 'unknown' rather than a guess.
+ */
+export type SubmissionFailureKind =
+  | 'session-unavailable'
+  | 'conversation_not_found'
+  | 'invalid_state'
+  | 'prompt_failed'
+  | 'unknown';
+
+const RECOGNIZED_RESULT_ERROR_TYPES: readonly SubmissionFailureKind[] = [
+  'conversation_not_found',
+  'invalid_state',
+  'prompt_failed',
+];
+
+/**
+ * Extract the typed `.type` tag from a `Result` failure's error value, when
+ * it is one `AcpSendPromptError`/`AcpQueuePromptError` recognizes. Returns
+ * 'unknown' for anything else (a thrown exception, an untagged object, a raw
+ * string) — see `SubmissionFailureKind`'s doc.
+ */
+export function submissionFailureKindOf(error: unknown): SubmissionFailureKind {
+  if (typeof error !== 'object' || error === null) return 'unknown';
+  const type = (error as { type?: unknown }).type;
+  return RECOGNIZED_RESULT_ERROR_TYPES.includes(type as SubmissionFailureKind)
+    ? (type as SubmissionFailureKind)
+    : 'unknown';
+}
+
 export interface FailedAcpSubmission extends AcpSubmissionSnapshot {
   readonly error: string;
+  /** Typed evidence for the failure category — see `SubmissionFailureKind`'s doc. */
+  readonly errorKind: SubmissionFailureKind;
 }
 
 export interface CreateSnapshotInput {
@@ -93,10 +140,11 @@ export function toPromptInput(snapshot: AcpSubmissionSnapshot): PromptInput {
 export function appendFailedSubmission(
   entries: readonly FailedAcpSubmission[],
   snapshot: AcpSubmissionSnapshot,
-  error: string
+  error: string,
+  errorKind: SubmissionFailureKind = 'unknown'
 ): FailedAcpSubmission[] {
   const withoutExisting = entries.filter((entry) => entry.localId !== snapshot.localId);
-  return [...withoutExisting, { ...snapshot, error }];
+  return [...withoutExisting, { ...snapshot, error, errorKind }];
 }
 
 /**
@@ -254,7 +302,7 @@ export class AcpSubmissionController {
   private _send(snapshot: AcpSubmissionSnapshot): void {
     const port = this.sessionPort();
     if (!port) {
-      this._fail(snapshot, new Error('ACP session is not connected'));
+      this._fail(snapshot, new Error('ACP session is not connected'), 'session-unavailable');
       return;
     }
 
@@ -267,20 +315,29 @@ export class AcpSubmissionController {
 
     void request
       .then((result) => {
-        if (!result.success) this._fail(snapshot, resultError(result.error));
+        if (!result.success) {
+          this._fail(snapshot, resultError(result.error), submissionFailureKindOf(result.error));
+        }
       })
-      .catch((error: unknown) => this._fail(snapshot, resultError(error)));
+      .catch((error: unknown) =>
+        this._fail(snapshot, resultError(error), submissionFailureKindOf(error))
+      );
   }
 
-  private _fail(snapshot: AcpSubmissionSnapshot, error: Error): void {
+  private _fail(
+    snapshot: AcpSubmissionSnapshot,
+    error: Error,
+    errorKind: SubmissionFailureKind
+  ): void {
     let failure!: FailedAcpSubmission;
     runInAction(() => {
       this.failedSubmissions = appendFailedSubmission(
         this.failedSubmissions,
         snapshot,
-        error.message
+        error.message,
+        errorKind
       );
-      failure = { ...snapshot, error: error.message };
+      failure = { ...snapshot, error: error.message, errorKind };
     });
     this.hooks.onFailure?.(failure);
   }
