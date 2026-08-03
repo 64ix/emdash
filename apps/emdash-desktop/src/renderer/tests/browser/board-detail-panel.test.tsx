@@ -547,6 +547,23 @@ describe('Task Detail Panel — open, switch, close', () => {
     await settle();
     expect(panelHeading()).toBeNull();
   });
+
+  it('clicking the card\'s "Move" handle (ticket #52) does not select it — that handle owns keyboard drag pick-up only, never selection', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const moveHandle = host.querySelector(`button[aria-label="Move card-a"]`) as HTMLElement;
+    click(moveHandle);
+    await settle();
+
+    // A stationary click never reaches dnd-kit's pointer-drag activation
+    // constraint either, so this exercises the same click-bubbling contract
+    // a real "press and release without moving" mouse gesture would: the
+    // handle's own `onClick` stops propagation, so the card's `onClick` (the
+    // thing that opens the panel) never fires.
+    expect(panelHeading()).toBeNull();
+  });
 });
 
 describe('Task Detail Panel — card highlight', () => {
