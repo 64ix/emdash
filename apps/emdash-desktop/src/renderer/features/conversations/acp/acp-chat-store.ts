@@ -7,14 +7,17 @@ import type {
   ReadWatermark,
   ScrollMode,
   ScrollToItemOptions,
+  TranscriptSearchResult,
 } from '@emdash/chat-ui';
 import {
+  advanceSearchResultIndex,
   captureReadWatermark,
   connectSession,
   countNewTranscriptEvents,
   createChatState,
   deriveTranscriptOutline,
   pinTopMode,
+  searchTranscript,
 } from '@emdash/chat-ui';
 import type {
   AttachmentMimeType,
@@ -52,6 +55,7 @@ import {
   deriveErrorAttentionSources,
   type AttentionItem,
 } from './acp-attention-queue';
+import { AcpChatSearchController } from './acp-chat-search-controller';
 import { createStopController, type StopController } from './acp-chat-stop-controller';
 import { AcpHistoryPagination } from './acp-history-pagination';
 import {
@@ -209,6 +213,18 @@ export class AcpChatStore {
    */
   canReturnToReadingPosition = false;
   /**
+   * Bumped on every `AcpChatSearchController` state change so `searchOpen`/
+   * `searchQuery`/`searchResults`/`searchCurrentIndex` (MobX computeds) have
+   * an observable dependency — mirrors `permissionResolutionVersion`: the
+   * controller itself is framework-free and holds no MobX-observable state
+   * of its own, so a computed that only ever read its plain fields directly
+   * would have zero MobX-tracked dependencies (the #34 staleness bug this
+   * file's other fields work around a different way — see `outline`'s doc).
+   * Public only because `makeObservable`'s annotations map requires a plain
+   * field; use the `search*` getters instead of reading this directly.
+   */
+  searchVersion = 0;
+  /**
    * True while a Stop/cancel request for the active turn is in flight.
    * Mirrored into `chatState.session.setStopPending` so the transcript's
    * active-message Stop control can disable itself and communicate a busy
@@ -240,6 +256,7 @@ export class AcpChatStore {
    */
   private _returnAnchor: ScrollMode | null = null;
   private readonly _permissionResolution: PermissionResolutionController;
+  private readonly _search: AcpChatSearchController<TranscriptSearchResult>;
   /**
    * Bumped on every `PermissionResolutionController` state change so
    * `permissionResolution` (a MobX computed) has an observable dependency —
@@ -292,6 +309,26 @@ export class AcpChatStore {
       }
     );
 
+    this._search = new AcpChatSearchController(
+      () => {
+        const transcript = this.chatState.transcript.state;
+        return {
+          committedTurns: transcript.committedTurns,
+          activeTurn: transcript.activeTurnSnapshot,
+          pendingPrompt: this.chatState.session.state.pendingPrompt,
+        };
+      },
+      searchTranscript,
+      advanceSearchResultIndex,
+      {
+        onChange: () =>
+          runInAction(() => {
+            this.searchVersion += 1;
+          }),
+        onJump: (itemId) => void this.scrollToTranscriptItem(itemId, { align: 'start' }),
+      }
+    );
+
     makeObservable(this, {
       session: observable.ref,
       historyLoading: observable,
@@ -307,6 +344,7 @@ export class AcpChatStore {
       attentionFocusId: observable,
       canReturnToReadingPosition: observable,
       permissionResolutionVersion: observable,
+      searchVersion: observable,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -322,6 +360,12 @@ export class AcpChatStore {
       failedSubmissions: computed,
       outline: observable.ref,
       attentionFocusedItem: computed,
+      searchOpen: computed,
+      searchQuery: computed,
+      searchResults: computed,
+      searchCurrentIndex: computed,
+      searchCurrentResult: computed,
+      searchHistoryExhausted: computed,
       submitPrompt: action,
       queuePrompt: action,
       retryFailedSubmission: action,
@@ -335,6 +379,12 @@ export class AcpChatStore {
       setEffort: action,
       resolvePermission: action,
       retryPermissionResolution: action,
+      openSearch: action,
+      closeSearch: action,
+      setSearchQuery: action,
+      searchNext: action,
+      searchPrevious: action,
+      selectSearchResult: action,
       editQueuedPrompt: action,
       deleteQueuedPrompt: action,
       reorderQueuedPrompts: action,
@@ -604,6 +654,103 @@ export class AcpChatStore {
     ) {
       this.attentionFocusId = null;
     }
+  }
+
+  // ── Transcript search (ticket #36) ───────────────────────────────────────
+  //
+  // Scope decision: search only ever covers the transcript already paged
+  // into `ChatState` (see `AcpChatSearchController`'s and
+  // `state/transcript-search.ts`'s own "Scope: loaded history only" docs) —
+  // it never silently walks all of persisted history on its own.
+  // `searchHistoryExhausted` tells the UI whether more exists, and
+  // `AcpChatPanel` offers an explicit "load older history" action (reusing
+  // `loadOlderHistory()` below, which already resyncs search after a page
+  // lands) rather than the panel claiming full coverage it cannot back up.
+  //
+  // Every getter below reads `searchVersion` purely to give MobX a tracked
+  // dependency before delegating to `_search` — see that field's doc for why
+  // (mirrors `permissionResolutionVersion`/`permissionResolution`).
+
+  get searchOpen(): boolean {
+    const _searchDependency = this.searchVersion;
+    return this._search.isOpen;
+  }
+
+  get searchQuery(): string {
+    const _searchDependency = this.searchVersion;
+    return this._search.query;
+  }
+
+  get searchResults(): readonly TranscriptSearchResult[] {
+    const _searchDependency = this.searchVersion;
+    return this._search.results;
+  }
+
+  get searchCurrentIndex(): number | null {
+    const _searchDependency = this.searchVersion;
+    return this._search.currentIndex;
+  }
+
+  get searchCurrentResult(): TranscriptSearchResult | null {
+    const _searchDependency = this.searchVersion;
+    return this._search.currentResult;
+  }
+
+  /**
+   * True once every persisted-history page has already been loaded — see
+   * `AcpHistoryPagination.exhausted`. Reads `searchVersion` for the same
+   * reason every other `search*` getter above does: `_historyPagination` is
+   * a plain (non-MobX-observable) class, so a `computed` that only reads its
+   * `exhausted` getter has zero MobX-tracked dependencies and, once observed
+   * by a reaction (e.g. `observer(AcpChatPanel)`), would cache its first
+   * evaluation forever — the exact #34/#37 staleness bug shape. `_syncSearch`
+   * bumps `searchVersion` unconditionally (not only when the controller's own
+   * `refresh()` finds work to do), so this stays live even while the search
+   * bar is open with a blank query and the user only clicks "Load older
+   * history".
+   */
+  get searchHistoryExhausted(): boolean {
+    const _searchDependency = this.searchVersion;
+    return this._historyPagination.exhausted;
+  }
+
+  openSearch(): void {
+    this._search.open();
+  }
+
+  /** Close search and cancel any indexing/debounce still pending for it. */
+  closeSearch(): void {
+    this._search.close();
+  }
+
+  /** Debounced: a fast typist's earlier, superseded queries are never searched. */
+  setSearchQuery(query: string): void {
+    this._search.setQuery(query);
+  }
+
+  searchNext(): void {
+    this._search.next();
+  }
+
+  searchPrevious(): void {
+    this._search.previous();
+  }
+
+  selectSearchResult(result: TranscriptSearchResult): void {
+    this._search.selectResult(result);
+  }
+
+  /**
+   * Re-run the active search query against the current transcript snapshot
+   * — see every `_syncOutline()` call site. Bumps `searchVersion`
+   * unconditionally, even when `_search.refresh()` itself no-ops (search
+   * closed, or open with a blank query): `searchHistoryExhausted` reads
+   * `searchVersion` too, and must stay live at these exact call sites
+   * (pagination completing) regardless of query state — see its own doc.
+   */
+  private _syncSearch(): void {
+    this._search.refresh();
+    this.searchVersion += 1;
   }
 
   bootstrap(): void {
@@ -942,6 +1089,9 @@ export class AcpChatStore {
       window.clearTimeout(this._draftTimer);
       this._draftTimer = null;
     }
+    // Cancels any still-pending debounced search recompute — nothing fires
+    // against a disposed store's transcript after this.
+    this._search.close();
     this._unsubs.splice(0).forEach((unsub) => unsub());
     this.session?.dispose();
     this.chatState.dispose();
@@ -970,8 +1120,11 @@ export class AcpChatStore {
         this.historyLoading = false;
         this.loadError = null;
         // A (re)seed starts a fresh transcript identity — any reading
-        // position saved from a prior session/attempt no longer applies.
+        // position saved from a prior session/attempt no longer applies, and
+        // any open search's results/query were computed against the old
+        // transcript and no longer mean anything against the new one.
         this._resetReadingPosition();
+        this._search.close();
         this._syncMessageCount();
         this._syncChangesFootprint();
         this._syncOutline();
@@ -1187,6 +1340,7 @@ export class AcpChatStore {
           this._syncNewEventCount();
           this._syncOutline();
           this._syncAttentionQueue();
+          this._syncSearch();
         })
       ),
       session.draft.onChange((draft) =>
@@ -1273,6 +1427,7 @@ export class AcpChatStore {
       this._syncNewEventCount();
       this._syncOutline();
       this._syncAttentionQueue();
+      this._syncSearch();
     });
   }
 
@@ -1324,6 +1479,7 @@ export class AcpChatStore {
         this._syncNewEventCount();
         this._syncOutline();
         this._syncAttentionQueue();
+        this._syncSearch();
       });
     } catch (error) {
       this._historyPagination.abortLoadOlder(epoch);
