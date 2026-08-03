@@ -24,8 +24,8 @@ export type FocusedRegion = 'main' | 'bottom';
 
 export type FocusTrigger = 'navigation' | 'panel_switch' | 'region_switch';
 
-/** Which UI affordance navigated to a project's Feature Board (ticket #43). */
-export type BoardEntrySource = 'sidebar' | 'command_palette';
+/** Which UI affordance navigated to a project's Feature Board (tickets #43, #44). */
+export type BoardEntrySource = 'sidebar' | 'command_palette' | 'work_mode_switcher';
 
 export interface TelemetryEnvelope {
   event_ts_ms?: number;

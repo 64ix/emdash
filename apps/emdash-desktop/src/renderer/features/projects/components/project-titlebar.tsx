@@ -1,5 +1,6 @@
 import { ChevronDown, Ellipsis, ExternalLink, GithubIcon, Globe, Trash2 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
+import { ProjectWorkModeSwitcher } from '@renderer/features/projects/components/project-work-mode-switcher';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import {
   asMounted,
@@ -70,6 +71,8 @@ const MountedProjectTitlebarLeft = observer(function ProjectTitlebarLeft({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <Separator orientation="vertical" className="h-4 data-[orientation=vertical]:self-center" />
+      <ProjectWorkModeSwitcher projectId={projectId} />
       {remoteUrl && (
         <>
           <Separator
@@ -111,10 +114,19 @@ const ProjectTitlebarLeft = observer(function ProjectTitlebarLeft({
   );
 });
 
-export const ProjectTitlebar = observer(function ProjectTitlebar() {
-  const {
-    params: { projectId },
-  } = useParams('project');
+/**
+ * Shared titlebar content for a project's workspace, used by both the
+ * `project` view (List/Pull Requests/Settings) and the `board` view
+ * (ticket #44) so the work-mode switcher above is reachable regardless of
+ * which canonical view is mounted -- there is otherwise no way back to List
+ * or Pull Requests once the full-width board view leaves `project`'s own
+ * navigation out of view.
+ */
+const ProjectWorkspaceTitlebar = observer(function ProjectWorkspaceTitlebar({
+  projectId,
+}: {
+  projectId: string;
+}) {
   const store = getProjectStore(projectId);
   const kind = projectViewKind(store);
 
@@ -140,4 +152,19 @@ export const ProjectTitlebar = observer(function ProjectTitlebar() {
       }
     />
   );
+});
+
+export const ProjectTitlebar = observer(function ProjectTitlebar() {
+  const {
+    params: { projectId },
+  } = useParams('project');
+  return <ProjectWorkspaceTitlebar projectId={projectId} />;
+});
+
+/** Board view's titlebar slot (ticket #44) -- see `ProjectWorkspaceTitlebar`. */
+export const BoardTitlebar = observer(function BoardTitlebar() {
+  const {
+    params: { projectId },
+  } = useParams('board');
+  return <ProjectWorkspaceTitlebar projectId={projectId} />;
 });

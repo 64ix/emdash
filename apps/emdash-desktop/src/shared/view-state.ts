@@ -116,6 +116,15 @@ export type TaskViewSnapshot = {
 export type ProjectTaskSortBy = 'created-at' | 'updated-at' | 'pr-status' | 'unread';
 
 export type ProjectViewSnapshot = {
+  /**
+   * Kept as `string` (not the renderer's `ProjectView` union) because this
+   * crosses the main/renderer boundary as an untyped KV blob: older
+   * snapshots, and snapshots from a newer app version, must still parse.
+   * `ProjectViewStore.restoreSnapshot` (ticket #44) validates it against the
+   * current known set — currently `'tasks' | 'pull-request' | 'settings' |
+   * 'board'` — before assigning it, so an unrecognized value is ignored
+   * rather than assigned.
+   */
   activeView: string;
   taskViewTab: 'active' | 'archived';
   taskSortBy?: ProjectTaskSortBy;

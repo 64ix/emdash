@@ -3,7 +3,21 @@ import type { Snapshottable } from '@renderer/lib/stores/snapshottable';
 import type { IssueProviderType } from '@shared/issue-providers';
 import type { ProjectTaskSortBy, ProjectViewSnapshot } from '@shared/view-state';
 
-export type ProjectView = 'tasks' | 'pull-request' | 'settings';
+/**
+ * The project workspace's primary work modes (ticket #44: Board, List
+ * — stored as `'tasks'` for backward compatibility, only its label changed —
+ * and Pull Requests), plus Settings, which is a project-configuration
+ * destination rather than a work-mode peer but still uses this same
+ * persisted slot.
+ */
+export type ProjectView = 'tasks' | 'pull-request' | 'settings' | 'board';
+
+const PROJECT_VIEWS: ReadonlySet<string> = new Set<ProjectView>([
+  'tasks',
+  'pull-request',
+  'settings',
+  'board',
+]);
 
 function isProjectTaskSortBy(value: unknown): value is ProjectTaskSortBy {
   return (
@@ -11,7 +25,22 @@ function isProjectTaskSortBy(value: unknown): value is ProjectTaskSortBy {
   );
 }
 
+/**
+ * Validates a persisted `activeView` value instead of blindly casting it
+ * (ticket #44). Snapshots written before Board existed only ever carried
+ * `'tasks' | 'pull-request' | 'settings'`, all still valid here, so they load
+ * unchanged. An unrecognized value — a snapshot written by a newer app
+ * version, or corrupted data — is rejected rather than assigned, so the
+ * store keeps its default instead of entering a state no current UI renders.
+ */
+function isProjectView(value: unknown): value is ProjectView {
+  return typeof value === 'string' && PROJECT_VIEWS.has(value);
+}
+
 export class ProjectViewStore implements Snapshottable<ProjectViewSnapshot> {
+  // No universal Board default (ticket #44): existing and new projects alike
+  // keep starting on List until a user explicitly picks Board, at which
+  // point `restoreSnapshot` below persists that choice going forward.
   activeView: ProjectView = 'tasks';
   taskView: TaskViewStore = new TaskViewStore();
   selectedIssueProvider: IssueProviderType | null = null;
@@ -38,7 +67,7 @@ export class ProjectViewStore implements Snapshottable<ProjectViewSnapshot> {
   }
 
   restoreSnapshot(snapshot: Partial<ProjectViewSnapshot>): void {
-    if (snapshot.activeView) this.activeView = snapshot.activeView as ProjectView;
+    if (isProjectView(snapshot.activeView)) this.activeView = snapshot.activeView;
     if (snapshot.taskViewTab) this.taskView.setTab(snapshot.taskViewTab);
     if (isProjectTaskSortBy(snapshot.taskSortBy)) this.taskView.setSortBy(snapshot.taskSortBy);
     if (snapshot.selectedIssueProvider)
