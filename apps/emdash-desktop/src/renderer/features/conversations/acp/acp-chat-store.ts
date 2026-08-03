@@ -499,13 +499,13 @@ export class AcpChatStore {
       return;
     }
     const currentIndex = queue.findIndex((item) => item.id === this.attentionFocusId);
-    if (currentIndex === -1) {
-      // Nothing focused yet (or the focused item just left the queue):
-      // "next" starts at the front, "previous" starts at the back.
-      this.attentionFocusId = delta === 1 ? queue[0].id : queue[queue.length - 1].id;
-      return;
-    }
-    const nextIndex = (currentIndex + delta + queue.length) % queue.length;
+    // Nothing explicitly focused yet (or the focused item just left the
+    // queue): `attentionFocusedItem` already falls back to the front entry
+    // in that state, so traversal steps relative to index 0 too — otherwise
+    // the first "next" press from the default view would appear to do
+    // nothing (still showing the front item) instead of advancing.
+    const effectiveIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex = (effectiveIndex + delta + queue.length) % queue.length;
     this.attentionFocusId = queue[nextIndex].id;
   }
 
