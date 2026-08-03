@@ -243,6 +243,14 @@ describe('deriveTranscriptOutline — committed turns', () => {
   });
 });
 
+// ── Empty transcript ──────────────────────────────────────────────────────────
+
+describe('deriveTranscriptOutline — empty transcript', () => {
+  it('returns no entries for a brand-new conversation with nothing sent yet', () => {
+    expect(deriveTranscriptOutline([], null, 'done', null)).toEqual([]);
+  });
+});
+
 // ── Active turn / pending prompt ─────────────────────────────────────────────
 
 describe('deriveTranscriptOutline — active turn and pending prompt', () => {

@@ -94,6 +94,25 @@ describe('TranscriptOutlinePanel', () => {
     expect(rows[2].textContent).toContain('In progress');
   });
 
+  it('renders textual labels for the error and cancelled statuses', async () => {
+    await renderPanel({
+      entries: [
+        { itemId: 'e1', turnId: 't1', role: 'turn', preview: 'Ran the migration', status: 'error' },
+        {
+          itemId: 'e2',
+          turnId: 't2',
+          role: 'turn',
+          preview: 'Stopped mid-turn',
+          status: 'cancelled',
+        },
+      ],
+    });
+
+    const rows = Array.from(host.querySelectorAll('nav button'));
+    expect(rows[0].textContent).toContain('Failed');
+    expect(rows[1].textContent).toContain('Cancelled');
+  });
+
   it('shows an empty-state message when there are no entries yet', async () => {
     await renderPanel({ entries: [] });
 

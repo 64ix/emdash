@@ -120,7 +120,6 @@ describe('ChatView.scrollToItem', () => {
           seq: 1,
           role: 'assistant',
           text: 'streaming reply…',
-          streaming: true,
         },
       ],
     });
