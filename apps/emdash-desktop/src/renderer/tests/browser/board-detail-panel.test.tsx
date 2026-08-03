@@ -20,6 +20,7 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import { modalStore } from '@renderer/lib/modal/modal-store';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssueRoles } from '@shared/core/linked-issue';
 import type {
@@ -47,6 +48,7 @@ type MockStore = {
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
+  setPinned: ReturnType<typeof vi.fn>;
 };
 
 const managerTasks = new Map<string, MockStore>();
@@ -159,6 +161,7 @@ function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): Mock
     },
     conversationStats: {},
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
+    setPinned: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -358,6 +361,11 @@ function openTaskButton(): HTMLElement {
   return Array.from(host.querySelectorAll('button')).find((b) =>
     b.textContent?.includes('Open task')
   ) as HTMLElement;
+}
+
+/** The panel's Rename/Pin/Unpin/Archive header buttons (ticket #42). */
+function panelHeaderButton(label: 'Rename task' | 'Pin task' | 'Unpin task' | 'Archive task') {
+  return host.querySelector(`button[aria-label="${label}"]`) as HTMLElement;
 }
 
 /** A Ghost Card's root element on the board, located by its stable id (ticket #9). */
@@ -890,5 +898,80 @@ describe('Task Detail Panel — ghost mode (ticket #42)', () => {
     expect(panelHeading()).toBe(createdTask.name);
     // Switched to real-task mode, not still showing ghost details.
     expect(panelSection('vitals')).not.toBeNull();
+  });
+});
+
+// The RPCs these delegate to (rename, setPinned, archiveTask) are already
+// covered where they live (ticket #42's own criterion) — these tests only
+// pin the panel's own wiring: that its buttons call the right delegate with
+// the right task id, the one thing this ticket actually adds.
+describe('Task Detail Panel — management actions (ticket #42)', () => {
+  setupDom();
+
+  afterEach(() => {
+    modalStore.closeModal();
+  });
+
+  it('Rename opens the rename modal for the shown task', async () => {
+    const a = makeStore('card-a', { name: 'Original name' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('Original name'));
+    await settle();
+
+    click(panelHeaderButton('Rename task'));
+    await settle();
+
+    expect(modalStore.activeModalId).toBe('renameTaskModal');
+    expect(modalStore.activeModalArgs).toMatchObject({
+      projectId: 'p1',
+      taskId: 'card-a',
+      currentName: 'Original name',
+    });
+  });
+
+  it("Pin toggles the task's pinned state via the store", async () => {
+    const a = makeStore('card-a', { isPinned: false });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelHeaderButton('Pin task')).toBeTruthy();
+    click(panelHeaderButton('Pin task'));
+    await settle();
+
+    expect(a.setPinned).toHaveBeenCalledWith(true);
+  });
+
+  it('Unpin toggles an already-pinned task back off via the store', async () => {
+    const a = makeStore('card-a', { isPinned: true });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelHeaderButton('Unpin task')).toBeTruthy();
+    click(panelHeaderButton('Unpin task'));
+    await settle();
+
+    expect(a.setPinned).toHaveBeenCalledWith(false);
+  });
+
+  it('Archive calls the existing archive RPC for the shown task', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    click(panelHeaderButton('Archive task'));
+    await settle();
+
+    expect(mocks.archiveTask).toHaveBeenCalledWith('card-a');
   });
 });
