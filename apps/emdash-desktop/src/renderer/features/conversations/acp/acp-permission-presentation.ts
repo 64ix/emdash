@@ -301,7 +301,12 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
     }
 
     case 'web-fetch-tool-call': {
-      const params: PermissionParam[] = [{ label: 'URL', value: paramValue(toolCall.url) }];
+      // Redact/sanitize once and reuse for both the param row and the
+      // affected-resources entry — the resource list must never bypass the
+      // same redaction the URL param goes through (a raw, unredacted
+      // `toolCall.url` here would leak a secret embedded in a query string).
+      const url = toolCall.url ? paramValue(toolCall.url) : undefined;
+      const params: PermissionParam[] = url ? [{ label: 'URL', value: url }] : [];
       if (toolCall.pageTitle) {
         params.push({ label: 'Page title', value: paramValue(toolCall.pageTitle) });
       }
@@ -310,7 +315,7 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
         operationLabel: 'Fetch URL',
         scope: NETWORK_SCOPE,
         params,
-        resources: toolCall.url ? [{ kind: 'url', url: toolCall.url }] : [],
+        resources: url ? [{ kind: 'url', url }] : [],
         riskCues: [
           'Requests data from a URL. Emdash cannot verify what the destination does with this request.',
         ],
