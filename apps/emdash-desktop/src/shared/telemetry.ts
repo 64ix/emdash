@@ -78,6 +78,14 @@ export type TelemetryEventProperties = {
    * "how did the user get here" question.
    */
   board_opened: { source: BoardEntrySource };
+  /**
+   * The board inspector (Task Detail Panel, ticket #49) opening — distinct
+   * from `board_opened` above (the board itself). Carries only which kind of
+   * target is shown (a task vs. a Ghost Card), never a task name, issue
+   * title, branch name, or other task content (minimal-payload shape,
+   * precedent: `board_opened`).
+   */
+  board_inspector_opened: { target_kind: 'task' | 'ghost' };
 
   automation_created: {
     enabled: boolean;

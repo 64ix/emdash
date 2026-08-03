@@ -278,6 +278,31 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     }
   };
 
+  // Card selection (ticket #49): opens/switches the inspector — a read-only
+  // view-state change, never a provision/archive/write (see `BoardCard`'s
+  // click and Enter/Space keydown handlers below, which both call this same
+  // function, so keyboard and pointer selection can never diverge). Only
+  // fires `board_inspector_opened` when the shown target actually changes:
+  // re-selecting the already-open card/Ghost Card is a documented no-op
+  // (CONTEXT.md "Task Detail Panel") and must not re-log "opening" it again.
+  // The event carries only which *kind* of target is shown, never a task
+  // name, issue title, or branch — mirrors `board_opened`'s minimal payload.
+  const handleSelectTask = (taskId: string) => {
+    const alreadyShown = panelTarget?.kind === 'task' && panelTarget.taskId === taskId;
+    if (!alreadyShown) {
+      captureTelemetry('board_inspector_opened', { target_kind: 'task', project_id: projectId });
+    }
+    setPanelTarget({ kind: 'task', taskId });
+  };
+
+  const handleSelectGhostCard = (ghostCard: GhostCard) => {
+    const alreadyShown = panelTarget?.kind === 'ghost' && panelTarget.ghostCard.id === ghostCard.id;
+    if (!alreadyShown) {
+      captureTelemetry('board_inspector_opened', { target_kind: 'ghost', project_id: projectId });
+    }
+    setPanelTarget({ kind: 'ghost', ghostCard });
+  };
+
   const awaitingInputIds = new Set<string>();
   for (const [id, store] of storeById) {
     if (taskAgentStatus(store) === 'awaiting-input') awaitingInputIds.add(id);
@@ -555,13 +580,13 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
       entries={displayByColumn.get(column) ?? []}
       storeById={storeById}
       selectedTaskId={panelTarget?.kind === 'task' ? panelTarget.taskId : null}
-      onSelectTask={(taskId) => setPanelTarget({ kind: 'task', taskId })}
+      onSelectTask={handleSelectTask}
       onOpenTask={handleOpenTask}
       // Ghost Cards (ticket #9) are not tasks and never sort/drag — they
       // only ever live in the `idea` column, after real cards.
       ghostCards={column === 'idea' ? ghostCards : undefined}
       selectedGhostCardId={panelTarget?.kind === 'ghost' ? panelTarget.ghostCard.id : null}
-      onSelectGhostCard={(ghostCard) => setPanelTarget({ kind: 'ghost', ghostCard })}
+      onSelectGhostCard={handleSelectGhostCard}
       onAdoptGhostCard={handleAdoptGhostCard}
       onRejectGhostCard={rejectGhostCard}
       isCollapsed={collapsedColumns.has(column)}

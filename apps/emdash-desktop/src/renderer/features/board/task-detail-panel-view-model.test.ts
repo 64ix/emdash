@@ -130,12 +130,16 @@ describe('deriveLinkedIssueSections', () => {
 });
 
 describe('deriveStageSection', () => {
-  it('is unlocked with the declarative stages when there is no authority fact yet', () => {
-    expect(deriveStageSection('idea', undefined)).toEqual({
+  // Ticket #49: a placement with no governing fact is still explained — just
+  // labelled "manual" instead of naming a GitHub fact — so it reads as
+  // distinguishable from a synchronized stage rather than unexplained.
+  it('is unlocked with the declarative stages, labelled manual, when there is no authority fact yet', () => {
+    const section = deriveStageSection('idea', undefined);
+    expect(section).toEqual({
       current: 'idea',
       locked: false,
       options: DECLARATIVE_WORKFLOW_STAGES,
-      explanation: null,
+      explanation: expect.stringContaining('Manual'),
       explanationLink: null,
     });
   });
@@ -184,7 +188,7 @@ describe('deriveStageSection', () => {
     expect(section.explanation).toContain('Triage');
   });
 
-  it('is unlocked while the task currently sits in triage, even with a holding PR', () => {
+  it('is unlocked while the task currently sits in triage, even with a holding PR, labelled manual', () => {
     const pr = makeHoldingPr({ status: 'closed', identifier: '#80' });
     const authority: TaskStageAuthority = { holdingPr: pr, isCurrentStageGithubProven: false };
 
@@ -192,7 +196,10 @@ describe('deriveStageSection', () => {
 
     expect(section.locked).toBe(false);
     expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
-    expect(section.explanation).toBeNull();
+    // `isCurrentStageGithubProven: false` means this PR fact does not govern
+    // a currently-triaged task (the sync never re-derives a sink) — so this
+    // is a genuinely manual placement, not an unexplained one.
+    expect(section.explanation).toContain('Manual');
   });
 
   // `exploring`/`spec` are GitHub-provable stages (CONTEXT.md "Workflow Stage",
@@ -242,14 +249,14 @@ describe('deriveStageSection', () => {
     expect(section.explanationLink).toEqual({ url: 'https://x/issues/56', label: '#56' });
   });
 
-  it('is unlocked/declarative for Exploring when the linked Map issue is closed', () => {
+  it('is unlocked/declarative for Exploring when the linked Map issue is closed, labelled manual', () => {
     const map = makeIssue({ identifier: '#55', title: 'Map issue', status: 'closed' });
 
     const section = deriveStageSection('exploring', undefined, { version: '1', map });
 
     expect(section.locked).toBe(false);
     expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
-    expect(section.explanation).toBeNull();
+    expect(section.explanation).toContain('Manual');
   });
 
   it('locks, naming the Triage contradiction, when the linked Spec issue closed without a merged PR (ticket #48)', () => {
@@ -307,6 +314,29 @@ describe('deriveStageSection', () => {
 
     expect(section.locked).toBe(false);
     expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
+  });
+
+  // Ticket #49: `hasWorkspace` (a task's own `workspaceId != null`) threads
+  // through to `deriveStageAuthority` exactly like `board-main-panel.tsx`'s
+  // `authorityForTask` already does for drag-time authority, so a persisted
+  // `implementing` stage backed by a provisioned workspace is explained —
+  // never governing (still freely movable), but no longer indistinguishable
+  // from a genuinely unexplained manual placement.
+  it('is unlocked, naming the provisioned workspace, for Implementing backed by a workspace', () => {
+    const section = deriveStageSection('implementing', undefined, undefined, true);
+
+    expect(section.locked).toBe(false);
+    expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
+    expect(section.explanation).toContain('Implementing');
+    expect(section.explanation).toContain('workspace');
+    expect(section.explanationLink).toBeNull();
+  });
+
+  it('labels Implementing manual (not workspace-backed) when there is no provisioned workspace yet', () => {
+    const section = deriveStageSection('implementing', undefined, undefined, false);
+
+    expect(section.locked).toBe(false);
+    expect(section.explanation).toContain('Manual');
   });
 });
 
@@ -396,5 +426,23 @@ describe('buildTaskDetailPanelViewModel', () => {
     expect(vm.stage.locked).toBe(true);
     expect(vm.stage.explanation).toContain('#30');
     expect(vm.stage.options).toEqual([]);
+  });
+
+  // Ticket #49: the task's own `workspaceId` (not a separate input field)
+  // supplies `hasWorkspace` — the same fact `board-main-panel.tsx` already
+  // reads off the task for drag-time authority.
+  it('names the provisioned workspace behind a persisted Implementing with no PR/issue facts', () => {
+    const task = makeTask({ workflowStage: 'implementing', workspaceId: 'workspace-1' });
+
+    const vm = buildTaskDetailPanelViewModel({
+      task,
+      branchName: 'task/branch',
+      sessionCounts: {},
+      agentStatus: null,
+      stageAuthority: undefined,
+    });
+
+    expect(vm.stage.locked).toBe(false);
+    expect(vm.stage.explanation).toContain('workspace');
   });
 });

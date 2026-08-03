@@ -423,8 +423,22 @@ describe('describeStageAuthorityFact', () => {
     expect(description?.fact).toContain('#30');
   });
 
-  it('has no explanation for manual or provisioned-implementation placements', () => {
-    expect(describeStageAuthorityFact({ kind: 'manual' })).toBeNull();
-    expect(describeStageAuthorityFact({ kind: 'provisioned-implementation' })).toBeNull();
+  // Ticket #49 (Task Detail Panel inspector): these two fact kinds never
+  // govern (`governs` is always `false` for both — see
+  // `deriveStageAuthority`), so board-side disabled-destination callers never
+  // reach this branch either way. But the panel still needs to *label* a
+  // manual placement as manual, and to name the workspace fact behind a
+  // runtime-derived Implementing, rather than showing nothing.
+  it('labels a manual placement as manual, with no locking action implied', () => {
+    const description = describeStageAuthorityFact({ kind: 'manual' });
+    expect(description?.fact).toContain('Manual');
+    expect(description?.link).toBeNull();
+  });
+
+  it('identifies the provisioned-workspace fact behind a runtime-derived Implementing', () => {
+    const description = describeStageAuthorityFact({ kind: 'provisioned-implementation' });
+    expect(description?.fact).toContain('Implementing');
+    expect(description?.fact).toContain('workspace');
+    expect(description?.link).toBeNull();
   });
 });
