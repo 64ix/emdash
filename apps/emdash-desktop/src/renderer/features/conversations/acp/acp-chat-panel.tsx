@@ -62,7 +62,11 @@ import type { AttentionItem } from './acp-attention-queue';
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
-import { failedSubmissionPreview } from './acp-submission-recovery';
+import {
+  buildSubmissionRecoveryDiagnostic,
+  categorizeSubmissionFailure,
+} from './acp-recovery-card';
+import { failedSubmissionPreview, type FailedAcpSubmission } from './acp-submission-recovery';
 import type {
   ChangesFootprintEntry,
   EditedChangesFootprintEntry,
@@ -378,6 +382,26 @@ const ComposerForStore = observer(function ComposerForStore({
       store.discardFailedSubmission(localId);
     },
     [store]
+  );
+
+  // Copy diagnostic (ticket #39) — bounded/redacted via
+  // `buildSubmissionRecoveryDiagnostic`, never the raw `.error` string.
+  const handleCopyFailedSubmissionDiagnostic = useCallback(
+    async (submission: FailedAcpSubmission) => {
+      const category = categorizeSubmissionFailure(submission.errorKind);
+      const diagnostic = buildSubmissionRecoveryDiagnostic(submission, category);
+      try {
+        await navigator.clipboard.writeText(diagnostic);
+        toast({ title: 'Diagnostic copied' });
+      } catch {
+        toast({
+          title: 'Copy failed',
+          description: 'The diagnostic could not be copied to the clipboard.',
+          variant: 'destructive',
+        });
+      }
+    },
+    []
   );
 
   const handleStop = useCallback(() => {
@@ -732,6 +756,14 @@ const ComposerForStore = observer(function ComposerForStore({
                   onClick={() => handleDiscardFailedSubmission(submission.localId)}
                 >
                   Discard
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Copy diagnostic"
+                  onClick={() => void handleCopyFailedSubmissionDiagnostic(submission)}
+                >
+                  Copy diagnostic
                 </Button>
               </div>
             </div>
