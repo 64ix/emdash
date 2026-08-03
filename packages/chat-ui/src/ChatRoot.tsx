@@ -1579,6 +1579,25 @@ export function ChatRoot(props: ChatRootProps) {
       onCleanup(() => roSlot.disconnect());
     }
 
+    // Mouse AND keyboard activation of a [data-collapse-id] row (CollapseHeader:
+    // tool groups, thinking, file-ops) both arrive here through `onClick`:
+    // ticket #26 made those headers native `<button>`s, and a native button
+    // dispatches a real `click` on Enter/Space. Ticket #38 had added a separate
+    // keydown delegation for the same goal; it was removed when the two landed
+    // together, because running both would toggle the row twice per keypress.
+    const toggleCollapseTarget = (id: string) => {
+      // Pin the toggled row at its current viewport position before the height
+      // change. With readPhase no longer reclassifying intent on idle frames,
+      // this anchor is now guaranteed to survive the tween — fixing the scroll
+      // jump on expand/collapse in short reserve-active transcripts.
+      const idx = unitIndexOf(id);
+      if (idx >= 0 && scrollEl) {
+        const offset = scrollEl.scrollTop - (virt.top(idx) + padTop());
+        setAnchor({ kind: 'anchor', itemId: id, edge: 'top', offset });
+      }
+      viewState().toggleCollapsed(id);
+    };
+
     const onClick = (e: Event) => {
       const t = e.target as HTMLElement;
 
@@ -1593,17 +1612,7 @@ export function ChatRoot(props: ChatRootProps) {
 
       const collapseTarget = t.closest('[data-collapse-id]') as HTMLElement | null;
       if (collapseTarget?.dataset.collapseId) {
-        const id = collapseTarget.dataset.collapseId;
-        // Pin the toggled row at its current viewport position before the height
-        // change. With readPhase no longer reclassifying intent on idle frames,
-        // this anchor is now guaranteed to survive the tween — fixing the scroll
-        // jump on expand/collapse in short reserve-active transcripts.
-        const idx = unitIndexOf(id);
-        if (idx >= 0 && scrollEl) {
-          const offset = scrollEl.scrollTop - (virt.top(idx) + padTop());
-          setAnchor({ kind: 'anchor', itemId: id, edge: 'top', offset });
-        }
-        viewState().toggleCollapsed(id);
+        toggleCollapseTarget(collapseTarget.dataset.collapseId);
         return;
       }
 
@@ -1611,9 +1620,31 @@ export function ChatRoot(props: ChatRootProps) {
         setExpandedUserId(null);
       }
     };
+
+    /**
+     * Keyboard equivalent for [data-collapse-id] rows: Enter/Space toggles
+     * the same way a click does. Scoped to collapse targets only — the
+     * outside-click "collapse the expanded user card" branch above is
+     * mouse-specific and has no keyboard analogue to preserve (#38).
+     */
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.repeat) return; // ignore key auto-repeat while held down
+      const t = e.target as HTMLElement;
+      const collapseTarget = t.closest('[data-collapse-id]') as HTMLElement | null;
+      if (!collapseTarget?.dataset.collapseId) return;
+      // Prevent Space from scrolling the transcript.
+      e.preventDefault();
+      toggleCollapseTarget(collapseTarget.dataset.collapseId);
+    };
+
     const clickTarget = outerEl ?? el;
     clickTarget.addEventListener('click', onClick);
-    onCleanup(() => clickTarget.removeEventListener('click', onClick));
+    clickTarget.addEventListener('keydown', onKeyDown);
+    onCleanup(() => {
+      clickTarget.removeEventListener('click', onClick);
+      clickTarget.removeEventListener('keydown', onKeyDown);
+    });
 
     // Visibility watchdog: self-heal any missed wakes when pane becomes visible.
     if (typeof document !== 'undefined') {

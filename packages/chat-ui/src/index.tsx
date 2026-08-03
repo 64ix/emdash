@@ -91,6 +91,11 @@ export type { OutlineEntry, OutlineEntryRole, OutlineEntryStatus } from './state
 export { captureReadWatermark, countNewTranscriptEvents } from './state/reading-position';
 export type { ReadWatermark } from './state/reading-position';
 
+// ── Turn footer (ticket #38) ─────────────────────────────────────────────────
+
+export { deriveTurnFooter } from './state/turn-footer';
+export type { TurnFooterCost, TurnFooterContext, TurnFooterData, TurnFooterStatus } from './model';
+
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 export type {

@@ -88,8 +88,17 @@ function isActiveItem(item: ChatItem): boolean {
   return (item as ChatToolCall).status === 'running';
 }
 
+/**
+ * Whether a collapsed group shows its bounded child preview at all.
+ *
+ * Ticket #38 (turn narrative): a collapsed group must retain a meaningful
+ * preview of completed work, not just while it is actively running — so this
+ * is decoupled from `isActiveItem`. Only subagents keep the header-only
+ * collapsed treatment (their own `SubagentHeader` has a distinct settled
+ * summary, not a child-row preview window).
+ */
 function canShowCollapsedPreview(item: ChatItem): boolean {
-  return !isSubagentItem(item) && isActiveItem(item);
+  return !isSubagentItem(item);
 }
 
 function subagentGroupBottomSpacerH(item: ChatItem): number {

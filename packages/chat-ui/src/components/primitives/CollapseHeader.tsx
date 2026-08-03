@@ -5,7 +5,9 @@
  * keyboard support — ticket #26) with:
  *   - `data-collapse-id` for the ChatRoot click-delegation handler (a native
  *     button dispatches the same `click` event on Enter/Space, so the
- *     delegated listener needs no changes)
+ *     delegated listener needs no changes, and no explicit `tabIndex` or
+ *     `role` is required — ticket #38 reached the same goal via a keydown
+ *     delegation, which this supersedes)
  *   - `aria-expanded` reflecting the current expanded state
  *   - `text-shimmer` class while the row is active/running
  *   - a rotating `›` chevron (90° when expanded)

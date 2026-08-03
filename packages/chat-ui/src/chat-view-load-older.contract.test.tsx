@@ -74,10 +74,15 @@ describe('ChatView.loadOlder', () => {
     await nextPaint();
 
     const scrollRect = scrollEl.getBoundingClientRect();
-    // x=400/y=20 land inside the content column (padding-left excludes the
-    // first ~60px) and clear of a partially-clipped row at the very top edge.
-    const topPoint = { x: scrollRect.left + 400, y: scrollRect.top + 20 };
-    const rowBefore = document.elementFromPoint(topPoint.x, topPoint.y)?.closest('[data-index]');
+    // Every seeded turn now also renders a settled-turn footer row (ticket
+    // #38) alongside its message row, so the exact row kind sitting at a
+    // fixed pixel offset is no longer stable. Anchor on the first *message*
+    // row at/below the viewport top instead — its text is still unique across
+    // the whole transcript, which is all this test actually needs.
+    const rowBefore =
+      Array.from(host.querySelectorAll('[data-index]'))
+        .filter((el) => /seed message number \d+ of 150/.test(el.textContent ?? ''))
+        .find((el) => el.getBoundingClientRect().top >= scrollRect.top) ?? null;
     expect(rowBefore).not.toBeNull();
     const anchorText = rowBefore!.textContent ?? '';
     expect(anchorText).toMatch(/seed message number \d+ of 150/);
