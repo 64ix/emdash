@@ -1,4 +1,7 @@
-import { isShippedFaded } from '@shared/core/pull-requests/pr-workflow-derivation';
+import {
+  isShippedFaded,
+  SHIPPED_FADE_WINDOW_MS,
+} from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { Task } from '@shared/core/tasks/tasks';
 import { COLUMNS, type ColumnId } from './board-ordering';
 
@@ -68,3 +71,18 @@ export function isTaskShippedFaded(task: Task, now?: number): boolean {
 export function isBoardDisplayable(task: Task, now?: number): boolean {
   return task.type === 'task' && !task.archivedAt && !isTaskShippedFaded(task, now);
 }
+
+/**
+ * Shipped Fade's recent-delivery window, in whole days (ticket #51) — derived
+ * from `SHIPPED_FADE_WINDOW_MS`, the exact value `isTaskShippedFaded` checks
+ * against, so the Shipped column's disclosure can never state a duration the
+ * fade logic does not actually implement.
+ */
+export const SHIPPED_FADE_WINDOW_DAYS = SHIPPED_FADE_WINDOW_MS / (24 * 60 * 60 * 1000);
+
+/**
+ * Disclosure text for the Shipped column (ticket #51, CONTEXT.md "Shipped
+ * Fade"): surfaced on the column so older Shipped cards do not appear to
+ * vanish arbitrarily once their pull request has been merged a while.
+ */
+export const SHIPPED_FADE_DISCLOSURE = `Shipped cards are hidden from the board ${SHIPPED_FADE_WINDOW_DAYS} days after their pull request merges. The task keeps its Shipped stage.`;

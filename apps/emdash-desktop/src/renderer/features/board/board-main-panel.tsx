@@ -37,6 +37,8 @@ import {
   columnEmphasis,
   isBoardDisplayable,
   PIPELINE_COLUMNS,
+  SHIPPED_FADE_DISCLOSURE,
+  SHIPPED_FADE_WINDOW_DAYS,
   STAGE_LABELS,
   type ColumnEmphasis,
 } from '@renderer/features/board/board-columns';
@@ -729,11 +731,21 @@ const BoardColumn = observer(function BoardColumn({
   // no React state round-trip needed for that path.
   const isCollapsible = cardCount === 0;
   const effectiveCollapsed = isCollapsed && isCollapsible && !isDragHovered;
+  // Shipped Fade disclosure (ticket #51, CONTEXT.md "Shipped Fade"): the
+  // Shipped column is the only one whose displayed set silently shrinks over
+  // time (`isTaskShippedFaded`) — surfaced here so older Shipped cards never
+  // look like they vanished arbitrarily. Folded into this column's own
+  // aria-label (screen readers) and a compact visible caption (sighted
+  // users), both derived from the same `SHIPPED_FADE_WINDOW_MS` the fade
+  // predicate itself checks against — never a second, hand-typed duration.
+  const isShippedColumn = column === 'shipped';
 
   return (
     <div
       role="group"
-      aria-label={`${STAGE_LABELS[column]} column${EMPHASIS_ARIA_SUFFIX[emphasis]}`}
+      aria-label={`${STAGE_LABELS[column]} column${EMPHASIS_ARIA_SUFFIX[emphasis]}${
+        isShippedColumn ? ` — ${SHIPPED_FADE_DISCLOSURE}` : ''
+      }`}
       className={cn(
         'flex shrink-0 flex-col rounded-lg border',
         effectiveCollapsed ? 'w-14' : 'w-56',
@@ -781,6 +793,14 @@ const BoardColumn = observer(function BoardColumn({
         >
           {STAGE_LABELS[column]}
         </span>
+        {isShippedColumn && (
+          <span
+            className="shrink-0 truncate text-[10px] text-foreground-passive"
+            title={SHIPPED_FADE_DISCLOSURE}
+          >
+            hides after {SHIPPED_FADE_WINDOW_DAYS}d
+          </span>
+        )}
         <Badge variant="secondary" className="ml-auto shrink-0">
           {cardCount}
         </Badge>
