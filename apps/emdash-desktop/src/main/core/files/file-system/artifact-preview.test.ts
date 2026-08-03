@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -85,6 +86,20 @@ describe('previewLocalArtifact — trusted workspace root', () => {
       confirmed: false,
     });
     expect(result).toMatchObject({ status: 'denied', reason: 'missing' });
+  });
+
+  it('denies a FIFO instead of blocking on open() indefinitely', async () => {
+    const { workspace } = await makeRoots();
+    const fifoPath = path.join(workspace, 'evil.txt');
+    execFileSync('mkfifo', [fifoPath]);
+
+    const result = await previewLocalArtifact({
+      workspacePath: workspace,
+      fileSystem,
+      candidatePath: fifoPath,
+      confirmed: false,
+    });
+    expect(result).toMatchObject({ status: 'denied', reason: 'not-a-regular-file' });
   });
 
   it('denies a directory path', async () => {

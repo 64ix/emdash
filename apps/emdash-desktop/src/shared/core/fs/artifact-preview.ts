@@ -80,6 +80,7 @@ export type ArtifactPreviewDenialReason =
   | 'symlink-escape'
   | 'missing'
   | 'directory'
+  | 'not-a-regular-file'
   | 'oversized'
   | 'type-mismatch'
   | 'unsupported-content';

@@ -223,6 +223,8 @@ export function artifactPreviewDenialTitle(reason: ArtifactPreviewDenialReason):
       return 'File not found';
     case 'directory':
       return 'That path is a folder, not a file';
+    case 'not-a-regular-file':
+      return 'That path is not a regular file';
     case 'oversized':
       return 'File is too large to preview';
     case 'type-mismatch':

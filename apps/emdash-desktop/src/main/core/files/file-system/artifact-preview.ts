@@ -49,6 +49,29 @@ const machinePathOperations = {
   join: joinMachinePath,
 };
 
+// POSIX `st_mode` file-type bits (`S_IFMT`/`S_IFREG`). Checked directly on the
+// numeric mode so this works for any `IFileSystem` backend (local node:fs or
+// SFTP) without depending on platform-specific `fs.Stats` helper methods.
+const POSIX_FILE_TYPE_MASK = 0o170000;
+const POSIX_REGULAR_FILE = 0o100000;
+
+/**
+ * Rejects FIFOs, sockets, and device nodes before any read is attempted.
+ * `stat.type` only distinguishes `'file'` from `'directory'` — a FIFO placed
+ * in the workspace (trivial for a shell-executing agent via `mkfifo`, no
+ * elevated privileges required) reports as `'file'` there, and opening one
+ * for read blocks the libuv thread pool indefinitely until a writer connects
+ * — a low-effort denial-of-service against every other pending fs operation
+ * in the process. A `mode` of `0` means the backend couldn't report file-type
+ * bits (some SFTP responses); treated as unknown rather than denied, since
+ * the subsequent read still fails closed if the path isn't actually regular
+ * data.
+ */
+function isRegularFileMode(mode: number): boolean {
+  if (mode === 0) return true;
+  return (mode & POSIX_FILE_TYPE_MASK) === POSIX_REGULAR_FILE;
+}
+
 // Lazily constructed: `FileSystem` (packages/core, local node:fs backed) has
 // no per-instance state, but avoid constructing it before Electron's `app`
 // is guaranteed ready in tests that import this module standalone.
@@ -204,6 +227,9 @@ async function readAndDecide(
   }
   if (statResult.data.type === 'directory') {
     return { status: 'denied', reason: 'directory', resolvedPath };
+  }
+  if (!isRegularFileMode(statResult.data.mode)) {
+    return { status: 'denied', reason: 'not-a-regular-file', resolvedPath };
   }
 
   // Read one byte past the cap so an oversized file is detected without
