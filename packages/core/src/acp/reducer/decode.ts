@@ -14,8 +14,30 @@
  *   - Returns { kind: 'ignored' } for variants not yet rendered.
  */
 
-import type { SessionUpdate, ToolCallContent } from '@agentclientprotocol/sdk';
+import type { ContentBlock, SessionUpdate, ToolCallContent } from '@agentclientprotocol/sdk';
 import type { NormalizedDiff, NormalizedEvent, NormalizedToolStatus } from './normalized-event';
+
+/**
+ * Decodes an ACP `resource_link` content block into its NormalizedEvent
+ * fields. Returns `null` for any other content block variant so callers can
+ * fall through to their existing text handling.
+ */
+function decodeResourceLinkContent(
+  content: ContentBlock,
+  messageId: string | null
+): Extract<NormalizedEvent, { kind: 'resource_link' }> | null {
+  if (content.type !== 'resource_link') return null;
+  return {
+    kind: 'resource_link',
+    messageId,
+    uri: content.uri,
+    name: content.name,
+    ...(content.title ? { title: content.title } : {}),
+    ...(content.description ? { description: content.description } : {}),
+    ...(content.mimeType ? { mimeType: content.mimeType } : {}),
+    ...(typeof content.size === 'number' ? { size: content.size } : {}),
+  };
+}
 
 function extractDiffs(
   content: ReadonlyArray<ToolCallContent> | null | undefined
@@ -94,6 +116,8 @@ function extractInputSummary(update: SessionUpdate): string | undefined {
 export function decodeSessionUpdate(update: SessionUpdate): NormalizedEvent {
   switch (update.sessionUpdate) {
     case 'user_message_chunk': {
+      const resourceLink = decodeResourceLinkContent(update.content, update.messageId ?? null);
+      if (resourceLink) return resourceLink;
       if (update.content.type !== 'text' || !update.content.text) return { kind: 'ignored' };
       return {
         kind: 'message',
@@ -104,6 +128,8 @@ export function decodeSessionUpdate(update: SessionUpdate): NormalizedEvent {
     }
 
     case 'agent_message_chunk': {
+      const resourceLink = decodeResourceLinkContent(update.content, update.messageId ?? null);
+      if (resourceLink) return resourceLink;
       if (update.content.type !== 'text' || !update.content.text) return { kind: 'ignored' };
       return {
         kind: 'message',

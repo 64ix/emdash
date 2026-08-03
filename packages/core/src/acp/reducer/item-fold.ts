@@ -20,6 +20,7 @@ import type {
   ModifyFileToolCall,
   TranscriptItem,
   TranscriptMessage,
+  TranscriptResourceLink,
   TranscriptThinking,
   ToolCallItem,
   ToolGroup,
@@ -30,6 +31,7 @@ import {
   makeDiffId,
   makeMessageId,
   makePlanId,
+  makeResourceLinkId,
   makeThinkingId,
   makeToolGroupId,
   makeToolId,
@@ -664,6 +666,31 @@ export function foldItem(
       return normalizeToolStructure([...finalizeOpenThinking(flatItems, at), newThinking], turnId);
     }
 
+    case 'resource_link': {
+      const base = finalizeOpenThinking(flatItems, at);
+      // Each ACP notification carries exactly one content block, so a
+      // resource_link never streams/merges the way message text does — every
+      // occurrence is a new row. `messageKey` falls back to a stable bucket
+      // when the provider omits messageId; `index` disambiguates multiple
+      // resource links sharing that bucket.
+      const messageKey = event.messageId ?? 'auto';
+      const prefix = `${turnId}:resource-link:${messageKey}:`;
+      const index = base.filter((it) => it.kind === 'resource-link' && it.id.startsWith(prefix))
+        .length;
+      const newLink: TranscriptResourceLink = {
+        kind: 'resource-link',
+        id: makeResourceLinkId(turnId, messageKey, index),
+        seq: nextSeq(base),
+        uri: event.uri,
+        name: event.name,
+        ...(event.title !== undefined ? { title: event.title } : {}),
+        ...(event.description !== undefined ? { description: event.description } : {}),
+        ...(event.mimeType !== undefined ? { mimeType: event.mimeType } : {}),
+        ...(event.size !== undefined ? { size: event.size } : {}),
+      };
+      return normalizeToolStructure([...base, newLink], turnId);
+    }
+
     case 'tool_call': {
       const toolId = makeToolId(turnId, event.toolCallId);
       const parentToolCallId = event.parentToolCallId ?? undefined;
@@ -801,6 +828,8 @@ export function finalizeItems(items: TranscriptItem[], at: number): TranscriptIt
   return items.map((item): TranscriptItem => {
     switch (item.kind) {
       case 'message':
+        return item;
+      case 'resource-link':
         return item;
       case 'thinking':
         return item.status === 'thinking'
