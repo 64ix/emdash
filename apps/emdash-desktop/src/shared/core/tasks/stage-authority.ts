@@ -279,10 +279,14 @@ export type StageAuthorityExplanation = {
  * disabled cross-stage destinations) already gate on {@link StageAuthority.governs}
  * before calling this, so this distinction never affects them — both kinds
  * always have `governs: false`.
+ *
+ * The switch below is exhaustive over every {@link StageAuthorityFactKind}
+ * (ticket #49 extended it to cover `manual`/`provisioned-implementation`
+ * instead of falling through to a `null` this function used to return for
+ * them) — so the return type is non-nullable. Callers should not carry a
+ * "no explanation" fallback for this function; there is none left to reach.
  */
-export function describeStageAuthorityFact(
-  fact: StageAuthorityFact
-): StageAuthorityExplanation | null {
+export function describeStageAuthorityFact(fact: StageAuthorityFact): StageAuthorityExplanation {
   switch (fact.kind) {
     case 'open-pr':
       return {

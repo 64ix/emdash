@@ -150,14 +150,14 @@ export function deriveStageSection(
   // which only ever accompanies a persisted `implementing`) always has an
   // actual stage to explain.
   const explanation =
-    result.fact.kind === 'manual' && currentStage === null ? null : (description?.fact ?? null);
+    result.fact.kind === 'manual' && currentStage === null ? null : description.fact;
 
   return {
     current: currentStage,
     locked: result.governs,
     options: result.governs ? [] : DECLARATIVE_WORKFLOW_STAGES,
     explanation,
-    explanationLink: explanation ? (description?.link ?? null) : null,
+    explanationLink: explanation ? description.link : null,
   };
 }
 
