@@ -148,6 +148,21 @@ export class AcpChatStore {
    */
   newEventCount = 0;
   /**
+   * Outstanding permission requests from the live session, normalized/
+   * sanitized for display — ticket #32. Recomputed via `_syncPermissionQueue`
+   * at every point `session.sessionState.current().pendingPermissions` can
+   * change (session (re)bind, every `sessionState.onChange` firing), for the
+   * same reason `outline`/`newEventCount`/`attentionQueue` are explicit
+   * fields rather than lazy `computed` getters: `session.sessionState.current()`
+   * is a plain replicated store, not itself MobX-tracked, so a `computed`
+   * reading it (the only tracked dependency being `session` itself) caches
+   * its first evaluation forever once continuously observed — exactly what
+   * the composer's permission band does in production. Shipped as a
+   * `computed` by #32; caught and fixed during #33's review (see
+   * `acp-chat-store.test.ts`'s "kept hot by an observer" regression test).
+   */
+  permissionQueue: PermissionQueueItem[] = [];
+  /**
    * Transcript outline (one entry per prompt and per turn) — ticket #34.
    * Recomputed via `_syncOutline` at every point the transcript can grow, for
    * the same reason `newEventCount` is an explicit field rather than a lazy
@@ -287,6 +302,7 @@ export class AcpChatStore {
       isLoadingOlderHistory: observable,
       changesFootprint: observable.ref,
       newEventCount: observable,
+      permissionQueue: observable.ref,
       attentionQueue: observable.ref,
       attentionFocusId: observable,
       canReturnToReadingPosition: observable,
@@ -298,7 +314,6 @@ export class AcpChatStore {
       effort: computed,
       effortOptions: computed,
       commands: computed,
-      permissionQueue: computed,
       permissionResolution: computed,
       queuedPrompts: computed,
       usage: computed,
@@ -387,10 +402,6 @@ export class AcpChatStore {
       description: command.description,
       behavior: 'insert',
     }));
-  }
-
-  get permissionQueue(): PermissionQueueItem[] {
-    return this._computePermissionQueue();
   }
 
   /**
@@ -514,14 +525,9 @@ export class AcpChatStore {
 
   /**
    * Fresh (never cached) computation of the permission queue from the live
-   * session's `pendingPermissions` — extracted out of the `permissionQueue`
-   * getter so `_syncAttentionQueue` can read a guaranteed-current value
-   * regardless of that getter's own `computed` caching state. See
-   * `attentionQueue`'s doc: `session.sessionState.current()` is a plain
-   * replicated store, not a MobX observable, so a `computed` reading it can
-   * go stale while continuously observed elsewhere (e.g. the composer's
-   * permission band) — calling this method directly sidesteps that
-   * entirely rather than depending on it.
+   * session's `pendingPermissions` — the single source both `_syncPermissionQueue`
+   * (the public `permissionQueue` field) and `_syncAttentionQueue` recompute
+   * from, so neither can ever read a stale cached value.
    */
   private _computePermissionQueue(): PermissionQueueItem[] {
     return (this.session?.sessionState.current().pendingPermissions ?? []).map((request) => ({
@@ -547,9 +553,21 @@ export class AcpChatStore {
   }
 
   /**
+   * Recompute the public `permissionQueue` field from the live session's
+   * `pendingPermissions` (see `permissionQueue`'s own doc for why this must
+   * be an explicit resync rather than a lazy `computed`). Called at every
+   * point `pendingPermissions` can change: session (re)bind (`_runBootstrap`)
+   * and every `session.sessionState.onChange` firing.
+   */
+  private _syncPermissionQueue(): void {
+    this.permissionQueue = this._computePermissionQueue();
+  }
+
+  /**
    * Recompute `attentionQueue` (ticket #33) from its three live sources:
    * outstanding permissions (`_computePermissionQueue`, read fresh — not the
-   * `permissionQueue` computed, see that method's doc), failed submissions
+   * `permissionQueue` field's own last-synced snapshot, so this never lags
+   * one recomputation behind it), failed submissions
    * (`failedSubmissions`, a genuinely MobX-reactive field so it is safe to
    * read directly), and actionable turn/tool errors from the latest activity
    * (`deriveErrorAttentionSources` over `chatState.transcript.state` — see
@@ -957,6 +975,7 @@ export class AcpChatStore {
         this._syncMessageCount();
         this._syncChangesFootprint();
         this._syncOutline();
+        this._syncPermissionQueue();
         this._syncAttentionQueue();
       });
     } catch (error) {
@@ -1149,6 +1168,10 @@ export class AcpChatStore {
       session.sessionState.onChange(() =>
         runInAction(() => {
           this._syncMessageCount();
+          // Order matters: `permissionQueue` must be resynced before
+          // `_prunePermissionResolution` reads it, or pruning would act on
+          // the previous `pendingPermissions` snapshot.
+          this._syncPermissionQueue();
           this._prunePermissionResolution();
           // Covers every exit a pending permission request can take —
           // resolved, cancelled by the agent, or superseded by a new one —

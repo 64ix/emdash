@@ -469,6 +469,15 @@ describe('AcpChatStore.outline', () => {
 // pending/error state per the *current* request rather than silently
 // swallowing a failed decision.
 describe('AcpChatStore.permissionQueue / resolvePermission', () => {
+  // `permissionQueue` is an explicitly-resynced field (see its doc comment
+  // on `AcpChatStore` — ticket #33's review fixed it from a `computed` that
+  // cached its first evaluation forever once continuously observed), so
+  // these tests call `_syncPermissionQueue()` directly after assigning a
+  // fake `session`, mirroring `_syncAttentionQueue`'s own tests below.
+  function syncPermissionQueue(store: AcpChatStore): void {
+    (store as unknown as { _syncPermissionQueue(): void })._syncPermissionQueue();
+  }
+
   function toolCall(overrides: Record<string, unknown> = {}) {
     return {
       id: 'item-permission-1',
@@ -499,6 +508,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
     store.session = {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
     } as never;
+    syncPermissionQueue(store);
 
     expect(store.permissionQueue).toHaveLength(1);
     const item = store.permissionQueue[0];
@@ -529,6 +539,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
         }),
       },
     } as never;
+    syncPermissionQueue(store);
 
     const item = store.permissionQueue[0];
     expect(item.title).not.toContain(secret);
@@ -548,6 +559,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
       resolvePermission,
     } as never;
+    syncPermissionQueue(store);
 
     store.resolvePermission('allow-once');
 
@@ -575,6 +587,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
       resolvePermission,
     } as never;
+    syncPermissionQueue(store);
 
     store.resolvePermission('reject-once');
     await flushMicrotasks();
@@ -595,11 +608,44 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
       resolvePermission,
     } as never;
+    syncPermissionQueue(store);
 
     store.resolvePermission('allow-once');
     store.resolvePermission('allow-once');
 
     expect(resolvePermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps reflecting new/resolved pendingPermissions even while kept "hot" by a continuous observer', () => {
+    // Regression test for the bug ticket #33's review found and fixed:
+    // `permissionQueue` shipped by ticket #32 as a `computed` whose only
+    // MobX-tracked dependency was `session` (an `observable.ref`) — the
+    // `pendingPermissions` data itself lives in a plain, non-MobX replicated
+    // store. Once continuously observed (exactly what the composer's
+    // `observer()` render does in production for the permission band), MobX
+    // would cache the first evaluation forever and never see a newly
+    // arrived or resolved permission again. `permissionQueue` is now an
+    // explicitly-resynced field (see `_syncPermissionQueue`), so this must
+    // stay live under the same "kept hot" pressure.
+    const pending: unknown[] = [];
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+    syncPermissionQueue(store);
+    expect(store.permissionQueue).toHaveLength(0);
+
+    const stop = autorun(() => {
+      void store.permissionQueue.length;
+    });
+
+    pending.push(permissionRequest());
+    syncPermissionQueue(store);
+    expect(store.permissionQueue.map((item) => item.requestId)).toEqual(['req-1']);
+
+    pending.length = 0;
+    syncPermissionQueue(store);
+    expect(store.permissionQueue).toHaveLength(0);
+
+    stop();
   });
 });
 

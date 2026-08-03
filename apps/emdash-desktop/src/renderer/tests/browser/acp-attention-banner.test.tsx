@@ -151,6 +151,50 @@ describe('AttentionBanner', () => {
     button.remove();
   });
 
+  it('appearing while the user is actively typing in the composer never steals focus or the in-progress draft', async () => {
+    // The banner is portalled as a sibling above the real composer inside
+    // the same footer (see AcpChatPanel's `composerSlot`) — a plain
+    // `<textarea>` reproduces the property under test (mounting/unmounting a
+    // sibling row must not move focus or disturb an editable control's
+    // value/selection) without needing the full store/ChatView.
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    textarea.focus();
+    await userEvent.type(textarea, 'still typing my message');
+    expect(document.activeElement).toBe(textarea);
+
+    const { onNext, onPrevious, onActivate } = await renderBanner({
+      queue: [PERMISSION_ITEM],
+      focusedItem: PERMISSION_ITEM,
+      atBottom: true,
+    });
+    expect(host.querySelector('[role="status"]')).toBeNull();
+
+    // A permission request arrives while the user keeps typing, and the
+    // transcript is scrolled away — the banner now appears.
+    await act(async () => {
+      root.render(
+        <AttentionBanner
+          queue={[PERMISSION_ITEM]}
+          focusedItem={PERMISSION_ITEM}
+          atBottom={false}
+          onNext={onNext}
+          onPrevious={onPrevious}
+          onActivate={onActivate}
+        />
+      );
+    });
+    expect(host.querySelector('[role="status"]')).not.toBeNull();
+
+    // Neither focus nor the draft the user was mid-typing may be disturbed.
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe('still typing my message');
+    await userEvent.type(textarea, ' and more');
+    expect(textarea.value).toBe('still typing my message and more');
+
+    textarea.remove();
+  });
+
   // ── Count + traversal without hiding lower-priority work ─────────────────
 
   it('shows a plain "needs your attention" label with no traversal controls for a single item', async () => {
