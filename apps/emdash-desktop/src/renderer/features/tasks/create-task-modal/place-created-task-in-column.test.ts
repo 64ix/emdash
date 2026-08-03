@@ -1,5 +1,14 @@
 import { observable, runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  logError: vi.fn(),
+}));
+
+vi.mock('@renderer/utils/logger', () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mocks.logError },
+}));
+
 import {
   placeCreatedTaskInColumn,
   type RegistrationAwareTaskStore,
@@ -84,5 +93,28 @@ describe('placeCreatedTaskInColumn', () => {
 
   it('does nothing when the task id is not (yet) in the manager', () => {
     expect(() => placeCreatedTaskInColumn({ tasks: new Map() }, 'missing', 'idea')).not.toThrow();
+  });
+
+  // Integration-review regression: this write and task creation are two
+  // separate, non-atomic RPC round trips (unlike drag-and-drop's atomic
+  // stage+rank write) — a rejected `updateBoardPosition` here used to be an
+  // unhandled promise rejection with nothing catching it at this call site.
+  it('logs and does not leave an unhandled rejection when updateBoardPosition fails', async () => {
+    const store = makeFakeStore();
+    store.updateBoardPosition.mockRejectedValueOnce(new Error('write failed'));
+    placeCreatedTaskInColumn({ tasks: new Map([['t1', store]]) }, 't1', 'idea');
+
+    runInAction(() => {
+      store.state = 'unprovisioned';
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(mocks.logError).toHaveBeenCalledWith(
+      'placeCreatedTaskInColumn: updateBoardPosition failed',
+      expect.any(Error)
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { when } from 'mobx';
+import { log } from '@renderer/utils/logger';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 
 /** The minimal `TaskStore` shape this needs — kept narrow (rather than importing the concrete
@@ -29,6 +30,16 @@ export type RegistrationAwareTaskStore = {
  * anything, since `updateBoardPosition` is a no-op on an unregistered store.
  * A permanent creation failure (`phase === 'create-error'`) bails out without
  * writing, instead of waiting forever.
+ *
+ * This write and task creation itself are two separate RPC round trips, not
+ * one atomic operation (unlike drag-and-drop's stage+rank write, which ticket
+ * #48 deliberately kept atomic for exactly this reason) — a genuine, disclosed
+ * gap: if this second write fails, the task still exists, registered, just
+ * left in Unstaged rather than the column the user chose. `updateBoardPosition`
+ * itself already logs and rolls back its optimistic state on failure (see
+ * `TaskStore.updateBoardPosition`); the `.catch` below only prevents an
+ * unhandled promise rejection from this fire-and-forget call site — it does
+ * not add a user-visible error for this specific failure mode.
  */
 export function placeCreatedTaskInColumn(
   taskManager: { tasks: ReadonlyMap<string, RegistrationAwareTaskStore> },
@@ -41,7 +52,11 @@ export function placeCreatedTaskInColumn(
   when(
     () => store.state !== 'unregistered' || store.phase === 'create-error',
     () => {
-      if (store.state !== 'unregistered') void store.updateBoardPosition(stage, null);
+      if (store.state !== 'unregistered') {
+        store
+          .updateBoardPosition(stage, null)
+          .catch((e) => log.error('placeCreatedTaskInColumn: updateBoardPosition failed', e));
+      }
     }
   );
 }
