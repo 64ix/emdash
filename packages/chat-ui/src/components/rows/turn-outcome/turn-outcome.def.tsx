@@ -10,6 +10,7 @@ import { ROW_H } from '@components/engine/row-metrics';
 import { CopyButton } from '@components/primitives/CopyButton';
 import { defineUnit } from '@core/units';
 import { formatFooterContext, formatFooterCost, formatFooterDuration } from '@state/turn-footer';
+import { buildTurnRecoveryDiagnostic, categorizeTurnOutcome } from '@state/turn-recovery';
 import { Show } from 'solid-js';
 import type { TurnOutcomeItem } from '@/model';
 import {
@@ -40,6 +41,16 @@ export const turnOutcomeUnitDef = defineUnit<TurnOutcomeItem, { rowH: number }>(
 
   Render(props) {
     const footer = () => props.data.footer;
+    // Recovery category (ticket #39) — null for a plain successful completion,
+    // in which case no diagnostic action renders (see `categorizeTurnOutcome`'s
+    // doc for the exact typed evidence behind each non-null category).
+    const category = () => categorizeTurnOutcome(props.data.outcome);
+    const diagnosticText = () =>
+      buildTurnRecoveryDiagnostic({
+        category: category()!,
+        turnId: props.data.id,
+        outcome: props.data.outcome,
+      });
 
     return (
       <div class={turnFooterRoot} style={{ height: `${props.vars.rowH}px` }}>
@@ -56,6 +67,12 @@ export const turnOutcomeUnitDef = defineUnit<TurnOutcomeItem, { rowH: number }>(
           {(cost) => <span class={turnFooterMeta}>{formatFooterCost(cost())}</span>}
         </Show>
         <span class={turnFooterSpacer} />
+        {/* Only rendered when the turn settled into an actionable recovery
+            category (error / interrupted / cancelled / context-exhausted) —
+            a plain successful completion has nothing to diagnose. */}
+        <Show when={category()}>
+          <CopyButton text={diagnosticText()} variant="toolbar" label="Copy diagnostic" />
+        </Show>
         <CopyButton text={footer().copyText} variant="toolbar" label="Copy turn" />
       </div>
     );
