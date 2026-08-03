@@ -2,29 +2,34 @@ import {
   closestCenter,
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   MeasuringStrategy,
   PointerSensor,
   pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
+  type Announcements,
   type ClientRect,
   type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type ScreenReaderInstructions,
 } from '@dnd-kit/core';
 import {
   SortableContext,
+  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
   type AnimateLayoutChanges,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // MessageSquare is gone with #47's removal of the old inline linked-issue badge;
-// AlertTriangle/ChevronRight are #46's Triage warning and collapse toggle; Plus is
-// #45's per-column create button.
-import { AlertTriangle, ArrowUpRight, ChevronRight, Plus } from 'lucide-react';
+// AlertTriangle/ChevronRight are #46's Triage warning and collapse toggle;
+// GripVertical is #52's per-card keyboard-drag handle; Plus is #45's
+// per-column create button.
+import { AlertTriangle, ArrowUpRight, ChevronRight, GripVertical, Plus } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -143,6 +148,35 @@ const parseColumnDropId = (id: string): ColumnId | undefined =>
 
 type CardEntry = { id: string; rank: string | null };
 
+/** Visible focus treatment (ticket #52), shared by every board control this
+ * file renders directly (cards, the keyboard-drag handle, the hover-open
+ * arrow, column collapse toggles, and column "+" creation) — one utility set
+ * so focused position on the board is never ambiguous, matching the ring
+ * convention already used elsewhere in the app (e.g. the sidebar rows). */
+const FOCUS_RING_CLASS =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+
+/** Same treatment, tightened for small inline icon buttons that sit flush
+ * against a card's edge (ticket #52) — a 2px offset there would clip against
+ * the column's own padding. */
+const FOCUS_RING_CLASS_TIGHT =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1';
+
+/**
+ * Keyboard drag instructions (ticket #52): dnd-kit's own default text only
+ * mentions the space bar and speaks generically of "a draggable item" — this
+ * names the actual affordance (the card's own "Move" handle, tabbed to
+ * separately from the card itself so Enter/Space keep selecting the card
+ * everywhere else) and both activation keys it accepts.
+ */
+const BOARD_SCREEN_READER_INSTRUCTIONS: ScreenReaderInstructions = {
+  draggable: `
+    Tab to a card's Move button, then press Space or Enter to pick it up.
+    While picked up, use the arrow keys to move it between cards and columns.
+    Press Space or Enter again to drop it in its new position, or press Escape to cancel.
+  `,
+};
+
 /**
  * FLIP-animate layout changes during a drag and right after a drop. The
  * default skips the drop case (it assumes the make-room transition already
@@ -211,7 +245,19 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // narrows which already-loaded cards populate `rawByColumn` below, never
   // their persisted Board Rank or Workflow Stage.
   const [filters, setFilters] = useState<BoardFilterState>(EMPTY_BOARD_FILTERS);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // Keyboard-driven drag (ticket #52): the board's only keyboard-drag
+  // activator is each card's dedicated "Move" handle (see `BoardCard`), never
+  // the card body itself — Enter/Space there keep selecting the card, exactly
+  // as before this ticket. `sortableKeyboardCoordinates` is dnd-kit's own
+  // cross-container-aware coordinate getter (the same one its multi-column
+  // examples use), so arrow keys can move a card between columns, not just
+  // within one. `onDragOver`/`onDragEnd` below already run identically
+  // regardless of which sensor is active, so the stage-authority blocked-
+  // destination handling (ticket #48) is reachable by keyboard for free.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
   const showCreateTaskModal = useShowModal('taskModal');
 
   // Task creation (ticket #45): the header's "New task" button opens the
@@ -649,6 +695,36 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
 
   const activeDragStore = activeDragId ? storeById.get(activeDragId) : undefined;
 
+  // Screen-reader drag announcements (ticket #52): dnd-kit's own defaults
+  // narrate raw dnd-kit ids ("Draggable item <uuid> was moved over droppable
+  // area column-drop::spec") — replaced here with the task name and Workflow
+  // Stage a sighted user already reads off the card and column, so a
+  // keyboard/screen-reader user gets the same information. Column drop zones
+  // and cards share one id namespace here (`parseColumnDropId` distinguishes
+  // them); `effectiveColumnOf` accounts for the cross-column drag preview so
+  // the announced destination always matches what is visually previewed.
+  const describeDragCard = (id: string): string => {
+    const store = storeById.get(id);
+    const task = store ? registeredTaskData(store) : undefined;
+    return task?.name ?? 'the card';
+  };
+  const describeDropTarget = (id: string): string => {
+    const column = parseColumnDropId(id) ?? effectiveColumnOf(id);
+    return column ? `the ${STAGE_LABELS[column]} column` : 'the board';
+  };
+  const boardAnnouncements: Announcements = {
+    onDragStart: ({ active }) => `Picked up ${describeDragCard(String(active.id))}.`,
+    onDragOver: ({ active, over }) =>
+      over
+        ? `${describeDragCard(String(active.id))} is over ${describeDropTarget(String(over.id))}.`
+        : `${describeDragCard(String(active.id))} is no longer over a column.`,
+    onDragEnd: ({ active, over }) =>
+      over
+        ? `${describeDragCard(String(active.id))} was dropped in ${describeDropTarget(String(over.id))}.`
+        : `${describeDragCard(String(active.id))} was dropped.`,
+    onDragCancel: ({ active }) => `Moving ${describeDragCard(String(active.id))} was cancelled.`,
+  };
+
   // Shared column renderer for all three groups below (Unstaged, the
   // six-stage pipeline, Triage) so every column keeps the same wiring —
   // only grouping and emphasis differ.
@@ -701,6 +777,14 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
         <DndContext
           sensors={sensors}
           collisionDetection={columnAwareCollision}
+          // Semantic labels for drag availability (ticket #52): friendly,
+          // task-name/Workflow-Stage announcements (see `boardAnnouncements`
+          // above) plus instructions naming the actual "Move" handle
+          // affordance, in place of dnd-kit's generic id-keyed defaults.
+          accessibility={{
+            announcements: boardAnnouncements,
+            screenReaderInstructions: BOARD_SCREEN_READER_INSTRUCTIONS,
+          }}
           // The board always overflows horizontally (8 fixed-width columns), so
           // dnd-kit's default 20%-of-container autoscroll band covers a whole
           // visible column: hovering a drop target inside it scrolls the board
@@ -885,7 +969,10 @@ const BoardColumn = observer(function BoardColumn({
             aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${stageLabel} column`}
             aria-expanded={!effectiveCollapsed}
             onClick={onToggleCollapsed}
-            className="-ml-1 shrink-0 rounded p-0.5 text-foreground-muted hover:text-foreground"
+            className={cn(
+              '-ml-1 shrink-0 rounded p-0.5 text-foreground-muted hover:text-foreground',
+              FOCUS_RING_CLASS_TIGHT
+            )}
           >
             <ChevronRight
               className={cn('size-3.5 transition-transform', !effectiveCollapsed && 'rotate-90')}
@@ -923,7 +1010,10 @@ const BoardColumn = observer(function BoardColumn({
             aria-label={`New task in ${stageLabel}`}
             title={`New task in ${stageLabel}`}
             onClick={() => onCreateTask(column === 'unstaged' ? undefined : column)}
-            className="rounded p-0.5 text-foreground-muted hover:bg-background-1 hover:text-foreground"
+            className={cn(
+              'rounded p-0.5 text-foreground-muted hover:bg-background-1 hover:text-foreground',
+              FOCUS_RING_CLASS_TIGHT
+            )}
           >
             <Plus className="size-3.5" />
           </button>
@@ -943,7 +1033,11 @@ const BoardColumn = observer(function BoardColumn({
           className={cn(
             'flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2',
             isOver && 'bg-foreground/5',
-            isBlockedDestination && 'cursor-not-allowed opacity-50'
+            isBlockedDestination && 'cursor-not-allowed opacity-50',
+            // Visible focus treatment (ticket #52) for the collapsed-column
+            // case above, where the drop zone itself is the tabbable element;
+            // a no-op (never focusable) for the ordinary expanded case.
+            FOCUS_RING_CLASS
           )}
         >
           {entries.map((entry) => {
@@ -987,7 +1081,17 @@ const BoardCard = observer(function BoardCard({
   onSelect: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
 }) {
-  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
+  const {
+    setNodeRef,
+    setActivatorNodeRef,
+    attributes,
+    listeners,
+    transform,
+    transition,
+    isDragging,
+    index: sortableIndex,
+    items: sortableItems,
+  } = useSortable({
     id: store.data.id,
     animateLayoutChanges: animateBoardLayoutChanges,
   });
@@ -1019,7 +1123,26 @@ const BoardCard = observer(function BoardCard({
     <div
       ref={setNodeRef}
       style={style}
-      {...attributes}
+      // Selection semantics (ticket #52): the whole card keeps behaving like
+      // a button (Enter/Space -> select, unchanged since ticket #40) — but
+      // `attributes` is deliberately NOT spread here anymore. It carries
+      // `aria-roledescription="sortable"` and an `aria-describedby` pointing
+      // at dnd-kit's generic "press space bar to pick up" instructions, which
+      // would misdescribe this element now that picking a card up is the
+      // dedicated "Move" handle's job, not the card body's. `listeners` (the
+      // sensor activators) stay spread here unchanged: that is what keeps the
+      // existing "grab anywhere on the card" POINTER drag working exactly as
+      // before — only the keyboard activator is now handle-only (see below).
+      role="button"
+      tabIndex={0}
+      aria-pressed={isDragging || undefined}
+      // Card position (ticket #52): this card's 1-based position and the
+      // column's total count, so a screen reader can announce e.g. "2 of 5"
+      // the same way sighted users read position from layout. `items` is the
+      // enclosing `SortableContext`'s own ordered id list (ticket #47's
+      // column), so this can never drift from what is actually on screen.
+      aria-setsize={sortableItems.length}
+      aria-posinset={sortableIndex + 1}
       {...listeners}
       onClick={handleSelect}
       onKeyDown={(event) => {
@@ -1031,9 +1154,43 @@ const BoardCard = observer(function BoardCard({
       className={cn(
         'group relative flex cursor-grab touch-none flex-col gap-1 rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing',
         // The card backing the open Task Detail Panel (CONTEXT.md) is highlighted.
-        isSelected && 'border-primary ring-1 ring-primary/50'
+        isSelected && 'border-primary ring-1 ring-primary/50',
+        FOCUS_RING_CLASS
       )}
     >
+      {/* Keyboard-driven drag (ticket #52): the board's only keyboard drag
+          activator. `setActivatorNodeRef` points dnd-kit's `KeyboardSensor` at
+          this exact button, so pressing Space/Enter anywhere else on the card
+          (title, agent state, the card body) keeps selecting it instead of
+          picking it up — the two gestures would otherwise fight over the same
+          keys. Pointer presses are deliberately left alone here (no
+          `onPointerDown` override): they bubble up to the card's own
+          `listeners.onPointerDown` above, so grabbing this handle with a
+          mouse starts an ordinary pointer drag too, exactly like grabbing
+          anywhere else on the card. `aria-describedby` reuses dnd-kit's own
+          generic drag instructions (`BOARD_SCREEN_READER_INSTRUCTIONS`) —
+          accurate here, since this handle is the thing that actually responds
+          to them. */}
+      <button
+        type="button"
+        ref={setActivatorNodeRef}
+        aria-label={`Move ${task.name}`}
+        aria-describedby={attributes['aria-describedby']}
+        aria-pressed={isDragging || undefined}
+        title="Move card: Space or Enter to pick up, arrow keys to move, Space or Enter to drop, Escape to cancel"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          listeners?.onKeyDown?.(event);
+        }}
+        className={cn(
+          'absolute top-1 left-1 cursor-grab rounded p-0.5 text-foreground-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 active:cursor-grabbing',
+          FOCUS_RING_CLASS_TIGHT
+        )}
+      >
+        <GripVertical className="size-3.5" aria-hidden="true" />
+      </button>
+
       {/* Direct navigation (CONTEXT.md "Task Detail Panel"): hover-revealed,
           navigates straight to the full task view instead of the panel.
           `onPointerDown` stops here so dnd-kit's drag activation (attached to
@@ -1052,7 +1209,10 @@ const BoardCard = observer(function BoardCard({
           onOpenTask(task.id);
         }}
         onKeyDown={(event) => event.stopPropagation()}
-        className="absolute top-1 right-1 rounded p-0.5 text-foreground-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
+        className={cn(
+          'absolute top-1 right-1 rounded p-0.5 text-foreground-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100',
+          FOCUS_RING_CLASS_TIGHT
+        )}
       >
         <ArrowUpRight className="size-3.5" />
       </button>
@@ -1060,9 +1220,11 @@ const BoardCard = observer(function BoardCard({
       {/* Title (ticket #47): wraps to a small, bounded number of lines — a
           long name never grows the card past two lines. `title` keeps the
           full name reachable on hover; card fields stay fixed, not
-          user-configurable. */}
+          user-configurable. Padded on both sides (ticket #52 added the "Move"
+          handle at top-left) so the title text never sits under either
+          absolutely-positioned corner button. */}
       <span
-        className="line-clamp-2 block w-full pr-4 text-left text-xs font-medium"
+        className="line-clamp-2 block w-full px-4 text-left text-xs font-medium"
         title={task.name}
       >
         {task.name}
