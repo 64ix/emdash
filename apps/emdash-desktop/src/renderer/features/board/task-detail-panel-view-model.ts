@@ -94,7 +94,16 @@ export type TaskDetailPanelStage = {
   locked: boolean;
   /** Empty while `locked`; the assignable declarative stages otherwise. */
   options: readonly WorkflowStage[];
-  /** Human-readable holding-fact explanation, set only while `locked`. */
+  /**
+   * Human-readable stage-authority explanation (ticket #49): set whenever
+   * the shared contract has something to say about the current placement —
+   * a governing GitHub fact (`locked: true`), the workspace fact behind a
+   * runtime-derived `implementing` (`provisioned-implementation`), or a
+   * genuinely manual placement, explicitly labelled "manual" so it reads as
+   * distinguishable from a synchronized fact. `null` only when there is no
+   * stage to explain at all (Unstaged, `currentStage === null`, with no
+   * fact backing it either).
+   */
   explanation: string | null;
   explanationLink: { url: string; label: string } | null;
 };
@@ -103,47 +112,52 @@ export type TaskDetailPanelStage = {
  * Delegates to the shared explanation contract (ticket #48,
  * `@shared/core/tasks/stage-authority.ts`) — the single pure function that
  * computes a task's Workflow Stage authority from the same observable facts
- * and precedence rules board synchronization uses. This panel only adapts
- * the result into its own selector shape; it does not derive anything itself.
+ * and precedence rules board synchronization uses — for both *which* fact
+ * governs (`deriveStageAuthority`) and *how to describe it*
+ * (`describeStageAuthorityFact`). This panel only adapts the result into its
+ * own selector shape; it never re-derives an authority or a description
+ * itself (ticket #48's "no second source of truth" is load-bearing here).
  *
  * Not yet loaded (`undefined` authority) reads the same as "no PR authority
  * fact" — declarative, unlocked, unless the linked Map/Spec issue itself
  * governs `currentStage` (an open, GitHub-provenanced issue the periodic
  * issues sync would read as open — see `deriveStageAuthority`'s docstring).
- * `hasWorkspace: false` is passed unconditionally: this call site doesn't
- * thread workspace presence through yet, so a persisted `implementing` stage
- * falls back to the unlocked/declarative branch exactly as before, rather
- * than a `deriveStageAuthority` category this panel isn't wired to surface.
+ *
+ * `hasWorkspace` (ticket #49) is the same `task.workspaceId != null` fact
+ * `board-main-panel.tsx`'s `authorityForTask` already threads through for
+ * drag-time authority — passing it here lets a persisted `implementing`
+ * stage surface the `provisioned-implementation` fact (naming the workspace
+ * behind it) instead of always falling back to an unexplained manual
+ * placement. Defaults to `false` for direct callers that don't have it yet.
  */
 export function deriveStageSection(
   currentStage: WorkflowStage | null,
   authority: TaskStageAuthority | null | undefined,
-  linkedIssues?: LinkedIssueRoles | null
+  linkedIssues?: LinkedIssueRoles | null,
+  hasWorkspace = false
 ): TaskDetailPanelStage {
   const result = deriveStageAuthority({
     currentStage,
     linkedIssues,
     prAuthority: authority,
-    hasWorkspace: false,
+    hasWorkspace,
   });
 
-  if (!result.governs) {
-    return {
-      current: currentStage,
-      locked: false,
-      options: DECLARATIVE_WORKFLOW_STAGES,
-      explanation: null,
-      explanationLink: null,
-    };
-  }
-
   const description = describeStageAuthorityFact(result.fact);
+  // A `manual` fact with no current stage at all (Unstaged) has nothing to
+  // label — "manual placement" only makes sense once a stage is actually
+  // set. Every other fact kind (including `provisioned-implementation`,
+  // which only ever accompanies a persisted `implementing`) always has an
+  // actual stage to explain.
+  const explanation =
+    result.fact.kind === 'manual' && currentStage === null ? null : (description?.fact ?? null);
+
   return {
     current: currentStage,
-    locked: true,
-    options: [],
-    explanation: description?.fact ?? null,
-    explanationLink: description?.link ?? null,
+    locked: result.governs,
+    options: result.governs ? [] : DECLARATIVE_WORKFLOW_STAGES,
+    explanation,
+    explanationLink: explanation ? (description?.link ?? null) : null,
   };
 }
 
@@ -195,7 +209,8 @@ export function buildTaskDetailPanelViewModel(input: {
     stage: deriveStageSection(
       input.task.workflowStage ?? null,
       input.stageAuthority,
-      input.task.linkedIssues
+      input.task.linkedIssues,
+      input.task.workspaceId != null
     ),
   };
 }

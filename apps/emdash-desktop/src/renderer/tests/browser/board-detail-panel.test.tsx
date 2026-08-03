@@ -45,6 +45,15 @@ type MockStore = {
     archivedAt?: string;
     isPinned?: boolean;
     linkedIssues?: LinkedIssueRoles;
+    // Ticket #49: threads a task's own provisioned-workspace presence
+    // through to the stage explanation (`hasWorkspace`), same as
+    // `board-main-panel.tsx`'s own `authorityForTask` already does for drag.
+    workspaceId?: string;
+    // Ticket #49: `TaskGitDiffStats` (the panel's working-tree-changes row)
+    // falls back to this cached snapshot for a task with no live
+    // `GitWorktreeStore` mounted — same shape `board-card-hierarchy.test.tsx`
+    // already exercises for the card.
+    workspaceGit?: { linesAdded: number; linesDeleted: number };
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
@@ -86,6 +95,11 @@ const mocks = vi.hoisted(() => ({
       ) => Promise<Result<CreateTaskSuccess, CreateTaskError>>
     >(),
   rejectGhostCard: vi.fn(() => Promise.resolve()),
+  // Ticket #49: `board_inspector_opened` telemetry — stubbed directly
+  // (mirrors `board-dnd.test.tsx`'s `board_move_blocked` stub) rather than
+  // exercising the real RPC/session-id round trip these tests have no
+  // reason to cover.
+  captureTelemetry: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
@@ -133,6 +147,12 @@ vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
 // same way `AgentStatusIndicator` already is above.
 vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
   StackedAgentLogos: () => null,
+}));
+
+// Ticket #49: `board_inspector_opened` — stub the whole client the same way
+// `board-dnd.test.tsx` stubs it for `board_move_blocked`.
+vi.mock('@renderer/utils/telemetryClient', () => ({
+  captureTelemetry: (...args: unknown[]) => mocks.captureTelemetry(...args),
 }));
 
 // BoardMainPanel pulls in BoardLinkSuggestions and GhostCards (real rpc calls
@@ -340,6 +360,22 @@ function closeButton(): HTMLElement {
   ) as HTMLElement;
 }
 
+/** The collapse/expand toggle button for a given (empty-only) column label
+ * (ticket #46, mirrors `board-dnd.test.tsx`'s `columnToggle`). */
+function columnToggle(label: string): HTMLButtonElement | undefined {
+  return Array.from(host.querySelectorAll('button')).find((button) =>
+    button.getAttribute('aria-label')?.endsWith(`${label} column`)
+  ) as HTMLButtonElement | undefined;
+}
+
+/** Card name spans (`line-clamp-2`, ticket #47), in DOM order, for a column —
+ * used to assert Board Rank/ordering is untouched by opening/closing the panel. */
+function cardNamesInColumn(label: string): string[] {
+  return Array.from(columnZone(label).querySelectorAll('span.line-clamp-2')).map(
+    (el) => el.textContent ?? ''
+  );
+}
+
 /** The open panel's full text content — used for simple presence/absence assertions. */
 function panelText(): string {
   return host.querySelector('h2')?.parentElement?.parentElement?.textContent ?? '';
@@ -364,6 +400,12 @@ function linkedIssueRoles(): string[] {
   return Array.from(host.querySelectorAll('[data-linked-issue-role]')).map(
     (el) => el.getAttribute('data-linked-issue-role') ?? ''
   );
+}
+
+/** The Spec-derived PR's own row within the merged "Delivery chain" section
+ * (ticket #49), or `null` when nothing references the Spec. */
+function deliveryChainPrRow(): Element | null {
+  return host.querySelector('[data-delivery-chain-item="pr"]');
 }
 
 /** A card's hover-revealed direct-navigation arrow (ticket #42). */
@@ -641,6 +683,40 @@ describe('Task Detail Panel — vitals (ticket #41)', () => {
   });
 });
 
+// Ticket #49: branch + working-tree changes, and agent/conversation state —
+// both reuse the same read-only primitives the card already renders
+// (`TaskGitDiffStats`, `StackedAgentLogos`) rather than a new derivation, and
+// neither ever provisions or mutates the task to display them.
+describe('Task Detail Panel — branch, working-tree changes and agent/conversation state (ticket #49)', () => {
+  setupDom();
+
+  it('shows working-tree diff stats from the cached workspace snapshot, without provisioning anything', async () => {
+    const a = makeStore('card-a', { workspaceGit: { linesAdded: 5, linesDeleted: 2 } });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).toContain('+5');
+    expect(panelText()).toContain('-2');
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+  });
+
+  it('shows no diff stats for a task with no cached or live working-tree data', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).not.toContain('+0');
+    expect(panelText()).not.toContain('-0');
+  });
+});
+
 describe('Task Detail Panel — typed links (ticket #41)', () => {
   setupDom();
 
@@ -672,7 +748,7 @@ describe('Task Detail Panel — typed links (ticket #41)', () => {
     expect(panelText()).toContain('Spec issue');
   });
 
-  it('renders no Linked issues section for a purely local task with no links', async () => {
+  it('renders no Delivery chain section for a purely local task with no links or PR', async () => {
     const a = makeStore('card-a');
     managerTasks.set(a.data.id, a);
     await mount();
@@ -680,15 +756,27 @@ describe('Task Detail Panel — typed links (ticket #41)', () => {
     click(cardEl('card-a'));
     await settle();
 
-    expect(panelSection('linked-issues')).toBeNull();
+    expect(panelSection('delivery-chain')).toBeNull();
   });
 });
 
 describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)', () => {
   setupDom();
 
-  it('renders no Pull request section when nothing references the Spec', async () => {
-    const a = makeStore('card-a');
+  // Ticket #49: Origin/Map/Spec and the Spec-derived PR merge into one
+  // "Delivery chain" section — a task with linked issues but no PR still
+  // shows the chain (its typed links), just with no PR row inside it.
+  it('shows no PR row in the delivery chain when nothing references the Spec', async () => {
+    const linkedIssues: LinkedIssueRoles = {
+      version: '1',
+      origin: {
+        provider: 'github',
+        url: 'https://github.com/acme/repo/issues/1',
+        title: 'Origin issue',
+        identifier: '#1',
+      },
+    };
+    const a = makeStore('card-a', { linkedIssues });
     managerTasks.set(a.data.id, a);
     await mount();
 
@@ -696,10 +784,11 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
     await settle();
 
-    expect(panelSection('pull-request')).toBeNull();
+    expect(panelSection('delivery-chain')).not.toBeNull();
+    expect(deliveryChainPrRow()).toBeNull();
   });
 
-  it('shows the Spec-derived PR, disables the stage selector, and names the holding fact', async () => {
+  it('shows the Spec-derived PR in the delivery chain, disables the stage selector, and names the holding fact', async () => {
     const pr: StageHoldingPr = {
       url: 'https://github.com/acme/repo/pull/9',
       title: 'Ship the feature',
@@ -719,7 +808,8 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
     await settle();
 
-    expect(panelSection('pull-request')).not.toBeNull();
+    expect(panelSection('delivery-chain')).not.toBeNull();
+    expect(deliveryChainPrRow()).not.toBeNull();
     expect(panelText()).toContain('Ship the feature');
     expect(stageSelect().disabled).toBe(true);
     expect(panelText()).toContain('#9');
@@ -806,9 +896,69 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     expect(panelText()).not.toContain('Held in Spec');
     expect(panelText()).toContain('Triage');
     expect(panelText()).toContain('#42');
-    // The linked issue is still listed in the Linked Issues section (ticket
+    // The linked issue is still listed in the Delivery chain section (ticket
     // #41's content) regardless of which stage-authority claim it backs.
     expect(linkedIssueRoles()).toEqual(['spec']);
+  });
+});
+
+// Ticket #49: the stage explanation now always names *something* — a
+// governing GitHub fact (already covered above), the workspace fact behind a
+// runtime-derived Implementing, or an explicitly-labelled manual placement —
+// so "no explanation" never reads as "nothing to say about this".
+describe('Task Detail Panel — Workflow Stage explanation: manual and workspace labelling (ticket #49)', () => {
+  setupDom();
+
+  it('labels a manual placement as manual when no GitHub or workspace fact backs it', async () => {
+    const a = makeStore('card-a', { workflowStage: 'idea' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(stageSelect().disabled).toBe(false);
+    expect(panelText()).toContain('Manual placement');
+  });
+
+  it('names the provisioned workspace behind a runtime-derived Implementing', async () => {
+    const a = makeStore('card-a', { workflowStage: 'implementing', workspaceId: 'workspace-1' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(stageSelect().disabled).toBe(false);
+    expect(panelText()).toContain('Implementing');
+    expect(panelText()).toContain('workspace');
+  });
+
+  it('labels Implementing manual instead when there is no provisioned workspace yet', async () => {
+    const a = makeStore('card-a', { workflowStage: 'implementing' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(panelText()).toContain('Manual placement');
+  });
+
+  it('shows no stage explanation at all for an Unstaged task with no fact either', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(panelSection('workflow-stage')).not.toBeNull();
+    expect(panelText()).not.toContain('Manual placement');
   });
 });
 
@@ -1087,5 +1237,270 @@ describe('Task Detail Panel — management actions (ticket #42)', () => {
     await settle();
 
     expect(mocks.archiveTask).toHaveBeenCalledWith('card-a');
+  });
+});
+
+// Ticket #49: keyboard and pointer selection must be indistinguishable —
+// both land on the exact same handler (`BoardMainPanel`'s `handleSelectTask`),
+// so a card's own `onKeyDown` (Enter/Space -> select, inherited from spec
+// #12/ticket #40) is exercised here directly rather than only through a
+// pointer click, the way every describe block above this one does it.
+describe('Task Detail Panel — selection: keyboard and pointer are identical (ticket #49)', () => {
+  setupDom();
+
+  it('a keyboard Enter on the card itself opens the panel exactly like a pointer click', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    (cardEl('card-a') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+    expect((cardEl('card-a') as HTMLElement).className).toContain('border-primary');
+  });
+
+  it('a keyboard Space on the card itself opens the panel too', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    (cardEl('card-a') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+  });
+
+  it('a keyboard Enter on a different card switches the panel, same as a pointer click would', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelHeading()).toBe('card-a');
+
+    (cardEl('card-b') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-b');
+  });
+});
+
+// Ticket #49's hard safety criterion: browsing the board never provisions,
+// archives, or otherwise mutates a task. Selecting a card is a read-only
+// view-state change (which task the inspector shows) — this is the mutation
+// seam itself: the exact calls a provision/archive/write would go through.
+describe('Task Detail Panel — selection never mutates a task (safety, ticket #49)', () => {
+  setupDom();
+
+  it('selecting a card via pointer calls no provision, archive, or board-position write', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+  });
+
+  it('selecting a card via keyboard calls no provision, archive, or board-position write either', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    (cardEl('card-a') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+  });
+
+  it('switching between cards and closing the panel still calls no provision, archive, or write', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(cardEl('card-b'));
+    await settle();
+    click(closeButton());
+    await settle();
+
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(b.updateBoardPosition).not.toHaveBeenCalled();
+  });
+});
+
+// Ticket #49: closing the inspector preserves scroll, column state and card
+// ordering — the panel is ephemeral, board-owned view state (CONTEXT.md
+// "Task Detail Panel") that must never reset anything else the board itself
+// owns just because it closed.
+describe('Task Detail Panel — closing preserves board state (ticket #49)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    // Wide enough that every column is visible and nothing scrolls off by
+    // itself, mirroring `board-dnd.test.tsx`'s wide-viewport drag suites.
+    await page.viewport(2200, 800);
+  });
+
+  it('preserves a collapsed empty column across open and close', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    // "card-a" has no Workflow Stage, so it lands in Unstaged — every
+    // pipeline column (e.g. Spec) starts empty and collapsible.
+    const toggle = columnToggle('Spec')!;
+    expect(toggle).toBeTruthy();
+    toggle.click();
+    await settle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelHeading()).toBe('card-a');
+
+    click(closeButton());
+    await settle();
+    expect(panelHeading()).toBeNull();
+
+    expect(columnToggle('Spec')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('preserves the board scroll position across open and close', async () => {
+    // Narrow enough that the board actually overflows horizontally (the wide
+    // 2200px viewport above fits every column with nothing to scroll) —
+    // mirrors `board-dnd.test.tsx`'s own narrow-viewport scroll suite.
+    await page.viewport(414, 896);
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const scroller = host.querySelector<HTMLElement>('.overflow-x-auto')!;
+    scroller.scrollLeft = 200;
+    await settle();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(closeButton());
+    await settle();
+
+    expect(scroller.scrollLeft).toBe(200);
+  });
+
+  it('preserves card ordering (Board Rank) across open and close, with no write triggered', async () => {
+    const a = makeStore('card-a', { workflowStage: 'idea', boardRank: 'b' });
+    const b = makeStore('card-b', { workflowStage: 'idea', boardRank: 'a' });
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    const orderBefore = cardNamesInColumn('Idea');
+    expect(orderBefore).toEqual(['card-b', 'card-a']); // 'a' sorts before 'b'
+
+    click(cardEl('card-a'));
+    await settle();
+    click(closeButton());
+    await settle();
+
+    expect(cardNamesInColumn('Idea')).toEqual(orderBefore);
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(b.updateBoardPosition).not.toHaveBeenCalled();
+  });
+});
+
+// Ticket #49: telemetry distinguishes the inspector opening, with no
+// sensitive task content (no task name, issue title, or branch) — mirrors
+// `board_opened`'s minimal `{ source }` payload.
+describe('Task Detail Panel — board_inspector_opened telemetry (ticket #49)', () => {
+  setupDom();
+
+  it('captures board_inspector_opened for a task, with no task content in the payload', async () => {
+    const a = makeStore('card-a', { name: 'Sensitive task name' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('Sensitive task name'));
+    await settle();
+
+    expect(mocks.captureTelemetry).toHaveBeenCalledWith('board_inspector_opened', {
+      target_kind: 'task',
+      project_id: 'p1',
+    });
+    const call = mocks.captureTelemetry.mock.calls.find((c) => c[0] === 'board_inspector_opened');
+    expect(JSON.stringify(call)).not.toContain('Sensitive task name');
+  });
+
+  it('does not re-fire when re-clicking the already-open card (no-op re-select)', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(cardEl('card-a'));
+    await settle();
+
+    const calls = mocks.captureTelemetry.mock.calls.filter(
+      (c) => c[0] === 'board_inspector_opened'
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it('fires again when switching to a different card', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(cardEl('card-b'));
+    await settle();
+
+    const calls = mocks.captureTelemetry.mock.calls.filter(
+      (c) => c[0] === 'board_inspector_opened'
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  it('captures board_inspector_opened with target_kind "ghost" for a Ghost Card', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+
+    expect(mocks.captureTelemetry).toHaveBeenCalledWith('board_inspector_opened', {
+      target_kind: 'ghost',
+      project_id: 'p1',
+    });
   });
 });

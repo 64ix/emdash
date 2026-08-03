@@ -257,18 +257,28 @@ function issueLabel(issue: LinkedIssue): string {
 }
 
 export type StageAuthorityExplanation = {
-  /** Names the governing fact. */
+  /** Names the governing (or, for `manual`/`provisioned-implementation`, the
+   * merely explanatory) fact. */
   fact: string;
-  /** What must change before a manual move to a different stage sticks. */
+  /** What must change before a manual move to a different stage sticks — for
+   * `manual`/`provisioned-implementation`, this instead says the placement is
+   * already freely movable, since neither ever locks it. */
   action: string;
   link: { url: string; label: string } | null;
 };
 
 /**
- * Builds the accessible explanation for a governing fact: what it is, and
- * what must change to unlock a manual move (ticket #48's disabled-destination
- * criterion). Returns `null` for `manual`/`provisioned-implementation` — a
- * placement with no GitHub fact to explain, or one that already isn't locked.
+ * Builds the accessible explanation for a task's current stage-authority
+ * fact: what it is, and what must change to unlock a manual move (ticket
+ * #48's disabled-destination criterion) — or, for the two fact kinds that
+ * never lock anything (`manual`, `provisioned-implementation`), the
+ * informational counterpart the Task Detail Panel needs (ticket #49) to
+ * label a manual placement as manual, and to identify the workspace fact
+ * behind a runtime-derived `implementing` stage, rather than leaving either
+ * unexplained. Callers that only care about *locking* (e.g. the board's
+ * disabled cross-stage destinations) already gate on {@link StageAuthority.governs}
+ * before calling this, so this distinction never affects them — both kinds
+ * always have `governs: false`.
  */
 export function describeStageAuthorityFact(
   fact: StageAuthorityFact
@@ -312,7 +322,16 @@ export function describeStageAuthorityFact(
         link: { url: fact.reason.issue.url, label: issueLabel(fact.reason.issue) },
       };
     case 'provisioned-implementation':
+      return {
+        fact: 'In Implementing because of a provisioned workspace — an active local implementation session.',
+        action: 'This does not lock the stage; move it manually at any time.',
+        link: null,
+      };
     case 'manual':
-      return null;
+      return {
+        fact: 'Manual placement — no GitHub or workspace fact currently governs this stage.',
+        action: 'Move it to any stage at any time; nothing will silently overwrite this placement.',
+        link: null,
+      };
   }
 }
