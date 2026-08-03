@@ -735,11 +735,12 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
   });
 
   // exploring/spec are GitHub-provable stages the PR-only stage-authority RPC
-  // doesn't cover; since a task can only reach either through the issue-derived
-  // sync pass (never a manual choice — see DECLARATIVE_WORKFLOW_STAGES), the
-  // panel must lock the selector using the linked Map/Spec issue itself rather
-  // than let a manual write silently and permanently override the stage.
-  it('locks the selector and names the linked Spec issue for a task sitting in Spec', async () => {
+  // doesn't cover. The board's drag-and-drop can still move a card into either
+  // column regardless of its linked issues (ticket #48/#56), so the panel only
+  // locks the selector when the linked Map/Spec issue is the same fact the
+  // issue-derived sync pass would have read as open — a closed or absent link
+  // must never let the panel assert an authority it can't substantiate.
+  it('locks the selector and names the linked Spec issue for a task sitting in Spec with an open Spec issue', async () => {
     const linkedIssues: LinkedIssueRoles = {
       version: '1',
       spec: {
@@ -747,6 +748,7 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
         url: 'https://github.com/acme/repo/issues/42',
         title: 'Spec issue',
         identifier: '#42',
+        status: 'open',
       },
     };
     const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues });
@@ -760,6 +762,32 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     expect(stageSelect().disabled).toBe(true);
     expect(panelText()).toContain('Spec');
     expect(panelText()).toContain('#42');
+  });
+
+  it('does not lock the selector for a task sitting in Spec whose linked Spec issue is closed', async () => {
+    const linkedIssues: LinkedIssueRoles = {
+      version: '1',
+      spec: {
+        provider: 'github',
+        url: 'https://github.com/acme/repo/issues/42',
+        title: 'Spec issue',
+        identifier: '#42',
+        status: 'closed',
+      },
+    };
+    const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(stageSelect().disabled).toBe(false);
+    // The linked issue is still listed in the Linked Issues section (ticket
+    // #41's content) — only the stage-authority claim goes away.
+    expect(panelText()).not.toContain('Held in Spec');
+    expect(linkedIssueRoles()).toEqual(['spec']);
   });
 });
 

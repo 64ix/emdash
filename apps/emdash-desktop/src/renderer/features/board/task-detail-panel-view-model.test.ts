@@ -197,12 +197,18 @@ describe('deriveStageSection', () => {
 
   // `exploring`/`spec` are GitHub-provable stages (CONTEXT.md "Workflow Stage",
   // docs/adr/0003) the PR-only `tasks.getTaskStageAuthority` RPC can't speak to.
-  // Since they are never offered as a manual choice (DECLARATIVE_WORKFLOW_STAGES
-  // excludes them), a persisted `exploring`/`spec` stage can only have come from
-  // the issue-derived sync pass — the selector must lock using that same link
-  // rather than let a manual write silently and permanently outrank the fact.
-  it('is locked, naming the linked Map issue, when the stage is GitHub-proven by Exploring', () => {
-    const map = makeIssue({ identifier: '#55', title: 'Map issue', url: 'https://x/issues/55' });
+  // But the board's drag-and-drop can move a card into either column regardless
+  // of its linked issues (ticket #48/#56), so a persisted `exploring`/`spec`
+  // stage is only GitHub-proven when the linked Map/Spec issue is the exact
+  // fact `deriveWorkflowStageFromIssues` would read as open: a GitHub issue
+  // whose `status` is `'open'`.
+  it('is locked, naming the linked Map issue, when it is an open GitHub issue', () => {
+    const map = makeIssue({
+      identifier: '#55',
+      title: 'Map issue',
+      url: 'https://x/issues/55',
+      status: 'open',
+    });
     const declarativeAuthority: TaskStageAuthority = {
       holdingPr: null,
       isCurrentStageGithubProven: false,
@@ -220,8 +226,13 @@ describe('deriveStageSection', () => {
     expect(section.explanationLink).toEqual({ url: 'https://x/issues/55', label: '#55' });
   });
 
-  it('is locked, naming the linked Spec issue, when the stage is GitHub-proven by Spec', () => {
-    const spec = makeIssue({ identifier: '#56', title: 'Spec issue', url: 'https://x/issues/56' });
+  it('is locked, naming the linked Spec issue, when it is an open GitHub issue', () => {
+    const spec = makeIssue({
+      identifier: '#56',
+      title: 'Spec issue',
+      url: 'https://x/issues/56',
+      status: 'open',
+    });
 
     const section = deriveStageSection('spec', undefined, { version: '1', spec });
 
@@ -229,6 +240,42 @@ describe('deriveStageSection', () => {
     expect(section.explanation).toContain('Spec');
     expect(section.explanation).toContain('#56');
     expect(section.explanationLink).toEqual({ url: 'https://x/issues/56', label: '#56' });
+  });
+
+  it('is unlocked/declarative for Exploring when the linked Map issue is closed', () => {
+    const map = makeIssue({ identifier: '#55', title: 'Map issue', status: 'closed' });
+
+    const section = deriveStageSection('exploring', undefined, { version: '1', map });
+
+    expect(section.locked).toBe(false);
+    expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
+    expect(section.explanation).toBeNull();
+  });
+
+  it('is unlocked/declarative for Spec when the linked Spec issue is closed', () => {
+    const spec = makeIssue({ identifier: '#56', title: 'Spec issue', status: 'closed' });
+
+    const section = deriveStageSection('spec', undefined, { version: '1', spec });
+
+    expect(section.locked).toBe(false);
+    expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
+    expect(section.explanation).toBeNull();
+  });
+
+  it('is unlocked/declarative for Exploring when the linked Map issue is from a non-GitHub provider', () => {
+    // Even a status string that happens to read "open" isn't a fact the
+    // GitHub-only sync pass would ever have consulted.
+    const map = makeIssue({
+      provider: 'gitlab',
+      identifier: '#55',
+      title: 'Map issue',
+      status: 'open',
+    });
+
+    const section = deriveStageSection('exploring', undefined, { version: '1', map });
+
+    expect(section.locked).toBe(false);
+    expect(section.options).toEqual(DECLARATIVE_WORKFLOW_STAGES);
   });
 
   it('falls back to unlocked/declarative for exploring/spec when the matching link is missing', () => {
@@ -310,7 +357,7 @@ describe('buildTaskDetailPanelViewModel', () => {
   });
 
   it('locks the stage selector for a task sitting in Spec with no PR yet (issue-derived authority)', () => {
-    const spec = makeIssue({ identifier: '#30', title: 'Spec issue' });
+    const spec = makeIssue({ identifier: '#30', title: 'Spec issue', status: 'open' });
     const task = makeTask({
       workflowStage: 'spec',
       linkedIssues: { version: '1', spec },

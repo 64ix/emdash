@@ -114,6 +114,24 @@ function issueLabel(issue: LinkedIssue): string {
   return issue.identifier || issue.title;
 }
 
+/**
+ * Whether a linked issue is the same fact `deriveWorkflowStageFromIssues`
+ * (`src/main/core/issues/inbound-sync/stage-derivation.ts`) would read as
+ * `state: 'open'`. That function is fed exclusively by the GitHub inbound
+ * issues sync (`issues-sync-engine.ts`), which only ever computes Map/Spec
+ * facts for issues belonging to the project's connected GitHub repository —
+ * a linked issue from another provider is never consulted, no matter what its
+ * own status string says. `remoteIssueToLinkedIssue` (`link-suggestions.ts`)
+ * stamps `status` with the raw GitHub `state` for those issues, so `provider
+ * === 'github' && status === 'open'` is the literal value the derivation
+ * would see; every other provider's status vocabulary (e.g. GitLab's
+ * `'opened'`, Jira/Linear workflow names, Forgejo's GitHub-shaped `'open'`)
+ * is not a fact this panel can treat as GitHub-proven.
+ */
+function isGithubProvenOpenIssue(issue: LinkedIssue): boolean {
+  return issue.provider === 'github' && issue.status === 'open';
+}
+
 /** `exploring`/`spec` explanation text using the linked Map/Spec issue itself as the fact. */
 function issueStageAuthorityExplanation(stage: 'exploring' | 'spec', issue: LinkedIssue): string {
   return stage === 'exploring'
@@ -127,13 +145,16 @@ function issueStageAuthorityExplanation(stage: 'exploring' | 'spec', issue: Link
  *
  * `exploring` and `spec` are GitHub-provable stages (CONTEXT.md "Workflow Stage",
  * docs/adr/0003) the `tasks.getTaskStageAuthority` RPC doesn't speak to — it only
- * derives the PR-provable half. But `DECLARATIVE_WORKFLOW_STAGES` never offers
- * `exploring`/`spec` as a manual choice, so the *only* way a task's persisted
- * stage is currently `exploring`/`spec` is the issue-derived sync pass having put
- * it there — the linked Map/Spec issue is the same fact that pass would use.
- * Lock the selector using that link instead of silently allowing a manual write
- * (e.g. straight to `implementing`) that pass could never self-correct, since the
- * issue-derived stage only ever *advances* rank, never re-asserts an outranked one.
+ * derives the PR-provable half. `DECLARATIVE_WORKFLOW_STAGES` never offers
+ * `exploring`/`spec` as a manual choice, but the board's drag-and-drop *can* still
+ * move a card into either column (ticket #48/#56) regardless of its linked issues,
+ * so a persisted `exploring`/`spec` stage is not proof by itself that the
+ * issue-derived sync pass put it there. Lock the selector only when the linked
+ * Map/Spec issue is the exact fact `deriveWorkflowStageFromIssues` would read as
+ * open (`isGithubProvenOpenIssue`) — a merely-present but closed, stale, or
+ * non-GitHub link never gave the sync pass a reason to assert this stage, so
+ * asserting an authority explanation from it here would be as false as the
+ * drag-and-drop premise this replaces.
  */
 export function deriveStageSection(
   currentStage: WorkflowStage | null,
@@ -153,7 +174,7 @@ export function deriveStageSection(
 
   if (currentStage === 'exploring' || currentStage === 'spec') {
     const holdingIssue = currentStage === 'exploring' ? linkedIssues?.map : linkedIssues?.spec;
-    if (holdingIssue) {
+    if (holdingIssue && isGithubProvenOpenIssue(holdingIssue)) {
       return {
         current: currentStage,
         locked: true,
