@@ -29,6 +29,20 @@ function fetchItem(overrides: Partial<Extract<ToolNode, { kind: 'web-fetch-tool-
   } satisfies Extract<ToolNode, { kind: 'web-fetch-tool-call' }>;
 }
 
+function mcpItem(overrides: Partial<Extract<ToolNode, { kind: 'mcp-tool-call' }>> = {}) {
+  return {
+    kind: 'mcp-tool-call',
+    id: 'mcp-1',
+    seq: 0,
+    toolCallId: 'call-mcp',
+    title: 'linear.searchIssues',
+    status: 'done',
+    tool: 'searchIssues',
+    server: 'linear',
+    ...overrides,
+  } satisfies Extract<ToolNode, { kind: 'mcp-tool-call' }>;
+}
+
 function unknownItem(overrides: Partial<Extract<ToolNode, { kind: 'unknown-tool-call' }>> = {}) {
   return {
     kind: 'unknown-tool-call',
@@ -201,5 +215,85 @@ describe('toolFromItem', () => {
     const result = toolFromItem(unknownItem({ outputText: huge }), baseCtx());
     expect(result.result?.truncated).toBe(true);
     expect(result.result?.text.length).toBeLessThan(huge.length);
+  });
+
+  // ── MCP structured output (ticket #31) ──────────────────────────────────────
+
+  it('an MCP call whose output is a JSON object gets a structured result alongside the flat text', () => {
+    const result = toolFromItem(mcpItem({ outputText: '{"issues": []}' }), baseCtx());
+    expect(result.result?.text).toBe('{"issues": []}');
+    expect(result.structuredResult).toEqual({
+      kind: 'object',
+      entries: [{ key: 'issues', value: { kind: 'array', items: [], omittedItems: 0 } }],
+      omittedEntries: 0,
+    });
+  });
+
+  it('an MCP call whose output is plain (non-JSON) text has no structured result — text fallback only', () => {
+    const result = toolFromItem(mcpItem({ outputText: 'issue LINEAR-1 created' }), baseCtx());
+    expect(result.result?.text).toBe('issue LINEAR-1 created');
+    expect(result.structuredResult).toBeUndefined();
+  });
+
+  it('an MCP call whose output is a bare JSON scalar has no structured result — text fallback only', () => {
+    const result = toolFromItem(mcpItem({ outputText: '42' }), baseCtx());
+    expect(result.result?.text).toBe('42');
+    expect(result.structuredResult).toBeUndefined();
+  });
+
+  it('an MCP error result also gets a structured view when the error payload is JSON', () => {
+    const result = toolFromItem(
+      mcpItem({ status: 'error', outputText: '{"error": {"code": 404, "message": "not found"}}' }),
+      baseCtx()
+    );
+    expect(result.presentationStatus).toBe('error');
+    expect(result.errorDetail).toBeDefined();
+    expect(result.structuredResult).toEqual({
+      kind: 'object',
+      entries: [
+        {
+          key: 'error',
+          value: {
+            kind: 'object',
+            entries: [
+              { key: 'code', value: { kind: 'number', value: '404' } },
+              { key: 'message', value: { kind: 'string', value: 'not found', truncated: false } },
+            ],
+            omittedEntries: 0,
+          },
+        },
+      ],
+      omittedEntries: 0,
+    });
+  });
+
+  it('redacts a secret nested inside an MCP structured result', () => {
+    const secret = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789';
+    const result = toolFromItem(mcpItem({ outputText: `{"token": "${secret}"}` }), baseCtx());
+    expect(JSON.stringify(result.structuredResult)).not.toContain(secret);
+  });
+
+  it('never throws for a genuinely hostile MCP output payload (deep nesting + huge fan-out)', () => {
+    let deep: unknown = 'leaf';
+    for (let i = 0; i < 50; i++) deep = [deep];
+    const wide: Record<string, number> = {};
+    for (let i = 0; i < 5000; i++) wide[`k${i}`] = i;
+    const hostile = JSON.stringify({ deep, wide });
+
+    expect(() => toolFromItem(mcpItem({ outputText: hostile }), baseCtx())).not.toThrow();
+    const result = toolFromItem(mcpItem({ outputText: hostile }), baseCtx());
+    expect(result.structuredResult?.kind).toBe('object');
+  });
+
+  it('identifies server and tool as data on the params list regardless of how unusual the names are', () => {
+    const result = toolFromItem(
+      mcpItem({ server: 'weird/server::name', tool: 'weird.tool<name>' }),
+      baseCtx()
+    );
+    expect(result.name).toBe('MCP');
+    expect(result.params).toEqual([
+      { label: 'Tool', value: 'weird.tool<name>' },
+      { label: 'Server', value: 'weird/server::name' },
+    ]);
   });
 });

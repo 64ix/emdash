@@ -88,6 +88,31 @@ export type ToolResource =
   | { kind: 'workspace-file'; path: string; label: string }
   | { kind: 'url'; url: string; label: string };
 
+/**
+ * A bounded, redacted node in a structured (JSON-shaped) tool result tree —
+ * built by `buildStructuredResult` in `tool-structured.ts` for any generic
+ * tool call whose `outputText` parses as a JSON object or array (typically
+ * MCP tool results). Never built directly from `JSON.stringify`: every
+ * container caps its entries/items, every string is bounded and redacted,
+ * and `circular`/`truncated`/`unrepresentable` cover inputs that cannot be
+ * represented safely (cyclic references, values past the depth/size budget,
+ * or non-JSON-safe JS types encountered when building directly from an
+ * already-parsed value).
+ */
+export type ToolStructuredValue =
+  | { kind: 'object'; entries: ToolStructuredEntry[]; omittedEntries: number }
+  | { kind: 'array'; items: ToolStructuredValue[]; omittedItems: number }
+  | { kind: 'string'; value: string; truncated: boolean }
+  | { kind: 'number'; value: string }
+  | { kind: 'boolean'; value: boolean }
+  | { kind: 'null' }
+  | { kind: 'circular' }
+  | { kind: 'truncated'; reason: 'max-depth' | 'budget' }
+  | { kind: 'unrepresentable' };
+
+/** One bounded, redacted `key`/`value` pair inside a structured object node. */
+export type ToolStructuredEntry = { key: string; value: ToolStructuredValue };
+
 export type ChatToolCall = {
   kind: 'tool';
   id: string;
@@ -126,6 +151,15 @@ export type ChatToolCall = {
    * populate it; other `ChatToolCall` producers keep relying on raw `status`.
    */
   presentationStatus?: ToolPresentationStatus;
+  /**
+   * Bounded, redacted structured view of `result`/`errorDetail` when the raw
+   * output text parses as a JSON object or array (see `buildStructuredResult`
+   * in `tool-structured.ts`) — set for MCP tool calls today, but derived
+   * generically so any other generic-inspector kind with JSON-shaped output
+   * gets the same treatment. Absent for plain-text output, bare JSON scalars,
+   * and malformed/oversized payloads — those fall back to `result`/`errorDetail`.
+   */
+  structuredResult?: ToolStructuredValue;
 };
 
 export type SubagentPhase = 'spawning' | 'running' | 'completed' | 'failed';

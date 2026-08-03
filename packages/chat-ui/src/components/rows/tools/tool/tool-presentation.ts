@@ -25,6 +25,7 @@ import type {
   ToolStatus,
   ToolTextBlock,
 } from '@/model';
+import { buildStructuredResult, structuredLines } from './tool-structured';
 
 // ── Bounds ────────────────────────────────────────────────────────────────────
 
@@ -145,9 +146,17 @@ export function buildToolParams(item: ToolCallLike): ToolParam[] {
       return params;
     }
     case 'mcp-tool-call': {
-      const params: ToolParam[] = [{ label: 'Tool', value: paramValue(item.tool) }];
+      // Server/tool identity is attacker-influenced provider data: apply the
+      // same safe-name fallback #30 established for unknown-tool-call names
+      // rather than trusting these strings to be present/non-blank.
+      const params: ToolParam[] = [
+        { label: 'Tool', value: paramValue(safeToolName(item.tool, 'Unknown tool')) },
+      ];
       if (item.server !== undefined && item.server !== null) {
-        params.push({ label: 'Server', value: paramValue(item.server) });
+        params.push({
+          label: 'Server',
+          value: paramValue(safeToolName(item.server, 'Unknown server')),
+        });
       }
       return params;
     }
@@ -274,6 +283,12 @@ export function toolFromItem(item: ToolNode, ctx: SegmentCtx): ChatToolCall {
     turnCancelled,
   });
   const isError = presentationStatus === 'error';
+  // Derived generically (not gated to 'mcp-tool-call') so the same JSON-shaped
+  // output from any of these four kinds gets a structured view for free —
+  // extending the adapter rather than forking a provider-specific branch.
+  // `undefined` for plain text, bare scalars, and malformed/oversized JSON;
+  // Tool.tsx falls back to the existing plain-text result/error rendering.
+  const structuredResult = buildStructuredResult(item.outputText);
 
   return {
     kind: 'tool',
@@ -286,6 +301,7 @@ export function toolFromItem(item: ToolNode, ctx: SegmentCtx): ChatToolCall {
     rawToolKind: item.kind === 'unknown-tool-call' ? item.toolKind : undefined,
     params: buildToolParams(item),
     resources: buildToolResources(item),
+    ...(structuredResult ? { structuredResult } : {}),
     ...(isError
       ? { errorDetail: outputText, error: firstLine(outputText) }
       : { result: outputText }),
@@ -309,6 +325,13 @@ export function buildCopyText(item: ChatToolCall): string {
     if (item.errorDetail.truncated) {
       lines.push(`(truncated — ${item.errorDetail.omittedChars} chars omitted)`);
     }
+  }
+  // Additive: the structured view can represent more of a large-but-valid
+  // JSON payload than the flat (MAX_RESULT_CHARS-bounded) text above, so
+  // "Copy details" stays honest about the call's full inspectable scope
+  // rather than silently dropping what the structured section shows.
+  if (item.structuredResult) {
+    lines.push('', 'Structured view:', ...structuredLines(item.structuredResult));
   }
   for (const r of item.resources ?? []) {
     lines.push(r.kind === 'url' ? `Resource: ${r.url}` : `Resource: ${r.path}`);
