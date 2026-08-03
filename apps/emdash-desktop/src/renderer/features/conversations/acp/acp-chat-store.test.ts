@@ -450,7 +450,7 @@ describe('AcpChatStore.changesFootprint', () => {
       ...makeTurn(10),
       items: [modifyItem('newer-edit', 1, 'src/a.ts')],
     };
-    const { store, fakeChatState } = setUpStore([newerTurn], 10);
+    const { store } = setUpStore([newerTurn], 10);
     (store as unknown as { _syncChangesFootprint: () => void })._syncChangesFootprint();
     expect(store.changesFootprint.edited).toEqual([
       expect.objectContaining({
