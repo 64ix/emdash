@@ -26,7 +26,7 @@ import { CSS } from '@dnd-kit/utilities';
 // #45's per-column create button.
 import { AlertTriangle, ArrowUpRight, ChevronRight, Plus } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   agentStateLabel,
   cardArtifactBadgeText,
@@ -164,9 +164,15 @@ function isAboveTarget(activeRect: ClientRect | null, overRect: ClientRect | nul
 
 export const BoardMainPanel = observer(function BoardMainPanel() {
   const {
-    params: { projectId },
+    params: { projectId, focusTaskId },
   } = useParams('board');
   const { navigate } = useNavigate();
+  // Focused-task navigation (ticket #50): the outer board element cards are
+  // queried against (by `data-board-card`) to scroll a focused one into
+  // view, and a guard so a given `focusTaskId` is only ever resolved once
+  // per arrival, not on every re-render while it stays unchanged.
+  const boardContainerRef = useRef<HTMLDivElement>(null);
+  const focusHandledRef = useRef<string | undefined>(undefined);
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
   const { ghostCards, adopt: adoptGhostCard, reject: rejectGhostCard } = useGhostCards(projectId);
@@ -305,6 +311,90 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [panelTarget]);
 
+  // Card selection (ticket #49): opens/switches the inspector — a read-only
+  // view-state change, never a provision/archive/write (see `BoardCard`'s
+  // click and Enter/Space keydown handlers below, which both call this same
+  // function, so keyboard and pointer selection can never diverge). Only
+  // fires `board_inspector_opened` when the shown target actually changes:
+  // re-selecting the already-open card/Ghost Card is a documented no-op
+  // (CONTEXT.md "Task Detail Panel") and must not re-log "opening" it again.
+  // The event carries only which *kind* of target is shown, never a task
+  // name, issue title, or branch — mirrors `board_opened`'s minimal payload.
+  //
+  // Declared ahead of the `!manager` early return below (alongside
+  // `handleSelectGhostCard` and the focused-task navigation effects that
+  // reuse it) purely so those effects can be called unconditionally, in the
+  // same hook order on every render, as React's rules of hooks require —
+  // neither function itself reads `manager`.
+  const handleSelectTask = (taskId: string) => {
+    const alreadyShown = panelTarget?.kind === 'task' && panelTarget.taskId === taskId;
+    if (!alreadyShown) {
+      captureTelemetry('board_inspector_opened', { target_kind: 'task', project_id: projectId });
+    }
+    setPanelTarget({ kind: 'task', taskId });
+  };
+
+  const handleSelectGhostCard = (ghostCard: GhostCard) => {
+    const alreadyShown = panelTarget?.kind === 'ghost' && panelTarget.ghostCard.id === ghostCard.id;
+    if (!alreadyShown) {
+      captureTelemetry('board_inspector_opened', { target_kind: 'ghost', project_id: projectId });
+    }
+    setPanelTarget({ kind: 'ghost', ghostCard });
+  };
+
+  // Focused-task navigation (ticket #50): the task titlebar's Workflow Stage
+  // chip carries an optional `focusTaskId` back to this board. Resolved
+  // against exactly the same active-task set the board itself already
+  // renders (`storeById`, which already excludes archived and Shipped-Faded
+  // tasks — see `isBoardDisplayable`), so an id that doesn't resolve there
+  // (invalid, archived, or simply absent) is a silent no-op: nothing is
+  // selected, nothing scrolls, nothing throws, and the rest of the board
+  // renders completely normally. A resolved id that the board's own filters
+  // (search, Needs Attention, compact filters) currently hide is a real case
+  // too — clearing them is what lets the round trip this ticket promises
+  // actually land on a visible, scrollable, highlighted card instead of a
+  // selection with nothing on screen to show for it. Reuses `handleSelectTask`
+  // (ticket #49) — the one existing selection path — so a focused arrival
+  // opens the inspector and highlights the card exactly the way a manual
+  // click or Enter/Space would.
+  //
+  // Only depends on `focusTaskId`: `storeById`/`agentStatusById`/`filters`
+  // are rebuilt fresh every render (not memoized) and `handleSelectTask` is
+  // recreated every render too, so listing them would make this effect
+  // re-run every render — harmless (the ref guard below still no-ops it
+  // after the first resolved arrival) but noisy. The values it closes over
+  // are the ones the render that actually changed `focusTaskId` computed,
+  // which is what matters.
+  useEffect(() => {
+    if (!focusTaskId || focusHandledRef.current === focusTaskId) return;
+    focusHandledRef.current = focusTaskId;
+    const focusedStore = storeById.get(focusTaskId);
+    const focusedTask = focusedStore ? registeredTaskData(focusedStore) : undefined;
+    if (!focusedTask) return;
+    if (!taskPassesBoardFilters(focusedTask, agentStatusById.get(focusTaskId) ?? null, filters)) {
+      setFilters(EMPTY_BOARD_FILTERS);
+    }
+    handleSelectTask(focusTaskId);
+    // oxlint-disable-next-line react/exhaustive-deps
+  }, [focusTaskId]);
+
+  // Scrolls the focused card into view once it is actually on screen — runs
+  // after the effect above has already committed a consistent render (any
+  // filter reset included), so the query below always targets the real
+  // visible card rather than a stale or about-to-be-filtered one. An id that
+  // never resolves to a rendered card (same fail-safe cases as above) simply
+  // finds nothing to scroll to.
+  useEffect(() => {
+    if (!focusTaskId) return;
+    // `window.CSS.escape`, not the bare global `CSS` -- `@dnd-kit/utilities`'s
+    // own `CSS` (imported above for `CSS.Transform.toString`) shadows it in
+    // this module's scope and has no `.escape`.
+    const target = boardContainerRef.current?.querySelector<HTMLElement>(
+      `[data-board-card="${window.CSS.escape(focusTaskId)}"]`
+    );
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [focusTaskId, filters]);
+
   if (!manager) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-foreground-muted">
@@ -334,31 +424,6 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     if (result?.success) {
       setPanelTarget({ kind: 'task', taskId: result.data.task.id });
     }
-  };
-
-  // Card selection (ticket #49): opens/switches the inspector — a read-only
-  // view-state change, never a provision/archive/write (see `BoardCard`'s
-  // click and Enter/Space keydown handlers below, which both call this same
-  // function, so keyboard and pointer selection can never diverge). Only
-  // fires `board_inspector_opened` when the shown target actually changes:
-  // re-selecting the already-open card/Ghost Card is a documented no-op
-  // (CONTEXT.md "Task Detail Panel") and must not re-log "opening" it again.
-  // The event carries only which *kind* of target is shown, never a task
-  // name, issue title, or branch — mirrors `board_opened`'s minimal payload.
-  const handleSelectTask = (taskId: string) => {
-    const alreadyShown = panelTarget?.kind === 'task' && panelTarget.taskId === taskId;
-    if (!alreadyShown) {
-      captureTelemetry('board_inspector_opened', { target_kind: 'task', project_id: projectId });
-    }
-    setPanelTarget({ kind: 'task', taskId });
-  };
-
-  const handleSelectGhostCard = (ghostCard: GhostCard) => {
-    const alreadyShown = panelTarget?.kind === 'ghost' && panelTarget.ghostCard.id === ghostCard.id;
-    if (!alreadyShown) {
-      captureTelemetry('board_inspector_opened', { target_kind: 'ghost', project_id: projectId });
-    }
-    setPanelTarget({ kind: 'ghost', ghostCard });
   };
 
   const awaitingInputIds = new Set<string>();
@@ -686,7 +751,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   );
 
   return (
-    <div className="flex h-full flex-col bg-background text-foreground">
+    <div ref={boardContainerRef} className="flex h-full flex-col bg-background text-foreground">
       <BoardHeader
         projectName={projectName}
         filters={filters}
@@ -1018,6 +1083,10 @@ const BoardCard = observer(function BoardCard({
   return (
     <div
       ref={setNodeRef}
+      // Focused-task navigation (ticket #50): lets the board locate and
+      // scroll to this specific card without a second id-keyed lookup path —
+      // mirrors `GhostCardView`'s pre-existing `data-ghost-card`.
+      data-board-card={task.id}
       style={style}
       {...attributes}
       {...listeners}
