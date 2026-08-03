@@ -1,7 +1,11 @@
 import { Badge } from '@renderer/lib/ui/badge';
 import { EmptyState } from '@renderer/lib/ui/empty-state';
 import type { ChangesRailFilter } from '@shared/view-state';
-import type { ChangesFootprint, ChangesFootprintEntry } from './acp-changes-footprint';
+import type {
+  ChangesFootprint,
+  ChangesFootprintEntry,
+  EditedChangesFootprintEntry,
+} from './acp-changes-footprint';
 import { ChangesRailRow } from './changes-rail-row';
 
 interface ChangesRailListProps {
@@ -9,6 +13,8 @@ interface ChangesRailListProps {
   filter: ChangesRailFilter;
   selectedPath: string | null;
   onSelect: (entry: ChangesFootprintEntry) => void;
+  onOpenFile: (entry: ChangesFootprintEntry) => void;
+  onOpenDiff: (entry: EditedChangesFootprintEntry) => void;
 }
 
 function ChangesRailSection({
@@ -16,11 +22,15 @@ function ChangesRailSection({
   entries,
   selectedPath,
   onSelect,
+  onOpenFile,
+  onOpenDiff,
 }: {
   label: string;
   entries: readonly ChangesFootprintEntry[];
   selectedPath: string | null;
   onSelect: (entry: ChangesFootprintEntry) => void;
+  onOpenFile: (entry: ChangesFootprintEntry) => void;
+  onOpenDiff?: (entry: EditedChangesFootprintEntry) => void;
 }) {
   return (
     <div className="flex flex-col">
@@ -35,6 +45,10 @@ function ChangesRailSection({
             entry={entry}
             isSelected={selectedPath === entry.path}
             onSelect={() => onSelect(entry)}
+            onOpenFile={() => onOpenFile(entry)}
+            onOpenDiff={
+              entry.kind === 'edited' && onOpenDiff ? () => onOpenDiff(entry) : undefined
+            }
           />
         ))}
       </div>
@@ -48,6 +62,8 @@ export function ChangesRailList({
   filter,
   selectedPath,
   onSelect,
+  onOpenFile,
+  onOpenDiff,
 }: ChangesRailListProps) {
   const showEdited = filter !== 'read';
   const showRead = filter !== 'edited';
@@ -71,6 +87,8 @@ export function ChangesRailList({
           entries={footprint.edited}
           selectedPath={selectedPath}
           onSelect={onSelect}
+          onOpenFile={onOpenFile}
+          onOpenDiff={onOpenDiff}
         />
       )}
       {showRead && (
@@ -79,6 +97,7 @@ export function ChangesRailList({
           entries={footprint.read}
           selectedPath={selectedPath}
           onSelect={onSelect}
+          onOpenFile={onOpenFile}
         />
       )}
     </div>

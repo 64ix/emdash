@@ -60,10 +60,18 @@ import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
 import { failedSubmissionPreview } from './acp-submission-recovery';
-import type { ChangesFootprintEntry } from './changes/acp-changes-footprint';
+import type {
+  ChangesFootprintEntry,
+  EditedChangesFootprintEntry,
+} from './changes/acp-changes-footprint';
+import { changesProvenanceJumpTarget } from './changes/changes-provenance';
 import { ChangesDrawer } from './changes/changes-drawer';
 import { ChangesRail } from './changes/changes-rail';
-import { openChangesFootprintEntry } from './changes/changes-rail-actions';
+import {
+  openChangesFootprintDiff,
+  openChangesFootprintEntry,
+  openChangesFootprintFile,
+} from './changes/changes-rail-actions';
 import { isChangesRailNarrow } from './changes/changes-rail-layout';
 import { activateChatLink } from './chat-link-activation';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
@@ -956,8 +964,26 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
   const showHero = showComposer && store.isEmpty;
   const changesRail = getTaskView(store.projectId, store.taskId)?.changesRail ?? null;
   const isChangesRailNarrowLayout = isChangesRailNarrow(pane.dimensions?.width ?? null);
+  // Primary action for a Changes entry (ticket #35): jump to its transcript
+  // provenance when it has one — reusing the same off-DOM-aware, pagination-
+  // aware seam the outline uses (see AcpChatStore.scrollToTranscriptItem) —
+  // or fall back to the previous default open behavior when there is nothing
+  // to jump to (a Git-only change, e.g. a rename never touched by the agent).
+  // "Open file"/"Open diff" stay reachable as separate explicit actions below
+  // regardless of which branch this takes.
   const handleSelectChangesEntry = (entry: ChangesFootprintEntry) => {
+    const target = changesProvenanceJumpTarget(entry);
+    if (target) {
+      void store.scrollToTranscriptItem(target.itemId, { align: 'start' });
+      return;
+    }
     openChangesFootprintEntry(store.projectId, store.taskId, entry);
+  };
+  const handleOpenChangesEntryFile = (entry: ChangesFootprintEntry) => {
+    openChangesFootprintFile(store.projectId, store.taskId, entry.path);
+  };
+  const handleOpenChangesEntryDiff = (entry: EditedChangesFootprintEntry) => {
+    openChangesFootprintDiff(store.projectId, store.taskId, entry);
   };
 
   const outlineWide = panelWidth >= OUTLINE_NARROW_BREAKPOINT_PX;
@@ -1123,6 +1149,8 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
           store={changesRail}
           footprint={store.changesFootprint}
           onSelectEntry={handleSelectChangesEntry}
+          onOpenFile={handleOpenChangesEntryFile}
+          onOpenDiff={handleOpenChangesEntryDiff}
         />
       )}
       {changesRail && isChangesRailNarrowLayout && (
@@ -1130,6 +1158,8 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
           store={changesRail}
           footprint={store.changesFootprint}
           onSelectEntry={handleSelectChangesEntry}
+          onOpenFile={handleOpenChangesEntryFile}
+          onOpenDiff={handleOpenChangesEntryDiff}
         />
       )}
 

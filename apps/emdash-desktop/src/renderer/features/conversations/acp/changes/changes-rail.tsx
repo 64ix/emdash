@@ -1,7 +1,11 @@
 import { observer } from 'mobx-react-lite';
 import { useCallback, useRef } from 'react';
 import { cn } from '@renderer/utils/utils';
-import type { ChangesFootprint, ChangesFootprintEntry } from './acp-changes-footprint';
+import type {
+  ChangesFootprint,
+  ChangesFootprintEntry,
+  EditedChangesFootprintEntry,
+} from './acp-changes-footprint';
 import { ChangesRailContent } from './changes-rail-content';
 import {
   CHANGES_RAIL_MAX_WIDTH,
@@ -15,6 +19,8 @@ export interface ChangesRailProps {
   store: ChangesRailViewStore;
   footprint: ChangesFootprint;
   onSelectEntry: (entry: ChangesFootprintEntry) => void;
+  onOpenFile: (entry: ChangesFootprintEntry) => void;
+  onOpenDiff: (entry: EditedChangesFootprintEntry) => void;
 }
 
 /**
@@ -27,6 +33,8 @@ export const ChangesRail = observer(function ChangesRail({
   store,
   footprint,
   onSelectEntry,
+  onOpenFile,
+  onOpenDiff,
 }: ChangesRailProps) {
   const startRef = useRef<{ pointerX: number; width: number } | null>(null);
 
@@ -106,6 +114,14 @@ export const ChangesRail = observer(function ChangesRail({
           onSelectEntry={(entry) => {
             store.setSelectedPath(entry.path);
             onSelectEntry(entry);
+          }}
+          onOpenFile={(entry) => {
+            store.setSelectedPath(entry.path);
+            onOpenFile(entry);
+          }}
+          onOpenDiff={(entry) => {
+            store.setSelectedPath(entry.path);
+            onOpenDiff(entry);
           }}
           onClose={() => store.setOpen(false)}
         />
