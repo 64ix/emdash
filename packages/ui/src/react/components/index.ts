@@ -27,6 +27,11 @@ export type {
   PermissionBandProps,
   ComposerPermissionRequest,
   ComposerPermissionOption,
+  PermissionResolutionView,
+  ComposerPermissionOperation,
+  ComposerPermissionParam,
+  ComposerPermissionResource,
+  ComposerPermissionTextBlock,
 } from './chat-composer/permission-band';
 export { ConfirmationDialog, type ConfirmationDialogProps } from './confirmation-dialog';
 export { ImageViewerDialog, type ImageViewerDialogProps } from './image-viewer';

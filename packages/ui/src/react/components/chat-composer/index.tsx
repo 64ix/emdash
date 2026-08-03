@@ -16,7 +16,7 @@ import type {
 import { ContextUsageIndicator } from './context-usage-indicator';
 import type { ContextUsage } from './context-usage-indicator';
 import { PermissionBand } from './permission-band';
-import type { ComposerPermissionRequest } from './permission-band';
+import type { ComposerPermissionRequest, PermissionResolutionView } from './permission-band';
 import { QueuedPromptsBand } from './queued-prompts-band';
 import type { ComposerQueuedPrompt } from './queued-prompts-band';
 import * as styles from './chat-composer.css';
@@ -271,6 +271,12 @@ export interface ChatComposerProps {
   permissionQueueCount?: number;
   /** Called with the chosen optionId when the user resolves a permission request. */
   onResolvePermission?: (optionId: string) => void;
+  /** Pending/error state for `permissionRequest` — see `AcpChatStore.permissionResolution`. */
+  permissionResolution?: PermissionResolutionView | null;
+  /** Retry the last-attempted option after a failed permission resolution. */
+  onRetryPermissionResolution?: () => void;
+  /** Jump the transcript to the permission request's originating tool call. */
+  onJumpToPermissionOrigin?: (itemId: string) => void;
 
   /** Prompts accepted while the agent is busy and waiting to be sent. */
   queuedPrompts?: ComposerQueuedPrompt[];
@@ -561,6 +567,9 @@ export function ChatComposer({
   permissionRequest,
   permissionQueueCount = 1,
   onResolvePermission,
+  permissionResolution,
+  onRetryPermissionResolution,
+  onJumpToPermissionOrigin,
   queuedPrompts = [],
   onEditQueuedPrompt,
   onDeleteQueuedPrompt,
@@ -751,6 +760,9 @@ export function ChatComposer({
           request={permissionRequest}
           queueCount={permissionQueueCount}
           onResolve={onResolvePermission}
+          resolution={permissionResolution}
+          onRetry={onRetryPermissionResolution}
+          onJumpToOrigin={onJumpToPermissionOrigin}
         />
       )}
 

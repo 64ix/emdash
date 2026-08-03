@@ -130,6 +130,8 @@ function toComposerPermission(
   return {
     requestId: req.requestId,
     title: req.title,
+    itemId: req.itemId,
+    operation: req.operation,
     options: req.options.map((o) => ({
       optionId: o.optionId,
       name: o.name,
@@ -381,6 +383,17 @@ const ComposerForStore = observer(function ComposerForStore({
     (optionId: string | null) => {
       if (!optionId) return;
       store.resolvePermission(optionId);
+    },
+    [store]
+  );
+
+  const handleRetryPermissionResolution = useCallback(() => {
+    store.retryPermissionResolution();
+  }, [store]);
+
+  const handleJumpToPermissionOrigin = useCallback(
+    (itemId: string) => {
+      void store.scrollToTranscriptItem(itemId, { align: 'start' });
     },
     [store]
   );
@@ -704,6 +717,9 @@ const ComposerForStore = observer(function ComposerForStore({
         permissionRequest={permissionRequest}
         permissionQueueCount={store.permissionQueue.length}
         onResolvePermission={handleResolvePermission}
+        permissionResolution={store.permissionResolution}
+        onRetryPermissionResolution={handleRetryPermissionResolution}
+        onJumpToPermissionOrigin={handleJumpToPermissionOrigin}
         queuedPrompts={store.queuedPrompts}
         onEditQueuedPrompt={(id, text) => store.editQueuedPrompt(id, text)}
         onDeleteQueuedPrompt={(id) => store.deleteQueuedPrompt(id)}
