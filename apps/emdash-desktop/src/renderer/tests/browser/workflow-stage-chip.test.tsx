@@ -55,7 +55,7 @@ function chipButton(): HTMLButtonElement {
 }
 
 describe('WorkflowStageChip (ticket #50)', () => {
-  it('shows the board\'s own stage label for a staged task', async () => {
+  it("shows the board's own stage label for a staged task", async () => {
     root.render(<WorkflowStageChip projectId="p1" taskId="t1" workflowStage="implementing" />);
     await settle();
 
