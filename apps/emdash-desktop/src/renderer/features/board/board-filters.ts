@@ -45,11 +45,10 @@ export function agentStateFilterValue(status: AgentStatus | null): AgentStateFil
 
 export type LinkedIssuePresenceFilterValue = 'linked' | 'unlinked';
 
-export const LINKED_ISSUE_PRESENCE_FILTER_LABELS: Record<LinkedIssuePresenceFilterValue, string> =
-  {
-    linked: 'Has Linked Issue',
-    unlinked: 'No Linked Issue',
-  };
+export const LINKED_ISSUE_PRESENCE_FILTER_LABELS: Record<LinkedIssuePresenceFilterValue, string> = {
+  linked: 'Has Linked Issue',
+  unlinked: 'No Linked Issue',
+};
 
 export function linkedIssuePresenceFilterValue(task: Task): LinkedIssuePresenceFilterValue {
   return mostAdvancedLinkedIssue(task.linkedIssues) ? 'linked' : 'unlinked';
@@ -110,7 +109,10 @@ export function matchesSearchQuery(task: Task, query: string): boolean {
   const trimmed = query.trim().toLowerCase();
   if (!trimmed) return true;
   if (task.name.toLowerCase().includes(trimmed)) return true;
-  const identifiers = [...linkedIssueSearchIdentifiers(task), ...pullRequestSearchIdentifiers(task)];
+  const identifiers = [
+    ...linkedIssueSearchIdentifiers(task),
+    ...pullRequestSearchIdentifiers(task),
+  ];
   return identifiers.some((identifier) => identifier.toLowerCase().includes(trimmed));
 }
 

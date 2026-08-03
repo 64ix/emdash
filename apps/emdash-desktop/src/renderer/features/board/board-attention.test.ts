@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
 import type { Task } from '@shared/core/tasks/tasks';
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +14,19 @@ vi.mock('@renderer/features/tasks/stores/task-store', () => ({
   registeredTaskData: (store: { data: Task | undefined }) => store.data,
 }));
 
-import { agentStatusNeedsAttention, countTasksNeedingAttention, taskNeedsAttention } from './board-attention';
+import {
+  agentStatusNeedsAttention,
+  countTasksNeedingAttention,
+  taskNeedsAttention,
+} from './board-attention';
+
+type FakeStore = { data: Task | undefined };
+
+/** The mocked `task-store`/`task-selectors` modules above only care about `.data` —
+ * cast so tests can stay free of `TaskStore`'s full (irrelevant) shape. */
+function asStore(store: FakeStore): TaskStore {
+  return store as unknown as TaskStore;
+}
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -31,8 +44,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     ...overrides,
   };
 }
-
-type FakeStore = { data: Task | undefined };
 
 describe('agentStatusNeedsAttention', () => {
   it('flags awaiting-input, error, and completed as needing attention', () => {
@@ -55,25 +66,25 @@ describe('taskNeedsAttention', () => {
   it('is true for a displayable task with an attention-needing agent status', () => {
     mocks.taskAgentStatus.mockReturnValue('awaiting-input');
     const store: FakeStore = { data: makeTask() };
-    expect(taskNeedsAttention(store)).toBe(true);
+    expect(taskNeedsAttention(asStore(store))).toBe(true);
   });
 
   it('is false when the agent status does not need attention', () => {
     mocks.taskAgentStatus.mockReturnValue('working');
     const store: FakeStore = { data: makeTask() };
-    expect(taskNeedsAttention(store)).toBe(false);
+    expect(taskNeedsAttention(asStore(store))).toBe(false);
   });
 
   it('is false for an archived task even with an attention-needing status', () => {
     mocks.taskAgentStatus.mockReturnValue('error');
     const store: FakeStore = { data: makeTask({ archivedAt: '2026-01-02T00:00:00.000Z' }) };
-    expect(taskNeedsAttention(store)).toBe(false);
+    expect(taskNeedsAttention(asStore(store))).toBe(false);
   });
 
   it('is false for a task with no registered data', () => {
     mocks.taskAgentStatus.mockReturnValue('error');
     const store: FakeStore = { data: undefined };
-    expect(taskNeedsAttention(store)).toBe(false);
+    expect(taskNeedsAttention(asStore(store))).toBe(false);
   });
 });
 
@@ -82,17 +93,15 @@ describe('countTasksNeedingAttention', () => {
     mocks.taskAgentStatus.mockImplementation((store: FakeStore) =>
       store.data?.id === 't1' ? 'awaiting-input' : 'working'
     );
-    const tasks = new Map<string, FakeStore>([
-      ['t1', { data: makeTask({ id: 't1' }) }],
-      ['t2', { data: makeTask({ id: 't2' }) }],
-      ['t3', { data: makeTask({ id: 't3', archivedAt: '2026-01-02T00:00:00.000Z' }) }],
+    const tasks = new Map<string, TaskStore>([
+      ['t1', asStore({ data: makeTask({ id: 't1' }) })],
+      ['t2', asStore({ data: makeTask({ id: 't2' }) })],
+      ['t3', asStore({ data: makeTask({ id: 't3', archivedAt: '2026-01-02T00:00:00.000Z' }) })],
     ]);
-    // oxlint-disable-next-line typescript/no-explicit-any
-    expect(countTasksNeedingAttention(tasks as any)).toBe(1);
+    expect(countTasksNeedingAttention(tasks)).toBe(1);
   });
 
   it('is zero for an empty task map', () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    expect(countTasksNeedingAttention(new Map() as any)).toBe(0);
+    expect(countTasksNeedingAttention(new Map<string, TaskStore>())).toBe(0);
   });
 });

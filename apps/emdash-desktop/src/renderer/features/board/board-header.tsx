@@ -159,7 +159,10 @@ export function BoardHeader({
                   label={PR_STATE_FILTER_LABELS[value]}
                   checked={filters.prStates.has(value)}
                   onCheckedChange={() =>
-                    onFiltersChange({ ...filters, prStates: toggleSetMember(filters.prStates, value) })
+                    onFiltersChange({
+                      ...filters,
+                      prStates: toggleSetMember(filters.prStates, value),
+                    })
                   }
                 />
               ))}
@@ -249,7 +252,8 @@ function ActiveFilterChips({
     chips.push({
       key: `stage-${stage}`,
       label: STAGE_LABELS[stage],
-      onClear: () => onFiltersChange({ ...filters, stages: toggleSetMember(filters.stages, stage) }),
+      onClear: () =>
+        onFiltersChange({ ...filters, stages: toggleSetMember(filters.stages, stage) }),
     });
   }
   for (const agentState of filters.agentStates) {

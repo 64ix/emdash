@@ -258,17 +258,15 @@ describe('taskPassesBoardFilters', () => {
       query: 'diff',
       agentStates: new Set(['error']),
     };
-    expect(taskPassesBoardFilters(makeTask({ name: 'Fix the diff' }), 'error', filters)).toBe(
-      true
-    );
+    expect(taskPassesBoardFilters(makeTask({ name: 'Fix the diff' }), 'error', filters)).toBe(true);
     // Matches the search but not the agent-state filter.
     expect(taskPassesBoardFilters(makeTask({ name: 'Fix the diff' }), 'working', filters)).toBe(
       false
     );
     // Matches the agent-state filter but not the search.
-    expect(
-      taskPassesBoardFilters(makeTask({ name: 'Unrelated name' }), 'error', filters)
-    ).toBe(false);
+    expect(taskPassesBoardFilters(makeTask({ name: 'Unrelated name' }), 'error', filters)).toBe(
+      false
+    );
   });
 
   it('a Workflow Stage filter with multiple selected values is an OR within the category', () => {
@@ -278,9 +276,9 @@ describe('taskPassesBoardFilters', () => {
     };
     expect(taskPassesBoardFilters(makeTask({ workflowStage: 'idea' }), null, filters)).toBe(true);
     expect(taskPassesBoardFilters(makeTask({ workflowStage: 'spec' }), null, filters)).toBe(true);
-    expect(
-      taskPassesBoardFilters(makeTask({ workflowStage: 'implementing' }), null, filters)
-    ).toBe(false);
+    expect(taskPassesBoardFilters(makeTask({ workflowStage: 'implementing' }), null, filters)).toBe(
+      false
+    );
     expect(taskPassesBoardFilters(makeTask({ workflowStage: undefined }), null, filters)).toBe(
       false
     );

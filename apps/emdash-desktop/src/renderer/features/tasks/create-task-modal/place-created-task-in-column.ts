@@ -4,8 +4,8 @@ import type { WorkflowStage } from '@shared/core/tasks/tasks';
 /** The minimal `TaskStore` shape this needs — kept narrow (rather than importing the concrete
  * class) so it is trivially unit-testable with a plain MobX-observable fake. */
 export type RegistrationAwareTaskStore = {
-  readonly state: 'unregistered' | 'unprovisioned' | 'provisioned';
-  readonly phase: string | null;
+  state: 'unregistered' | 'unprovisioned' | 'provisioned';
+  phase: string | null;
   updateBoardPosition(stage: WorkflowStage | null, rank: string | null): Promise<void>;
 };
 

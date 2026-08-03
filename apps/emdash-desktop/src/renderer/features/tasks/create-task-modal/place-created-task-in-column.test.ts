@@ -8,12 +8,32 @@ import {
 function makeFakeStore(
   overrides: Partial<{ state: RegistrationAwareTaskStore['state']; phase: string | null }> = {}
 ): RegistrationAwareTaskStore & { updateBoardPosition: ReturnType<typeof vi.fn> } {
-  return observable({
-    state: 'unregistered' as RegistrationAwareTaskStore['state'],
-    phase: 'creating' as string | null,
-    ...overrides,
+  // `state`/`phase` are backed by `observable.box` so `when()` below can react
+  // to their mutation. `updateBoardPosition` deliberately never passes through
+  // `observable()` at all (a plain object literal, not a MobX-observable one):
+  // MobX's Proxy-based observable objects auto-wrap *any* function-valued
+  // property assigned on them (including via a later `Object.assign`) into a
+  // new action-wrapper function, which breaks vitest's spy identity check
+  // (`expect(...).toHaveBeenCalled()` on the wrapper, not the original `vi.fn()`).
+  const stateBox = observable.box<RegistrationAwareTaskStore['state']>(
+    overrides.state ?? 'unregistered'
+  );
+  const phaseBox = observable.box<string | null>(overrides.phase ?? 'creating');
+  return {
+    get state() {
+      return stateBox.get();
+    },
+    set state(value) {
+      stateBox.set(value);
+    },
+    get phase() {
+      return phaseBox.get();
+    },
+    set phase(value) {
+      phaseBox.set(value);
+    },
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
-  });
+  };
 }
 
 describe('placeCreatedTaskInColumn', () => {
@@ -63,8 +83,6 @@ describe('placeCreatedTaskInColumn', () => {
   });
 
   it('does nothing when the task id is not (yet) in the manager', () => {
-    expect(() =>
-      placeCreatedTaskInColumn({ tasks: new Map() }, 'missing', 'idea')
-    ).not.toThrow();
+    expect(() => placeCreatedTaskInColumn({ tasks: new Map() }, 'missing', 'idea')).not.toThrow();
   });
 });

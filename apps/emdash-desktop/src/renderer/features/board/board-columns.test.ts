@@ -198,6 +198,10 @@ describe('columnPermitsManualCreation', () => {
   });
 
   it('covers every column with no gaps or overlaps beyond the documented set', () => {
-    expect(COLUMNS.filter(columnPermitsManualCreation)).toEqual(['unstaged', 'idea', 'implementing']);
+    expect(COLUMNS.filter(columnPermitsManualCreation)).toEqual([
+      'unstaged',
+      'idea',
+      'implementing',
+    ]);
   });
 });
