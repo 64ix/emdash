@@ -533,8 +533,21 @@ export class AcpChatStore {
     return this._search.currentResult;
   }
 
-  /** True once every persisted-history page has already been loaded — see `AcpHistoryPagination.exhausted`. */
+  /**
+   * True once every persisted-history page has already been loaded — see
+   * `AcpHistoryPagination.exhausted`. Reads `searchVersion` for the same
+   * reason every other `search*` getter above does: `_historyPagination` is
+   * a plain (non-MobX-observable) class, so a `computed` that only reads its
+   * `exhausted` getter has zero MobX-tracked dependencies and, once observed
+   * by a reaction (e.g. `observer(AcpChatPanel)`), would cache its first
+   * evaluation forever — the exact #34/#37 staleness bug shape. `_syncSearch`
+   * bumps `searchVersion` unconditionally (not only when the controller's own
+   * `refresh()` finds work to do), so this stays live even while the search
+   * bar is open with a blank query and the user only clicks "Load older
+   * history".
+   */
   get searchHistoryExhausted(): boolean {
+    const _searchDependency = this.searchVersion;
     return this._historyPagination.exhausted;
   }
 
@@ -564,9 +577,17 @@ export class AcpChatStore {
     this._search.selectResult(result);
   }
 
-  /** Re-run the active search query against the current transcript snapshot — see every `_syncOutline()` call site. */
+  /**
+   * Re-run the active search query against the current transcript snapshot
+   * — see every `_syncOutline()` call site. Bumps `searchVersion`
+   * unconditionally, even when `_search.refresh()` itself no-ops (search
+   * closed, or open with a blank query): `searchHistoryExhausted` reads
+   * `searchVersion` too, and must stay live at these exact call sites
+   * (pagination completing) regardless of query state — see its own doc.
+   */
   private _syncSearch(): void {
     this._search.refresh();
+    this.searchVersion += 1;
   }
 
   bootstrap(): void {

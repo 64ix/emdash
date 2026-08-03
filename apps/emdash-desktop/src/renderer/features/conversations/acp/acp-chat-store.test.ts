@@ -1088,6 +1088,38 @@ describe('AcpChatStore.search', () => {
     expect(notExhausted.searchHistoryExhausted).toBe(false);
   });
 
+  it('searchHistoryExhausted keeps updating once observed, instead of caching its first evaluation (the #34 staleness bug shape)', async () => {
+    // Regression guard, mirroring the "AcpChatStore.outline" and
+    // `searchResults` versions of this test just above: `searchHistoryExhausted`
+    // only *directly* reads `_historyPagination.exhausted`, a plain
+    // (non-MobX) class field, so without its own `searchVersion` read it
+    // would have zero MobX-tracked dependencies and freeze at whatever value
+    // was computed the first time a reaction (e.g. `observer(AcpChatPanel)`)
+    // observed it — even though search stays closed/blank-query the whole
+    // time "Load older history" runs, which is exactly the state the panel's
+    // "Load older history" button is used from.
+    const { store } = setUpStore([makeTurn(10)], 10);
+    store.session = {
+      getHistory: vi.fn(async () => ({
+        success: true,
+        data: { turns: [makeTurn(8)], nextCursor: null },
+      })),
+    } as never;
+    store.bindView(null);
+
+    const seen: boolean[] = [];
+    const stop = autorun(() => {
+      seen.push(store.searchHistoryExhausted);
+    });
+    expect(seen).toEqual([false]);
+
+    void store.loadOlderHistory();
+    await flushMicrotasks();
+
+    expect(seen.at(-1)).toBe(true);
+    stop();
+  });
+
   it('an older-history page load recomputes results immediately, without waiting on the debounce window', async () => {
     const { store, fakeChatState } = setUpStore([makeTurn(10)], 10);
     store.session = {

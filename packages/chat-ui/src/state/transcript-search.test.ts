@@ -299,6 +299,47 @@ describe('searchTranscript — redaction', () => {
     expect(result).toMatchObject({ itemId: 'e1', kind: 'tool-result' });
     expect(result.snippet).not.toContain('sk-livesecretvalue');
   });
+
+  // Regression coverage for the two `redactSecrets` leak shapes fixed for
+  // issue #57 (escaped-quote value, and a raw control char letting the scan
+  // run onto the next key's opening quote). Search redacts *before* matching
+  // (see module doc), but that composition is only as good as the redactor's
+  // handling of these exact shapes — assert it here rather than trusting
+  // `redact.ts`'s own tests to cover this call site too.
+  it('never surfaces a secret hidden behind a mid-value escaped quote', () => {
+    const t = turn({
+      id: 't1',
+      seq: 0,
+      items: [executeTool('e1', { command: 'env', outputText: '{"apiKey": "abc\\"def"}' })],
+    });
+
+    expect(searchTranscript([t], null, null, 'abc')).toEqual([]);
+    expect(searchTranscript([t], null, null, 'def')).toEqual([]);
+
+    const [result] = searchTranscript([t], null, null, 'REDACTED');
+    expect(result).toMatchObject({ itemId: 'e1' });
+    expect(result.snippet).not.toContain('abc');
+    expect(result.snippet).not.toContain('def');
+  });
+
+  it('never surfaces a later secret exposed by a raw control char in a malformed value', () => {
+    // Mirrors redact.test.ts's "does not let a raw control char in a
+    // malformed value swallow a later secret" fixture, but through the
+    // search path: the well-formed `token` value after the malformed
+    // `apiKey` value must still be redacted before matching.
+    const outputText = '{"apiKey":"abc\ndef no closing here ... "token":"realsecret123"}';
+    const t = turn({
+      id: 't1',
+      seq: 0,
+      items: [executeTool('e1', { command: 'env', outputText })],
+    });
+
+    expect(searchTranscript([t], null, null, 'realsecret123')).toEqual([]);
+
+    const [result] = searchTranscript([t], null, null, 'REDACTED');
+    expect(result).toMatchObject({ itemId: 'e1' });
+    expect(result.snippet).not.toContain('realsecret123');
+  });
 });
 
 // ── Truncation honesty ────────────────────────────────────────────────────────
