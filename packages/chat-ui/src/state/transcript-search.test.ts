@@ -495,6 +495,54 @@ describe('searchTranscript — one result per item', () => {
   });
 });
 
+// ── 10,000-item bounded performance ──────────────────────────────────────────
+//
+// The ticket's acceptance criterion asks for "a 10,000-item controlled
+// benchmark [demonstrating] bounded indexing and navigation work without a
+// material transcript regression." `searchTranscript` is a pure, DOM-free
+// function, so unlike the render-time performance criteria elsewhere in this
+// epic (which genuinely need `packages/chat-ui`'s browser-only `perf`
+// project — empty at review time, `test:perf` finds zero files), the matcher
+// itself needs no browser/Playwright harness at all: a plain Vitest `node`
+// timing assertion is a real, runnable measurement rather than "reasoned, not
+// measured." A generous 500ms budget is used (CI machines vary) — the intent
+// is to catch an accidental quadratic blowup (e.g. re-redacting or re-scanning
+// per candidate per result), not to pin an exact number.
+describe('searchTranscript — 10,000-item bounded performance', () => {
+  it('completes a full search over 10,000 items well within a linear-time budget', () => {
+    const turns: TranscriptTurn[] = [];
+    for (let i = 0; i < 2500; i++) {
+      turns.push(
+        turn({
+          id: `t${i}`,
+          seq: i,
+          items: [
+            userMessage(`u${i}`, `prompt number ${i} about parsing configuration files`),
+            assistantMessage(`a${i}`, `response ${i} explaining the parseConfig helper`, 1),
+            executeTool(
+              `e${i}`,
+              { command: `pnpm run test -- suite-${i}`, outputText: `ok ${i}\n`.repeat(5) },
+              2
+            ),
+            readTool(`r${i}`, { path: `src/features/module-${i}/index.ts` }, 3),
+          ],
+        })
+      );
+    }
+    const totalItems = turns.reduce((sum, t) => sum + t.items.length, 0);
+    expect(totalItems).toBe(10000);
+
+    const start = performance.now();
+    const results = searchTranscript(turns, null, null, 'parseconfig');
+    const elapsedMs = performance.now() - start;
+
+    // Every turn's assistant message matches ("parseConfig helper"), so the
+    // matcher genuinely scanned the whole set rather than short-circuiting.
+    expect(results).toHaveLength(2500);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+});
+
 // ── advanceSearchResultIndex ──────────────────────────────────────────────────
 
 describe('advanceSearchResultIndex', () => {
