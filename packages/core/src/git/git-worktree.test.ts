@@ -584,6 +584,49 @@ describe('GitWorktree', () => {
     }
   });
 
+  it('reports oldPath (absolute) for a staged rename, and omits it for a plain modification', async () => {
+    const repo = await makeRepo();
+    const runtime = new GitRuntime();
+
+    const lease = await runtime.openWorktree(repo);
+    try {
+      const worktree = lease.value;
+
+      // Rename one tracked file and, in the same snapshot, add an unrelated
+      // untracked file so a single status call covers both the rename
+      // (which must gain `oldPath`) and a non-rename entry (which must not
+      // — the byte-for-byte degrade path the fix promises for anything
+      // that isn't a rename).
+      await execFileAsync('git', ['mv', 'tracked.txt', 'renamed.txt'], { cwd: repo });
+      await writeFile(path.join(repo, 'untouched.txt'), 'new\n', 'utf8');
+
+      const status = await worktree.getStatus();
+      if (status.kind !== 'ok') throw new Error('Expected ok status');
+
+      expect(status.staged).toEqual([
+        {
+          path: repoFile(repo, 'renamed.txt'),
+          status: 'renamed',
+          additions: 0,
+          deletions: 0,
+          indexOid: expect.stringMatching(/^[0-9a-f]{40}$/),
+          oldPath: repoFile(repo, 'tracked.txt'),
+        },
+      ]);
+      expect(status.unstaged).toEqual([
+        {
+          path: repoFile(repo, 'untouched.txt'),
+          status: 'added',
+          additions: 1,
+          deletions: 0,
+        },
+      ]);
+    } finally {
+      await lease.release();
+      await runtime.dispose();
+    }
+  });
+
   it('reverts selected working tree changes while removing selected untracked files', async () => {
     const repo = await makeRepo();
     const runtime = new GitRuntime();
