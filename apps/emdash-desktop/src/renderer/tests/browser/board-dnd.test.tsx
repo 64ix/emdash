@@ -1278,7 +1278,7 @@ describe('board drag-and-drop — keyboard-driven (ticket #52)', () => {
     );
   });
 
-  it("does not activate a keyboard drag when Enter/Space is pressed on the card body itself — selection keeps that key, unchanged since ticket #40", async () => {
+  it('does not activate a keyboard drag when Enter/Space is pressed on the card body itself — selection keeps that key, unchanged since ticket #40', async () => {
     const a = makeStore('card-a');
     managerTasks.set(a.data.id, a);
     await mount();
