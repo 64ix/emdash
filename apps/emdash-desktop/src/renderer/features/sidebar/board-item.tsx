@@ -1,12 +1,7 @@
 import { Kanban } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { agentStatusNeedsAttention } from '@renderer/features/board/board-attention';
-import { isBoardDisplayable } from '@renderer/features/board/board-columns';
-import {
-  getTaskManagerStore,
-  taskAgentStatus,
-} from '@renderer/features/tasks/stores/task-selectors';
-import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
+import { countTasksNeedingAttention } from '@renderer/features/board/board-attention';
+import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import {
   useNavigate,
   useParams,
@@ -33,19 +28,12 @@ export const SidebarBoardItem = observer(function SidebarBoardItem({
   const { params } = useParams('board');
   const isActive = currentView === 'board' && params.projectId === projectId;
 
-  // Attention count: mirrors the board's own displayable-task set
-  // (`isBoardDisplayable`) and Needs Attention semantics
-  // (`agentStatusNeedsAttention`) so the count never promises more than
-  // opening the board would actually show.
+  // Attention count: `countTasksNeedingAttention` (board-attention.ts) is the
+  // single shared predicate the board's own Needs Attention filter also uses,
+  // so this count never promises more than opening the board would actually
+  // show.
   const manager = getTaskManagerStore(projectId);
-  let attentionCount = 0;
-  if (manager) {
-    for (const store of manager.tasks.values()) {
-      const task = registeredTaskData(store);
-      if (!task || !isBoardDisplayable(task)) continue;
-      if (agentStatusNeedsAttention(taskAgentStatus(store))) attentionCount++;
-    }
-  }
+  const attentionCount = manager ? countTasksNeedingAttention(manager.tasks) : 0;
 
   const openBoard = () => {
     captureTelemetry('board_opened', { source: 'sidebar', project_id: projectId });

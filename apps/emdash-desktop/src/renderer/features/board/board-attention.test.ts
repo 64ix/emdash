@@ -1,5 +1,38 @@
-import { describe, expect, it } from 'vitest';
-import { agentStatusNeedsAttention } from './board-attention';
+import { describe, expect, it, vi } from 'vitest';
+import type { Task } from '@shared/core/tasks/tasks';
+
+const mocks = vi.hoisted(() => ({
+  taskAgentStatus: vi.fn(),
+}));
+
+vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
+  taskAgentStatus: mocks.taskAgentStatus,
+}));
+
+vi.mock('@renderer/features/tasks/stores/task-store', () => ({
+  registeredTaskData: (store: { data: Task | undefined }) => store.data,
+}));
+
+import { agentStatusNeedsAttention, countTasksNeedingAttention, taskNeedsAttention } from './board-attention';
+
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'task-1',
+    projectId: 'project-1',
+    name: 'Example task',
+    status: 'todo',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    statusChangedAt: '2026-01-01T00:00:00.000Z',
+    isPinned: false,
+    prs: [],
+    conversations: {},
+    type: 'task',
+    ...overrides,
+  };
+}
+
+type FakeStore = { data: Task | undefined };
 
 describe('agentStatusNeedsAttention', () => {
   it('flags awaiting-input, error, and completed as needing attention', () => {
@@ -15,5 +48,51 @@ describe('agentStatusNeedsAttention', () => {
 
   it('does not flag no status at all', () => {
     expect(agentStatusNeedsAttention(null)).toBe(false);
+  });
+});
+
+describe('taskNeedsAttention', () => {
+  it('is true for a displayable task with an attention-needing agent status', () => {
+    mocks.taskAgentStatus.mockReturnValue('awaiting-input');
+    const store: FakeStore = { data: makeTask() };
+    expect(taskNeedsAttention(store)).toBe(true);
+  });
+
+  it('is false when the agent status does not need attention', () => {
+    mocks.taskAgentStatus.mockReturnValue('working');
+    const store: FakeStore = { data: makeTask() };
+    expect(taskNeedsAttention(store)).toBe(false);
+  });
+
+  it('is false for an archived task even with an attention-needing status', () => {
+    mocks.taskAgentStatus.mockReturnValue('error');
+    const store: FakeStore = { data: makeTask({ archivedAt: '2026-01-02T00:00:00.000Z' }) };
+    expect(taskNeedsAttention(store)).toBe(false);
+  });
+
+  it('is false for a task with no registered data', () => {
+    mocks.taskAgentStatus.mockReturnValue('error');
+    const store: FakeStore = { data: undefined };
+    expect(taskNeedsAttention(store)).toBe(false);
+  });
+});
+
+describe('countTasksNeedingAttention', () => {
+  it('counts only the tasks needing attention, matching the per-task predicate', () => {
+    mocks.taskAgentStatus.mockImplementation((store: FakeStore) =>
+      store.data?.id === 't1' ? 'awaiting-input' : 'working'
+    );
+    const tasks = new Map<string, FakeStore>([
+      ['t1', { data: makeTask({ id: 't1' }) }],
+      ['t2', { data: makeTask({ id: 't2' }) }],
+      ['t3', { data: makeTask({ id: 't3', archivedAt: '2026-01-02T00:00:00.000Z' }) }],
+    ]);
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(countTasksNeedingAttention(tasks as any)).toBe(1);
+  });
+
+  it('is zero for an empty task map', () => {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(countTasksNeedingAttention(new Map() as any)).toBe(0);
   });
 });

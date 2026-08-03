@@ -77,6 +77,13 @@ export type TelemetryEventProperties = {
    * "how did the user get here" question.
    */
   board_opened: { source: BoardEntrySource };
+  /**
+   * Board workspace header (spec #25, ticket #45): distinguishes Needs
+   * Attention filtering from every other board interaction, without
+   * recording any task content — only whether the filter was turned on or
+   * off, plus the pre-existing `project_id` envelope field.
+   */
+  board_needs_attention_filtered: { active: boolean };
 
   automation_created: {
     enabled: boolean;

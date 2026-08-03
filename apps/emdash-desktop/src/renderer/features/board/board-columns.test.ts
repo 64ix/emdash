@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
-import { isBoardDisplayable, isTaskShippedFaded, STAGE_LABELS } from './board-columns';
+import {
+  columnPermitsManualCreation,
+  isBoardDisplayable,
+  isTaskShippedFaded,
+  STAGE_LABELS,
+} from './board-columns';
 import { COLUMNS, stageOf } from './board-ordering';
 
 function makeTask(
@@ -171,5 +176,28 @@ describe('isBoardDisplayable', () => {
     const recentMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS - 1000)).toISOString();
     const task = makeTask('shipped', [makePr({ status: 'merged', mergedAt: recentMergedAt })]);
     expect(isBoardDisplayable(task, now)).toBe(true);
+  });
+});
+
+describe('columnPermitsManualCreation', () => {
+  it('permits Unstaged, Idea, and Implementing — the manually-declared stages', () => {
+    expect(columnPermitsManualCreation('unstaged')).toBe(true);
+    expect(columnPermitsManualCreation('idea')).toBe(true);
+    expect(columnPermitsManualCreation('implementing')).toBe(true);
+  });
+
+  it('excludes every GitHub-authoritative stage', () => {
+    expect(columnPermitsManualCreation('exploring')).toBe(false);
+    expect(columnPermitsManualCreation('spec')).toBe(false);
+    expect(columnPermitsManualCreation('review')).toBe(false);
+    expect(columnPermitsManualCreation('shipped')).toBe(false);
+  });
+
+  it('excludes Triage — an out-of-flow sink, never a creation starting point', () => {
+    expect(columnPermitsManualCreation('triage')).toBe(false);
+  });
+
+  it('covers every column with no gaps or overlaps beyond the documented set', () => {
+    expect(COLUMNS.filter(columnPermitsManualCreation)).toEqual(['unstaged', 'idea', 'implementing']);
   });
 });
