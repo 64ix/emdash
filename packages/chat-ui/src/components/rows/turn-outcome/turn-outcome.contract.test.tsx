@@ -277,6 +277,38 @@ describe('turn footer — large grouped turns and keyboard expansion', () => {
     dispose();
   });
 
+  it("a failed child stays visible inside a collapsed, settled group's preview", async () => {
+    const { state, host, dispose } = mount();
+    const failedChild: ToolNode = {
+      kind: 'read-tool-call',
+      id: 'child-error',
+      seq: 0,
+      toolCallId: 'child-error',
+      title: 'Read config.ts',
+      status: 'error',
+      path: 'config.ts',
+    };
+    const children = [
+      failedChild,
+      ...Array.from({ length: 5 }, (_, i) => readTool(`child-${i}`, i + 1, `src/f${i}.ts`)),
+    ];
+    state.transcript.history.seed([
+      turnWith([userMessage('u1', 'Load the config'), toolGroup('group-err', 1, children)], {
+        kind: 'error',
+      }),
+    ]);
+    await nextPaint();
+
+    const header = await waitFor(
+      () => host.querySelector('[data-collapse-id="group-err"]') as HTMLElement | null
+    );
+    expect(header).not.toBeNull();
+    expect(header!.getAttribute('aria-expanded')).toBe('false');
+    // The failed child's error indicator is visible without expanding.
+    expect(host.querySelector('[aria-label="error"]')).not.toBeNull();
+    dispose();
+  });
+
   it('Enter expands a collapsed tool group (keyboard equivalent of click), and the footer stays put', async () => {
     const { state, host, dispose } = mount();
     const children = Array.from({ length: 5 }, (_, i) => readTool(`child-${i}`, i, `src/f${i}.ts`));
