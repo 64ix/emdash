@@ -634,13 +634,6 @@ async function drag(from: Element, toX: number, toY: number, hoverFrames = 6) {
   await settle();
 }
 
-/** The column's droppable card-list element, located by its stage label. */
-function columnZone(label: string): Element {
-  const header = Array.from(document.querySelectorAll('span')).find((s) => s.textContent === label)!;
-  const column = header.parentElement!.parentElement!;
-  return column.lastElementChild!;
-}
-
 describe('Board header — drop-rank interpolation skips a hidden interior card (ticket #45)', () => {
   /** Idle-only Agent State filter: hides only `hideMe` (status 'error'),
    * leaving `keepA`/`keepC`/`dragged` (all idle) visible — unlike a search
@@ -711,6 +704,19 @@ describe('Board header — drop-rank interpolation skips a hidden interior card 
     const target = center(cardEl('Keep C')!);
     await drag(cardEl('Dragged card')!, target.x, target.y - 8);
     expect(dragged.updateBoardPosition).toHaveBeenCalledTimes(1);
+
+    // dnd-kit's PointerSensor installs a document-level, capture-phase click
+    // swallower for the duration of any recognized drag (to eat the stray
+    // native `click` a real mouse/touch release can produce after a drag) and
+    // only detaches it 50ms later via its own internal `setTimeout` — see
+    // `PointerSensor.handleStart`/`detach` in `@dnd-kit/core`. A `settle()`
+    // (a handful of animation frames) is not reliably longer than that timer,
+    // so a click dispatched too soon after `drag()` — on *any* element, not
+    // just the dragged card — is silently swallowed before it ever reaches
+    // this button's own React handler. Wait past that window before the next
+    // click in a test that chains "drag" then "click something" (an ordering
+    // `board-dnd.test.tsx` deliberately avoids by never clicking after a drag).
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     // Only one filter category is active (Agent State: Idle), so the chip
     // row shows its own remove button rather than "Clear all" (which only
