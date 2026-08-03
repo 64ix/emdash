@@ -205,6 +205,41 @@ describe('buildToolParams', () => {
     ]);
   });
 
+  it('mcp: identifies the server and tool as data — an unusual server/tool name is shown verbatim, not routed', () => {
+    expect(
+      buildToolParams({
+        kind: 'mcp-tool-call',
+        tool: 'weirdly.named/tool::v2',
+        server: 'a "quoted" server',
+      })
+    ).toEqual([
+      { label: 'Tool', value: 'weirdly.named/tool::v2' },
+      { label: 'Server', value: 'a "quoted" server' },
+    ]);
+  });
+
+  it('mcp: falls back to a safe placeholder for a blank/malformed tool or server name', () => {
+    expect(buildToolParams({ kind: 'mcp-tool-call', tool: '   ' })).toEqual([
+      { label: 'Tool', value: 'Unknown tool' },
+    ]);
+    expect(
+      buildToolParams({ kind: 'mcp-tool-call', tool: 'search', server: '   ' as unknown as string })
+    ).toEqual([
+      { label: 'Tool', value: 'search' },
+      { label: 'Server', value: 'Unknown server' },
+    ]);
+  });
+
+  it('mcp: never throws on a deeply malformed tool/server field', () => {
+    expect(() =>
+      buildToolParams({
+        kind: 'mcp-tool-call',
+        tool: { unexpected: 'object' } as unknown as string,
+        server: 12345 as unknown as string,
+      })
+    ).not.toThrow();
+  });
+
   it('web-fetch: url + page title', () => {
     expect(
       buildToolParams({
@@ -356,5 +391,28 @@ describe('buildCopyText', () => {
   it('never throws for a minimal item with no optional fields', () => {
     const item: ChatToolCall = { kind: 'tool', id: 't2', name: 'Tool', status: 'running' };
     expect(() => buildCopyText(item)).not.toThrow();
+  });
+
+  it('additively includes a labeled structured view alongside the flat result text', () => {
+    const item: ChatToolCall = {
+      kind: 'tool',
+      id: 't3',
+      name: 'MCP',
+      status: 'done',
+      params: [{ label: 'Tool', value: 'searchIssues' }],
+      result: { text: '{"issues": []}', truncated: false, omittedChars: 0 },
+      structuredResult: {
+        kind: 'object',
+        entries: [{ key: 'issues', value: { kind: 'array', items: [], omittedItems: 0 } }],
+        omittedEntries: 0,
+      },
+    };
+    const text = buildCopyText(item);
+    // Both the original flat text and the labeled structured section are
+    // present — copy scope stays additive, not a lossy replacement.
+    expect(text).toContain('Result:');
+    expect(text).toContain('{"issues": []}');
+    expect(text).toContain('Structured view:');
+    expect(text).toContain('"issues": []');
   });
 });

@@ -28,6 +28,7 @@ import type { MeasureCtx, RenderCtx } from '@core/define';
 import { For, Show, createMemo } from 'solid-js';
 import type { ChatToolCall, ToolResource } from '@/model';
 import { buildCopyText } from './tool-presentation';
+import { structuredLines } from './tool-structured';
 import {
   toolActionsRow,
   toolBody,
@@ -79,8 +80,17 @@ function detailStatusLine(item: ChatToolCall): string | undefined {
   return undefined;
 }
 
-/** Plain-text lines composing the result/error detail block, or []. */
+/**
+ * Lines composing the result/error detail block, or []. When the raw output
+ * parsed as JSON (`item.structuredResult` — ticket #31), renders the bounded
+ * structured tree instead of the flat text so the shape (nesting, keys,
+ * omitted-entry counts) is inspectable rather than one unreadable line. Both
+ * branches are plain text — `toolDetailLine` never interprets provider output
+ * as markup — and the caller (measure + render) always sees the same lines
+ * for a given `item`, so no separate height-estimation seam is needed.
+ */
 function detailLines(item: ChatToolCall): string[] {
+  if (item.structuredResult) return structuredLines(item.structuredResult);
   const block = item.errorDetail ?? item.result;
   if (block) {
     const lines = block.text.length > 0 ? block.text.split('\n') : [];
