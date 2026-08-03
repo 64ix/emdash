@@ -299,7 +299,7 @@ describe('TranscriptOutlineDrawer', () => {
     });
     await settle();
 
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onOpenChange.mock.calls[0]?.[0]).toBe(false);
 
     // Simulate the host reacting to onOpenChange(false) by unmounting the
     // open drawer, matching AcpChatPanel's controlled `open` prop.

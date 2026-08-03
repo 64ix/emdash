@@ -24,6 +24,7 @@ import type {
   ChatState,
   TranscriptTurn,
 } from '@emdash/chat-ui';
+import { userEvent } from 'vitest/browser';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -115,6 +116,19 @@ async function waitFor<T>(fn: () => T | null | undefined, frames = 60): Promise<
     await nextPaint();
   }
   throw new Error('Timed out waiting for condition');
+}
+
+/**
+ * Finds the resource-link row's clickable control. It renders as a native
+ * <button> (ticket #26 — previously a `role="button"` div), so it is picked
+ * out by its own text content rather than a `[role="button"]` attribute
+ * selector, which would also match unrelated buttons on the panel (e.g. the
+ * assistant message's footer Copy button).
+ */
+function findResourceLinkRow(host: HTMLElement): HTMLButtonElement | undefined {
+  return Array.from(host.querySelectorAll('button')).find((b) =>
+    b.textContent?.includes('summary.csv')
+  );
 }
 
 type Mounted = {
@@ -279,11 +293,38 @@ describe('ACP chat link routing (browser)', () => {
     };
     const mounted = mountChatTranscript(commands);
 
-    const row = await waitFor(
-      () => mounted.host.querySelector<HTMLElement>('[role="button"]') ?? undefined
-    );
+    const row = await waitFor(() => findResourceLinkRow(mounted.host));
 
     row.click();
+    await flush();
+
+    expect(mocks.openFileInTaskEditor).toHaveBeenCalledWith(
+      'p1',
+      't1',
+      '/Users/dev/workspace/reports/summary.csv'
+    );
+    expect(windowOpenSpy).not.toHaveBeenCalled();
+
+    unmount(mounted);
+  });
+
+  it('routes a resource-link row via real keyboard activation (Enter), not just a mouse click', async () => {
+    const commands: ChatCommands = {
+      onActivateLink: (arg) => activateChatLink(arg, TASK_CONTEXT),
+    };
+    const mounted = mountChatTranscript(commands);
+
+    const row = await waitFor(() => findResourceLinkRow(mounted.host));
+
+    // A real <button> needs no keydown shim: focusing it and pressing Enter
+    // through the browser's real input pipeline (not a synthetic
+    // dispatchEvent, which untrusted events don't trigger native button
+    // activation for) is enough to reach the same handler a mouse click
+    // would — this is exactly the gap ticket #26 closes (the row used to be
+    // a non-focusable `role="button"` div with no keyboard equivalent).
+    row.focus();
+    expect(document.activeElement).toBe(row);
+    await userEvent.keyboard('{Enter}');
     await flush();
 
     expect(mocks.openFileInTaskEditor).toHaveBeenCalledWith(
@@ -305,8 +346,8 @@ describe('ACP chat link routing (browser)', () => {
     await waitFor(() => (mounted.host.querySelectorAll('a').length >= 3 ? true : null));
 
     const anchors = Array.from(mounted.host.querySelectorAll('a'));
-    const row = mounted.host.querySelector<HTMLElement>('[role="button"]');
-    expect(row).not.toBeNull();
+    const row = findResourceLinkRow(mounted.host);
+    expect(row).not.toBeUndefined();
 
     for (const anchor of anchors) {
       anchor.click();
