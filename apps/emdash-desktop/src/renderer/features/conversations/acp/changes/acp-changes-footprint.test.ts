@@ -375,10 +375,7 @@ describe('buildChangesFootprint', () => {
   });
 
   it('does not overwrite provenance the new path already earned from its own tracked activity', () => {
-    const t = turn('t1', 1, [
-      modifyCall('c1', 1, 'src/old.ts'),
-      modifyCall('c2', 2, 'src/new.ts'),
-    ]);
+    const t = turn('t1', 1, [modifyCall('c1', 1, 'src/old.ts'), modifyCall('c2', 2, 'src/new.ts')]);
     const changes = [gitChange('src/new.ts', 'renamed', 0, 0, 'src/old.ts')];
 
     const footprint = buildChangesFootprint({
@@ -436,7 +433,7 @@ describe('buildChangesFootprint', () => {
     ]);
   });
 
-  it('degrades to today\'s behavior for a rename with no oldPath (older producers, SSH)', () => {
+  it("degrades to today's behavior for a rename with no oldPath (older producers, SSH)", () => {
     const t = turn('t1', 1, [modifyCall('c1', 1, 'src/old.ts')]);
     const changes = [gitChange('src/new.ts', 'renamed')];
 
