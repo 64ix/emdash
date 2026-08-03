@@ -280,6 +280,15 @@ describe('TranscriptSearchBar', () => {
     expect(host.textContent).not.toContain('Only loaded history is searched.');
   });
 
+  it('never shows "No matches" as if it were authoritative when history is not fully loaded', async () => {
+    // A zero-result "No matches" must never appear without the "only loaded
+    // history is searched" caveat still visible — otherwise it reads as "not
+    // in this conversation" when it may simply not have been paged in yet.
+    await renderBar({ query: 'nothing', results: [], historyExhausted: false });
+    expect(host.textContent).toContain('No matches');
+    expect(host.textContent).toContain('Only loaded history is searched.');
+  });
+
   it('disables the load-older action while a page is already loading', async () => {
     await renderBar({ historyExhausted: false, isLoadingOlderHistory: true });
     const button = Array.from(host.querySelectorAll('button')).find((b) =>
