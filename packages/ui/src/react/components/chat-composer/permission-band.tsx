@@ -23,13 +23,6 @@ import {
 } from './permission-operation-details';
 import * as styles from './permission-band.css';
 
-export type {
-  ComposerPermissionOperation,
-  ComposerPermissionParam,
-  ComposerPermissionResource,
-  ComposerPermissionTextBlock,
-} from './permission-operation-details';
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type ComposerPermissionOption = {
