@@ -1176,6 +1176,7 @@ const BoardCard = observer(function BoardCard({
         ref={setActivatorNodeRef}
         aria-label={`Move ${task.name}`}
         aria-describedby={attributes['aria-describedby']}
+        aria-roledescription={attributes['aria-roledescription']}
         aria-pressed={isDragging || undefined}
         title="Move card: Space or Enter to pick up, arrow keys to move, Space or Enter to drop, Escape to cancel"
         onClick={(event) => event.stopPropagation()}
