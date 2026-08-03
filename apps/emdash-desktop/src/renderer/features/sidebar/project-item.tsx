@@ -23,6 +23,7 @@ import {
   projectViewKind,
 } from '@renderer/features/projects/stores/project-selectors';
 import { ConnectionStatusDot } from '@renderer/lib/components/connection-status-dot';
+import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import {
   useNavigate,
   useParams,
@@ -64,6 +65,7 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
   const { currentView } = useWorkspaceSlots();
   const { params: projectParams } = useParams('project');
   const { params: taskParams } = useParams('task');
+  const { params: boardParams } = useParams('board');
   const showCreateTaskModal = useShowModal('taskModal');
   const showChangeConnectionModal = useShowModal('changeProjectConnectionModal');
   const confirmDeleteProject = useConfirmDeleteProject();
@@ -76,12 +78,13 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
     void repo?.remoteData.load();
   }, [projectId]);
 
-  const currentProjectId =
-    currentView === 'task'
-      ? taskParams.projectId
-      : currentView === 'project'
-        ? projectParams.projectId
-        : null;
+  // `board` (ticket #43) resolves here too — opening a project's board keeps
+  // its sidebar project row looking active, same as opening its task list.
+  const currentProjectId = activeProjectIdForView(currentView, {
+    task: taskParams.projectId,
+    project: projectParams.projectId,
+    board: boardParams.projectId,
+  });
   const currentTaskId = currentView === 'task' ? taskParams.taskId : null;
 
   const isProjectActive = currentProjectId === projectId && !currentTaskId;

@@ -24,6 +24,9 @@ export type FocusedRegion = 'main' | 'bottom';
 
 export type FocusTrigger = 'navigation' | 'panel_switch' | 'region_switch';
 
+/** Which UI affordance navigated to a project's Feature Board (ticket #43). */
+export type BoardEntrySource = 'sidebar' | 'command_palette';
+
 export interface TelemetryEnvelope {
   event_ts_ms?: number;
   session_id?: string;
@@ -64,6 +67,16 @@ export type TelemetryEventProperties = {
   mcp_viewed: { from_view: FocusView | null };
   automations_viewed: { from_view: FocusView | null };
   board_viewed: { from_view: FocusView | null };
+  /**
+   * Feature Board entry-point instrumentation (spec #25, ticket #43):
+   * distinguishes which UI affordance sent the user to a project's board,
+   * separately from the generic `board_viewed` navigation event above (which
+   * only carries the previous view). Extend `BoardEntrySource` as later
+   * tickets add more entry points (task Workflow Stage chip, project work
+   * mode tabs, ...) rather than introducing a second event for the same
+   * "how did the user get here" question.
+   */
+  board_opened: { source: BoardEntrySource };
 
   automation_created: {
     enabled: boolean;

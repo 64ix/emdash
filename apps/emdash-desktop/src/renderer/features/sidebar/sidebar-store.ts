@@ -35,6 +35,14 @@ export function getSortInstant(task: TaskStore, kind: TaskSortKind): string | un
 
 export type SidebarRow =
   | { kind: 'project'; projectId: string }
+  /**
+   * The project's Feature Board destination (ticket #43): rendered right
+   * after its project row and before its task rows, so it reads as a
+   * project-level view rather than an individual task. Never sortable —
+   * unlike project and task rows it never participates in manual drag
+   * reordering.
+   */
+  | { kind: 'board'; projectId: string }
   | { kind: 'task'; projectId: string; taskId: string };
 
 export class SidebarStore implements Snapshottable<SidebarSnapshot> {
@@ -95,6 +103,7 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
       const projectId = project.id;
       rows.push({ kind: 'project', projectId });
       if (this.expandedProjectIds.has(projectId) && project.mountedProject) {
+        rows.push({ kind: 'board', projectId });
         const tasks = Array.from(project.mountedProject.taskManager.tasks.values()).filter(
           (t) =>
             t.data.type !== 'automation-run' &&
