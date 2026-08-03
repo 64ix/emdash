@@ -114,10 +114,25 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
   registeredTaskData: (store: MockStore) => store.data,
+  // Ticket #47's card now renders `TaskGitDiffStats`, which imports
+  // `isRegistered` from this module — the mock still needs to shadow the
+  // real export so that import does not resolve to `undefined`.
+  isRegistered: () => true,
 }));
 
 vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
   AgentStatusIndicator: () => null,
+}));
+
+// `StackedAgentLogos` (ticket #47's card, provider/session context) reads
+// agent metadata through `@tanstack/react-query` and, via `PluginIcon`'s
+// theme lookup, transitively reaches the app-wide store graph
+// (`ThemeProvider` -> pty -> `appState` -> `ProjectManagerStore` -> ... ->
+// `open-file-in-file-editor.ts`) — none of it relevant to these tests, and
+// each hop needs its own real (unmocked) module. Mocked away wholesale, the
+// same way `AgentStatusIndicator` already is above.
+vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
+  StackedAgentLogos: () => null,
 }));
 
 // BoardMainPanel pulls in BoardLinkSuggestions and GhostCards (real rpc calls
