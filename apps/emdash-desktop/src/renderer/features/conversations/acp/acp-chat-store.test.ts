@@ -363,6 +363,119 @@ describe('AcpChatStore.outline', () => {
   });
 });
 
+// ── AcpChatStore.permissionQueue / resolvePermission / permissionResolution ──
+//
+// Ticket #32: the queue must carry the normalized operation detail and the
+// originating item id (for "jump to origin"), and resolution must expose
+// pending/error state per the *current* request rather than silently
+// swallowing a failed decision.
+describe('AcpChatStore.permissionQueue / resolvePermission', () => {
+  function toolCall(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'item-permission-1',
+      seq: 0,
+      toolCallId: 'call-1',
+      title: 'Execute a Shell Command',
+      status: 'pending',
+      kind: 'execute-tool-call',
+      command: 'rm -rf ./dist',
+      ...overrides,
+    };
+  }
+
+  function permissionRequest(overrides: Record<string, unknown> = {}) {
+    return {
+      requestId: 'req-1',
+      toolCall: toolCall(),
+      options: [
+        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+      ],
+      ...overrides,
+    };
+  }
+
+  it('maps the normalized operation detail and originating item id onto each queue entry', () => {
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    store.session = {
+      sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
+    } as never;
+
+    expect(store.permissionQueue).toHaveLength(1);
+    const item = store.permissionQueue[0];
+    expect(item.itemId).toBe('item-permission-1');
+    expect(item.operation.kind).toBe('command');
+    expect(item.operation.command?.text).toBe('rm -rf ./dist');
+  });
+
+  it('resolves the current request through the session and reports resolving state', async () => {
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    let resolvePending!: (value: { success: true; data: undefined }) => void;
+    const resolvePermission = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolvePending = resolve;
+        })
+    );
+    store.session = {
+      sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
+      resolvePermission,
+    } as never;
+
+    store.resolvePermission('allow-once');
+
+    expect(resolvePermission).toHaveBeenCalledWith('req-1', 'allow-once');
+    expect(store.permissionResolution).toEqual({ status: 'resolving' });
+
+    resolvePending({ success: true, data: undefined });
+    await flushMicrotasks();
+
+    expect(store.permissionResolution).toBeNull();
+  });
+
+  it('surfaces a retryable error and lets retryPermissionResolution re-attempt the same option', async () => {
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    let call = 0;
+    const resolvePermission = vi.fn(() => {
+      call += 1;
+      return Promise.resolve(
+        call === 1
+          ? { success: false, error: new Error('transport hiccup') }
+          : { success: true, data: undefined }
+      );
+    });
+    store.session = {
+      sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
+      resolvePermission,
+    } as never;
+
+    store.resolvePermission('reject-once');
+    await flushMicrotasks();
+
+    expect(store.permissionResolution).toEqual({ status: 'error', message: 'transport hiccup' });
+
+    store.retryPermissionResolution();
+    await flushMicrotasks();
+
+    expect(resolvePermission).toHaveBeenLastCalledWith('req-1', 'reject-once');
+    expect(store.permissionResolution).toBeNull();
+  });
+
+  it('does not duplicate the decision when resolvePermission is called twice before the first settles', () => {
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    const resolvePermission = vi.fn(() => new Promise(() => {}));
+    store.session = {
+      sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
+      resolvePermission,
+    } as never;
+
+    store.resolvePermission('allow-once');
+    store.resolvePermission('allow-once');
+
+    expect(resolvePermission).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── AcpChatStore.changesFootprint — resynced alongside messageCount ─────────
 //
 // `_resolveWorkspace()` returns null in this harness (no task/workspace is

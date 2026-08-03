@@ -19,7 +19,7 @@ import type {
   PromptInput,
   QueuedPrompt,
 } from '@emdash/core/acp/client';
-import { ok } from '@emdash/shared';
+import { err, ok } from '@emdash/shared';
 import type {
   CommandItem,
   ComposerEffortOption,
@@ -45,6 +45,14 @@ import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
 import { createStopController, type StopController } from './acp-chat-stop-controller';
 import { AcpHistoryPagination } from './acp-history-pagination';
+import {
+  describePermissionOperation,
+  type PermissionOperationDetail,
+} from './acp-permission-presentation';
+import {
+  PermissionResolutionController,
+  type PermissionResolutionEntry,
+} from './acp-permission-resolution';
 import type {
   AcpPromptAttachment,
   AcpSubmissionSessionPort,
@@ -85,6 +93,10 @@ export interface AgentAffordances {
 type PermissionQueueItem = {
   requestId: string;
   title: string;
+  /** Stable transcript item id for the originating tool call — see `scrollToTranscriptItem`. */
+  itemId: string;
+  /** Normalized command/path/params/scope/resources/risk-cues — see `describePermissionOperation`. */
+  operation: PermissionOperationDetail;
   options: Array<{ optionId: string; name: string; kind: string }>;
 };
 
@@ -128,6 +140,13 @@ export class AcpChatStore {
   private readonly _submissions: AcpSubmissionController;
   private readonly _stopController: StopController;
   private readonly _historyPagination = new AcpHistoryPagination();
+  private readonly _permissionResolution: PermissionResolutionController;
+  /**
+   * Bumped on every `PermissionResolutionController` state change so
+   * `permissionResolution` (a MobX computed) has an observable dependency —
+   * the controller itself is framework-free and holds no observable state.
+   */
+  private _permissionResolutionVersion = 0;
 
   constructor(
     readonly conversationId: string,
@@ -158,6 +177,20 @@ export class AcpChatStore {
       }
     );
 
+    this._permissionResolution = new PermissionResolutionController(
+      (requestId, optionId) =>
+        this.session?.resolvePermission(requestId, optionId) ??
+        Promise.resolve(err(new Error('ACP session is not connected'))),
+      {
+        isPending: (requestId) =>
+          this.permissionQueue.some((item) => item.requestId === requestId),
+        onChange: () =>
+          runInAction(() => {
+            this._permissionResolutionVersion += 1;
+          }),
+      }
+    );
+
     makeObservable(this, {
       session: observable.ref,
       historyLoading: observable,
@@ -167,6 +200,7 @@ export class AcpChatStore {
       isCancelling: observable,
       isLoadingOlderHistory: observable,
       changesFootprint: observable.ref,
+      _permissionResolutionVersion: observable,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -175,6 +209,7 @@ export class AcpChatStore {
       effortOptions: computed,
       commands: computed,
       permissionQueue: computed,
+      permissionResolution: computed,
       queuedPrompts: computed,
       usage: computed,
       affordances: computed,
@@ -191,6 +226,7 @@ export class AcpChatStore {
       setMode: action,
       setEffort: action,
       resolvePermission: action,
+      retryPermissionResolution: action,
       editQueuedPrompt: action,
       deleteQueuedPrompt: action,
       reorderQueuedPrompts: action,
@@ -261,12 +297,30 @@ export class AcpChatStore {
     return (this.session?.sessionState.current().pendingPermissions ?? []).map((request) => ({
       requestId: request.requestId,
       title: request.toolCall.title,
+      itemId: request.toolCall.id,
+      operation: describePermissionOperation(request.toolCall),
       options: request.options.map((option) => ({
         optionId: option.optionId,
         name: option.name,
         kind: option.kind,
       })),
     }));
+  }
+
+  /**
+   * Resolution state for the *current* (front of queue) permission request —
+   * `undefined`/`null` while idle, `resolving` while the decision is in
+   * flight, or `error` with a retryable message. Keyed internally by
+   * requestId (see `PermissionResolutionController`) so this always reflects
+   * the request actually on screen, never a stale one.
+   */
+  get permissionResolution(): PermissionResolutionEntry | null {
+    // Read to establish this computed's MobX dependency — the controller
+    // itself is framework-free and holds no observable state of its own.
+    const _permissionResolutionDependency = this._permissionResolutionVersion;
+    const request = this.permissionQueue[0];
+    if (!request) return null;
+    return this._permissionResolution.stateFor(request.requestId) ?? null;
   }
 
   get queuedPrompts(): ComposerQueuedPrompt[] {
@@ -520,10 +574,27 @@ export class AcpChatStore {
       .catch((error: unknown) => this._toastError('Failed to change effort', error));
   }
 
+  /**
+   * Resolve the current (front of queue) permission request with `optionId`.
+   * Routed through `PermissionResolutionController`, which single-flights per
+   * requestId — a duplicate click while the decision is still in flight is a
+   * no-op rather than a second request to the runtime.
+   */
   resolvePermission(optionId: string): void {
     const request = this.permissionQueue[0];
     if (!request) return;
-    void this.session?.resolvePermission(request.requestId, optionId);
+    this._permissionResolution.resolve(request.requestId, optionId);
+  }
+
+  /**
+   * Retry the last-attempted option for the current permission request after
+   * a failed resolution. No-op if the current request has no tracked error
+   * (e.g. it was superseded before retry was clicked).
+   */
+  retryPermissionResolution(): void {
+    const request = this.permissionQueue[0];
+    if (!request) return;
+    this._permissionResolution.retry(request.requestId);
   }
 
   editQueuedPrompt(id: string, text: string): void {
@@ -793,6 +864,7 @@ export class AcpChatStore {
       session.sessionState.onChange(() =>
         runInAction(() => {
           this._syncMessageCount();
+          this._prunePermissionResolution();
         })
       ),
       session.activeTurn.onChange(() =>
@@ -946,6 +1018,17 @@ export class AcpChatStore {
     const activeCount = state.activeTurnSnapshot?.items.length ?? 0;
     const pendingPromptCount = this.chatState.session.state.pendingPrompt ? 1 : 0;
     this.messageCount = committedCount + activeCount + pendingPromptCount;
+  }
+
+  /**
+   * Drop any tracked in-flight/error resolution state for a permission
+   * request no longer in `permissionQueue` — the turn ended, the agent
+   * cancelled it, or it settled through `resolvePermission` itself. Called on
+   * every `sessionState` change (see `_subscribeLiveSession`) so a stale
+   * entry never lingers for a request the UI can no longer show.
+   */
+  private _prunePermissionResolution(): void {
+    this._permissionResolution.prune(new Set(this.permissionQueue.map((item) => item.requestId)));
   }
 
   /**
