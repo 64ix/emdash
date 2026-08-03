@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
+import type { AgentStatus } from '@shared/core/agents/agentEvents';
 import type { Task } from '@shared/core/tasks/tasks';
 
 const mocks = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ import {
   countTasksNeedingAttention,
   taskNeedsAttention,
 } from './board-attention';
+import { needsAttention as needsAttentionInBoardFilters } from './board-filters';
 
 type FakeStore = { data: Task | undefined };
 
@@ -59,6 +61,20 @@ describe('agentStatusNeedsAttention', () => {
 
   it('does not flag no status at all', () => {
     expect(agentStatusNeedsAttention(null)).toBe(false);
+  });
+
+  it("never diverges from board-filters.ts's own copy of the same rule (kept dependency-free for node tests)", () => {
+    const statuses: (AgentStatus | null)[] = [
+      null,
+      'idle',
+      'working',
+      'awaiting-input',
+      'error',
+      'completed',
+    ];
+    for (const status of statuses) {
+      expect(needsAttentionInBoardFilters(status)).toBe(agentStatusNeedsAttention(status));
+    }
   });
 });
 

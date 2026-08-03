@@ -1,4 +1,3 @@
-import { agentStatusNeedsAttention } from '@renderer/features/board/board-attention';
 import { stageOf, type ColumnId } from '@renderer/features/board/board-ordering';
 import type { AgentStatus } from '@shared/core/agents/agentEvents';
 import {
@@ -15,7 +14,21 @@ import type { Task } from '@shared/core/tasks/tasks';
  * Persistence only ever happens through `TaskStore.updateBoardPosition`
  * (drag-and-drop, the Task Detail Panel's stage selector, and column-scoped
  * creation), none of which this module imports or calls.
+ *
+ * Deliberately dependency-free of `board-attention.ts`/`task-store.ts`: this
+ * module must stay importable from a plain `node` unit test with no browser
+ * globals. `task-store.ts`'s transitive chain (via `workspace-view-model.tsx`
+ * → conversation stores → `@emdash/chat-ui`) touches `document` at module
+ * scope, which crashes outside a DOM. `needsAttention` below intentionally
+ * re-states `agentStatusNeedsAttention`'s rule rather than importing it —
+ * `board-attention.test.ts` asserts the two never diverge.
  */
+
+/** Same rule as `agentStatusNeedsAttention` (board-attention.ts) — exported
+ * only so `board-attention.test.ts` can assert the two never diverge. */
+export function needsAttention(status: AgentStatus | null): boolean {
+  return status === 'awaiting-input' || status === 'error' || status === 'completed';
+}
 
 // ── Agent state ──────────────────────────────────────────────────────────────
 
@@ -168,7 +181,7 @@ export function taskPassesBoardFilters(
   agentStatus: AgentStatus | null,
   filters: BoardFilterState
 ): boolean {
-  if (filters.needsAttentionOnly && !agentStatusNeedsAttention(agentStatus)) return false;
+  if (filters.needsAttentionOnly && !needsAttention(agentStatus)) return false;
   if (!matchesSearchQuery(task, filters.query)) return false;
   if (filters.stages.size > 0 && !filters.stages.has(stageOf(task))) return false;
   if (
