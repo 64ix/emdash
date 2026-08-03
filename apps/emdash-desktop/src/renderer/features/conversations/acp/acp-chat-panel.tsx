@@ -57,6 +57,7 @@ import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
 import { failedSubmissionPreview } from './acp-submission-recovery';
+import { activateChatLink } from './chat-link-activation';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -871,6 +872,9 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
         if (!store) return;
         const open = arg.source === 'diff' ? openFileInAdjacentPane : openFileInTaskEditor;
         void open(store.projectId, store.taskId, arg.path);
+      },
+      onActivateLink: (arg) => {
+        activateChatLink(arg, store ? { projectId: store.projectId, taskId: store.taskId } : null);
       },
       onClickMention: (arg: Parameters<NonNullable<ChatCommands['onClickMention']>>[0]) => {
         if (!store) return;

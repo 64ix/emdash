@@ -1,9 +1,9 @@
-import { toast } from 'sonner';
 import {
   asProvisioned,
   getTaskStore,
   getTaskView,
 } from '@renderer/features/tasks/stores/task-selectors';
+import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { focusTracker } from '@renderer/utils/focus-tracker';
 import { resolveWorkspacePath } from './workspace-path';
@@ -26,6 +26,21 @@ function resolveEditorFilePath(workspacePath: string, filePath: string): string 
     return null;
   }
   return resolvedPath;
+}
+
+/** Shows the resolved target and a copy action instead of silently opening an empty tab. */
+function reportMissingWorkspaceFile(filePath: string): void {
+  toast({
+    title: 'File not found in workspace',
+    description: filePath,
+    variant: 'destructive',
+    action: {
+      label: 'Copy',
+      onClick: () => {
+        void rpc.app.clipboardWriteText(filePath);
+      },
+    },
+  });
 }
 
 export async function openFileInTaskEditor(
@@ -52,7 +67,7 @@ export async function openFileInTaskEditor(
     resolvedPath
   );
   if (!exists.success || !exists.data.exists) {
-    toast.error(`File not found in workspace: ${filePath}`);
+    reportMissingWorkspaceFile(resolvedPath);
     return;
   }
 
@@ -88,7 +103,7 @@ export async function openFileInAdjacentPane(
     resolvedPath
   );
   if (!exists.success || !exists.data.exists) {
-    toast.error(`File not found in workspace: ${filePath}`);
+    reportMissingWorkspaceFile(resolvedPath);
     return;
   }
 
@@ -118,7 +133,11 @@ export async function openExternalFilePath(
   }
   const result = await rpc.app.openPath(filePath);
   if (!result.success) {
-    toast.error(`Could not open ${filePath}: ${result.error}`);
+    toast({
+      title: `Could not open ${filePath}`,
+      description: result.error,
+      variant: 'destructive',
+    });
   }
 }
 
