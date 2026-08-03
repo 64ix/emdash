@@ -1294,6 +1294,69 @@ describe('board drag-and-drop — keyboard-driven (ticket #52)', () => {
     expect(columnZone('Unstaged').contains(cardEl('card-a'))).toBe(true);
     expect(a.updateBoardPosition).not.toHaveBeenCalled();
   });
+
+  it('expands a collapsed empty column so a keyboard drag can actually reach it, and still accepts the drop — the same `isDragHovered` state ticket #46 built for pointer', async () => {
+    // Regression test: dnd-kit's own `sortableKeyboardCoordinates` ranks
+    // candidate drop targets by corner-to-corner distance to the active
+    // card's rect. A collapsed empty column (ticket #46) renders as a very
+    // narrow, full-board-height sliver — verified experimentally that this
+    // geometry defeats that ranking: arrow-key navigation skipped straight
+    // over a *collapsed* Idea into Exploring every time, even though the
+    // exact same navigation correctly landed on Idea when it was merely
+    // empty but not collapsed (see the cross-column test above). The board
+    // now force-expands every collapsible empty column for the duration of
+    // a keyboard-activated drag specifically to keep this reachable.
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+
+    // Expanded immediately: the fix forces every collapsible empty column
+    // open for the duration of any keyboard drag, not just once hovered.
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    keydown(document, 'ArrowRight');
+    await settle();
+    expect(columnZone('Idea').contains(cardEl('card-a'))).toBe(true);
+
+    keydown(document, 'Space');
+    await settle();
+
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('idea', expect.any(String));
+  });
+
+  it('collapses back once a keyboard drag that never entered it ends, matching the pointer-drag contract', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    keydown(document, 'Escape');
+    await settle();
+
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    // Idea is still empty (the drag was cancelled), so it is collapsible
+    // again once the keyboard drag that forced it open has ended.
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+  });
 });
 
 // ── Focus traversal and semantic labels (ticket #52) ───────────────────────

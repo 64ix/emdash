@@ -205,6 +205,24 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
   const { ghostCards, adopt: adoptGhostCard, reject: rejectGhostCard } = useGhostCards(projectId);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  // Keyboard-drag geometry fix-up (ticket #52): dnd-kit's own
+  // `sortableKeyboardCoordinates` ranks candidate drop targets by
+  // corner-to-corner distance to the active card's rect. A collapsed empty
+  // column (ticket #46) is rendered as a very narrow, full-height sliver
+  // (`w-14` against the board's own height) — its top/bottom corner pair is
+  // far apart vertically while its left/right corners sit close together
+  // horizontally, which this repo's own testing found genuinely defeats that
+  // ranking: arrow-key navigation skips straight over a collapsed empty
+  // column into the next one, every time, regardless of how many presses are
+  // sent. Pointer dragging is unaffected (`columnAwareCollision` above reads
+  // the real pointer position, not rect corners), so this is keyboard-only.
+  // Forcing every collapsible empty column to its normal expanded width for
+  // the duration of a keyboard-activated drag removes the narrow geometry
+  // that breaks the ranking, without changing the pointer-drag experience
+  // (an unrelated column stays collapsed during a pointer drag, matching
+  // ticket #46's original, tested behaviour) or the collapsed columns'
+  // resting state once no drag is active.
+  const [keyboardDragActive, setKeyboardDragActive] = useState(false);
   // While dragging over a foreign column, the active card is moved into that
   // column's list (display only) so its SortableContext owns it: the ghost
   // slot and make-room displacement then work across columns exactly like
@@ -470,12 +488,14 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   function handleDragStart(event: DragStartEvent) {
     setActiveDragId(String(event.active.id));
     setDragPreview(null);
+    setKeyboardDragActive(event.activatorEvent instanceof KeyboardEvent);
   }
 
   function handleDragCancel() {
     setActiveDragId(null);
     setDragPreview(null);
     setBlockedHover(null);
+    setKeyboardDragActive(false);
   }
 
   function handleDragOver(event: DragOverEvent) {
@@ -541,6 +561,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     setActiveDragId(null);
     setDragPreview(null);
     setBlockedHover(null);
+    setKeyboardDragActive(false);
     const { active, over } = event;
     if (!over) return;
     const activeId = String(active.id);
@@ -750,8 +771,12 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
       // Collapsible empty columns (ticket #46): the column currently under
       // the cross-column drag preview must expand for the duration of the
       // drag regardless of its collapsed toggle, so a collapsed column
-      // never becomes a harder-to-hit drop target mid-gesture.
-      isDragHovered={previewColumn === column}
+      // never becomes a harder-to-hit drop target mid-gesture. During a
+      // keyboard-activated drag every collapsible empty column expands
+      // (ticket #52, see `keyboardDragActive` above) — not just the
+      // currently-previewed one — because the narrow collapsed geometry
+      // itself is what defeats dnd-kit's own keyboard coordinate ranking.
+      isDragHovered={previewColumn === column || keyboardDragActive}
       // Stage authority (ticket #48): pass through the currently-hovered
       // blocked destination, if this is it.
       isBlockedDestination={blockedHover?.column === column}
