@@ -103,6 +103,15 @@ describe('classifyMainWindowNavigation', () => {
       const decision = classifyMainWindowNavigation('https://example.com', isDev);
       expect(decision.kind).toBe('external-http');
     });
+
+    it('denies a same-prefix host that is not actually the dev origin', () => {
+      // Regression: a bare `startsWith(devServerUrl)` would let a host like
+      // `localhost:5173.evil.com` slip through as "internal" purely because
+      // it shares a string prefix with the dev server origin, even though it
+      // is a different origin entirely.
+      const decision = classifyMainWindowNavigation('http://localhost:5173.evil.com/', isDev);
+      expect(decision.kind).not.toBe('internal');
+    });
   });
 });
 

@@ -44,7 +44,15 @@ export function classifyMainWindowNavigation(
 function isInternalAppUrl(url: string, isDev: boolean): boolean {
   if (isDev) {
     const devServerUrl = process.env.ELECTRON_RENDERER_URL ?? '';
-    return devServerUrl.length > 0 && url.startsWith(devServerUrl);
+    if (devServerUrl.length === 0) return false;
+    // Strip any trailing slash so the boundary check below is the same
+    // origin-or-origin-slash-prefix shape as the production branch, rather
+    // than relying on ELECTRON_RENDERER_URL always being formatted with a
+    // trailing slash — a bare `startsWith(devServerUrl)` would otherwise let
+    // a URL like `${devServerUrl}.evil.com` (no slash boundary) pass as
+    // internal.
+    const devOrigin = devServerUrl.endsWith('/') ? devServerUrl.slice(0, -1) : devServerUrl;
+    return url === devOrigin || url.startsWith(`${devOrigin}/`);
   }
   return url === APP_ORIGIN || url.startsWith(`${APP_ORIGIN}/`);
 }
