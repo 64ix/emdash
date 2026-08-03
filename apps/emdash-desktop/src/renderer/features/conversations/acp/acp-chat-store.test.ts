@@ -1,6 +1,7 @@
 import type { TranscriptItem, TranscriptTurn } from '@emdash/core/acp/client';
 import { autorun } from 'mobx';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { log } from '@renderer/utils/logger';
 import { AcpChatStore } from './acp-chat-store';
 import type { AcpHistoryPagination } from './acp-history-pagination';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
@@ -159,6 +160,14 @@ vi.mock('@renderer/lib/stores/app-state', () => ({
     },
     projects: { projects: new Map() },
   },
+}));
+// The real logger reaches `window.electronAPI`, which does not exist in this
+// project's node environment — harmless as long as `log.error`/`log.warn`
+// are never actually invoked, which held until `_resync`'s "log and
+// continue" guard (see acp-chat-store.ts) made a resync failure something a
+// test exercises on purpose (see "a throwing resync step..." below).
+vi.mock('@renderer/utils/logger', () => ({
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 type FakeChatState = ReturnType<typeof makeFakeChatState>;
@@ -338,6 +347,53 @@ describe('AcpChatStore.loadOlderHistory', () => {
       makeTurn(10),
       makeTurn(11),
     ]);
+  });
+
+  it('a throwing resync step does not abort the syncs after it or misreport a successful fetch as a load failure', async () => {
+    // Regression guard for a real incident hit at integration time: a
+    // session mock lacking `sessionState` made `_syncAttentionQueue` throw
+    // *inside* the post-fetch sync block, which (pre-`_resync`) aborted every
+    // sync after it (here: `_syncSearch`) and surfaced as the generic
+    // "Failed to load older messages" toast even though the page had already
+    // fetched and applied successfully. `_resync` (acp-chat-store.ts) now
+    // isolates each sync step so this can never happen again, regardless of
+    // which future bug causes a given `_syncX()` to throw.
+    const { store, fakeChatState } = setUpStore([makeTurn(10), makeTurn(11)], 10);
+    const olderPage = { turns: [makeTurn(9)], nextCursor: null };
+    store.session = {
+      getHistory: vi.fn(async () => ({ success: true, data: olderPage })),
+      // Deliberately missing `sessionState` — `_syncAttentionQueue` reads
+      // `session.sessionState.current()` and throws without it. The real
+      // session type always has `sessionState`; this stands in for any
+      // future bug in one resync step.
+    } as never;
+    store.bindView(null);
+
+    const storeInternals = store as unknown as {
+      _toastError: (title: string, error: unknown) => void;
+      _syncSearch: () => void;
+    };
+    const toastSpy = vi.spyOn(storeInternals, '_toastError');
+    const syncSearchSpy = vi.spyOn(storeInternals, '_syncSearch');
+
+    void store.loadOlderHistory();
+    await flushMicrotasks();
+
+    // The page landed despite the later throw...
+    expect(fakeChatState.transcript.history.get()).toEqual([
+      makeTurn(9),
+      makeTurn(10),
+      makeTurn(11),
+    ]);
+    // ...the sync scheduled after the throwing one still ran...
+    expect(syncSearchSpy).toHaveBeenCalled();
+    // ...the throw was logged rather than silently swallowed...
+    expect(log.error).toHaveBeenCalledWith(
+      'ACP chat resync step failed: attentionQueue',
+      expect.objectContaining({ error: expect.anything() })
+    );
+    // ...and never misreported as the fetch itself failing.
+    expect(toastSpy).not.toHaveBeenCalled();
   });
 
   it('toggles isLoadingOlderHistory around the fetch', async () => {

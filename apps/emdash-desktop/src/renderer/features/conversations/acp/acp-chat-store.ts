@@ -753,6 +753,37 @@ export class AcpChatStore {
     this.searchVersion += 1;
   }
 
+  /**
+   * Run one derived-state resync step defensively. Every `_syncX()` call site
+   * below runs several of these back to back against the same
+   * already-applied transcript/session snapshot — `_syncMessageCount`,
+   * `_syncChangesFootprint`, `_syncNewEventCount`, `_syncOutline`,
+   * `_syncPermissionQueue`, `_syncAttentionQueue`, `_syncSearch`, plus
+   * `_prunePermissionResolution`. Without this wrapper a bug in any ONE of
+   * them (this file's history: a session mock missing `sessionState` at
+   * merge time made `_syncAttentionQueue` throw) would, depending on where it
+   * sits in the sequence: abort every sync after it in the same batch,
+   * surface as an unrelated failure at the call site (e.g.
+   * `_loadOlderHistory` would report "Failed to load older messages" for a
+   * page that had already fetched and applied successfully), or — from
+   * `_runBootstrap` — flip an otherwise-successful load into `loadError`
+   * despite `session`/`transcript` already being fully set up. None of that
+   * is desirable: a resync step is best-effort derived state, never the
+   * surrounding operation's own success/failure signal. Logs and continues.
+   */
+  private _resync(label: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (error) {
+      log.error(`ACP chat resync step failed: ${label}`, {
+        conversationId: this.conversationId,
+        projectId: this.projectId,
+        taskId: this.taskId,
+        error,
+      });
+    }
+  }
+
   bootstrap(): void {
     if (this._bootstrapped) return;
     this._bootstrapped = true;
@@ -1125,11 +1156,11 @@ export class AcpChatStore {
         // transcript and no longer mean anything against the new one.
         this._resetReadingPosition();
         this._search.close();
-        this._syncMessageCount();
-        this._syncChangesFootprint();
-        this._syncOutline();
-        this._syncPermissionQueue();
-        this._syncAttentionQueue();
+        this._resync('messageCount', () => this._syncMessageCount());
+        this._resync('changesFootprint', () => this._syncChangesFootprint());
+        this._resync('outline', () => this._syncOutline());
+        this._resync('permissionQueue', () => this._syncPermissionQueue());
+        this._resync('attentionQueue', () => this._syncAttentionQueue());
       });
     } catch (error) {
       log.error('ACP chat bootstrap failed', {
@@ -1320,27 +1351,27 @@ export class AcpChatStore {
       this._bindTerminalOutputs(session),
       session.sessionState.onChange(() =>
         runInAction(() => {
-          this._syncMessageCount();
+          this._resync('messageCount', () => this._syncMessageCount());
           // Order matters: `permissionQueue` must be resynced before
           // `_prunePermissionResolution` reads it, or pruning would act on
           // the previous `pendingPermissions` snapshot.
-          this._syncPermissionQueue();
-          this._prunePermissionResolution();
+          this._resync('permissionQueue', () => this._syncPermissionQueue());
+          this._resync('prunePermissionResolution', () => this._prunePermissionResolution());
           // Covers every exit a pending permission request can take —
           // resolved, cancelled by the agent, or superseded by a new one —
           // since all three change `pendingPermissions` and this fires on
           // every such change.
-          this._syncAttentionQueue();
+          this._resync('attentionQueue', () => this._syncAttentionQueue());
         })
       ),
       session.activeTurn.onChange(() =>
         runInAction(() => {
-          this._syncMessageCount();
-          this._syncChangesFootprint();
-          this._syncNewEventCount();
-          this._syncOutline();
-          this._syncAttentionQueue();
-          this._syncSearch();
+          this._resync('messageCount', () => this._syncMessageCount());
+          this._resync('changesFootprint', () => this._syncChangesFootprint());
+          this._resync('newEventCount', () => this._syncNewEventCount());
+          this._resync('outline', () => this._syncOutline());
+          this._resync('attentionQueue', () => this._syncAttentionQueue());
+          this._resync('search', () => this._syncSearch());
         })
       ),
       session.draft.onChange((draft) =>
@@ -1422,12 +1453,12 @@ export class AcpChatStore {
     runInAction(() => {
       this.chatState.session.setPendingPrompt(null);
       this.chatState.transcript.history.append([...fresh]);
-      this._syncMessageCount();
-      this._syncChangesFootprint();
-      this._syncNewEventCount();
-      this._syncOutline();
-      this._syncAttentionQueue();
-      this._syncSearch();
+      this._resync('messageCount', () => this._syncMessageCount());
+      this._resync('changesFootprint', () => this._syncChangesFootprint());
+      this._resync('newEventCount', () => this._syncNewEventCount());
+      this._resync('outline', () => this._syncOutline());
+      this._resync('attentionQueue', () => this._syncAttentionQueue());
+      this._resync('search', () => this._syncSearch());
     });
   }
 
@@ -1474,12 +1505,19 @@ export class AcpChatStore {
         } else {
           this.chatState.transcript.history.prepend([...fresh]);
         }
-        this._syncMessageCount();
-        this._syncChangesFootprint();
-        this._syncNewEventCount();
-        this._syncOutline();
-        this._syncAttentionQueue();
-        this._syncSearch();
+        // Every resync below runs through `_resync` (not a bare call): the
+        // page has already fetched and applied by this point, so a bug in
+        // one derived-state sync must never be reported as "Failed to load
+        // older messages" (this function's own `catch` below is for the
+        // *fetch*, not for these), and must never silently skip the syncs
+        // after it — see `_resync`'s own doc for the exact incident this
+        // guards against.
+        this._resync('messageCount', () => this._syncMessageCount());
+        this._resync('changesFootprint', () => this._syncChangesFootprint());
+        this._resync('newEventCount', () => this._syncNewEventCount());
+        this._resync('outline', () => this._syncOutline());
+        this._resync('attentionQueue', () => this._syncAttentionQueue());
+        this._resync('search', () => this._syncSearch());
       });
     } catch (error) {
       this._historyPagination.abortLoadOlder(epoch);
