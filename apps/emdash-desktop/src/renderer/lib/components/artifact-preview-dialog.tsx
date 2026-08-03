@@ -1,8 +1,7 @@
 import { useMemo } from 'react';
-import type { BaseModalProps } from '@renderer/lib/modal/modal-provider';
-import { MarkdownRenderer } from '@renderer/lib/ui/markdown-renderer';
-import { DialogContentArea, DialogFooter, DialogHeader, DialogTitle } from '@renderer/lib/ui/dialog';
 import { parseCsv } from '@renderer/lib/editor/csv-parser';
+import type { BaseModalProps } from '@renderer/lib/modal/modal-provider';
+import { DialogContentArea, DialogFooter, DialogHeader, DialogTitle } from '@renderer/lib/ui/dialog';
 
 /**
  * Rendered artifact content for `ArtifactPreviewDialog` — already fetched and
@@ -10,6 +9,14 @@ import { parseCsv } from '@renderer/lib/editor/csv-parser';
  * This component only ever displays bytes that already passed the
  * size/type/content policy; it never fetches, executes, or re-validates
  * anything itself.
+ *
+ * Markdown content is intentionally rendered as plain preformatted text, not
+ * through the app's rich `MarkdownRenderer`: that renderer follows remote
+ * `http(s)` image sources and (in its default "full" mode) parses embedded
+ * raw HTML before sanitizing it. Either is an acceptable trust boundary for
+ * markdown a user typed themselves, but not for agent-authored file content
+ * previewed from chat — this dialog must never fetch a remote resource or
+ * execute markup the previewed file contains.
  */
 export type ArtifactPreviewArtifact =
   | { kind: 'image'; dataUrl: string; mimeType: string }
@@ -77,10 +84,6 @@ export function ArtifactPreviewDialog({ name, path, artifact }: Props) {
             alt={name}
             className="mx-auto max-h-[65vh] max-w-full rounded object-contain"
           />
-        ) : artifact.contentType === 'markdown' ? (
-          <div className="max-h-[65vh] overflow-auto">
-            <MarkdownRenderer content={artifact.content} />
-          </div>
         ) : artifact.contentType === 'csv' ? (
           <CsvTable content={artifact.content} />
         ) : (
