@@ -181,6 +181,27 @@ describe('deriveErrorAttentionSources', () => {
     }
   );
 
+  it.each(['end_turn', 'max_turn_requests', 'refusal', 'quiesced'] as const)(
+    'does not flag a done outcome with a normal stop reason (%s)',
+    (reason) => {
+      const t = turn({
+        outcome: { kind: 'done', reason },
+        items: [message('msg-1', 1, 'assistant', 'x')],
+      });
+      expect(deriveErrorAttentionSources(t, null)).toEqual([]);
+    }
+  );
+
+  it('flags a done turn that hit the context/token limit (ticket #39), anchored on the turn’s first item', () => {
+    const t = turn({
+      outcome: { kind: 'done', reason: 'max_tokens' },
+      items: [message('msg-1', 1, 'assistant', 'partial reply')],
+    });
+    expect(deriveErrorAttentionSources(t, null)).toEqual([
+      { id: 'turn:turn-1', itemId: 'msg-1', summary: 'Context limit reached' },
+    ]);
+  });
+
   it('does not flag a turn-level error when the errored turn has no items to anchor on', () => {
     const t = turn({ outcome: { kind: 'error' }, items: [] });
     expect(deriveErrorAttentionSources(t, null)).toEqual([]);

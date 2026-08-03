@@ -194,12 +194,37 @@ function boundedSanitizedSummary(text: string): string {
   return `${clean.slice(0, SUMMARY_MAX_CHARS - 1)}…`;
 }
 
+/**
+ * Whether a settled turn outcome is worth alerting the user to (ticket #39's
+ * recovery-card categorization, mirrored — not imported — here; see the
+ * "Why cancellation never enters this queue" note below for why the two
+ * copies can safely diverge on that one point).
+ *
+ * `error`/`interrupted` were already flagged before ticket #39. `done` with
+ * `reason: 'max_tokens'` is ticket #39's addition: a real ACP `StopReason`
+ * (`packages/core/.../models/session.ts`) meaning the model's context/token
+ * budget ran out mid-turn — worth surfacing even though the turn otherwise
+ * "succeeded". Every other `done` reason (`end_turn`, `max_turn_requests`,
+ * `refusal`, `quiesced`) and a plain `cancelled` outcome are NOT flagged —
+ * see the note below for cancellation specifically.
+ *
+ * Why cancellation never enters this queue: a `cancelled` outcome is the
+ * user's own Stop — they already know, since they just clicked it — so
+ * nagging them with an attention item would be the opposite of helpful. This
+ * was already true before ticket #39 (the original `outcome?.kind ===
+ * 'error' || outcome?.kind === 'interrupted'` check excluded it too); this
+ * function keeps that exclusion explicit rather than accidental.
+ */
 function isTurnLevelError(outcome: TranscriptTurnOutcome | undefined): boolean {
-  return outcome?.kind === 'error' || outcome?.kind === 'interrupted';
+  if (outcome?.kind === 'error' || outcome?.kind === 'interrupted') return true;
+  return outcome?.kind === 'done' && outcome.reason === 'max_tokens';
 }
 
 /** Mirrors `turn-footer.ts`'s label choice so this summary never contradicts the turn's own footer. */
 function turnErrorSummary(outcome: TranscriptTurnOutcome): string {
+  if (outcome.kind === 'done' && outcome.reason === 'max_tokens') {
+    return 'Context limit reached';
+  }
   const base = outcome.kind === 'interrupted' ? 'Turn interrupted' : 'Turn failed';
   return outcome.reason ? `${base} (${outcome.reason})` : base;
 }
