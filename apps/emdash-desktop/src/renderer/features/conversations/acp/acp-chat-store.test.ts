@@ -1182,6 +1182,49 @@ describe('AcpChatStore.attentionQueue', () => {
     expect(scrollToBottom).not.toHaveBeenCalled();
     expect(setScrollMode).not.toHaveBeenCalled();
   });
+
+  // ── Different resolution orders ──────────────────────────────────────────────
+
+  it('resolves two simultaneous items correctly regardless of which one is handled first', () => {
+    // Order A: the permission is resolved before the failed submission is discarded.
+    const pendingA: unknown[] = [permissionRequest('req-1', 'perm-item')];
+    const { store: storeA } = setUpStore([], null);
+    storeA.session = {
+      sessionState: { current: () => ({ pendingPermissions: pendingA }) },
+    } as never;
+    seedFailedSubmission(storeA, 'sub-1');
+    syncAttentionQueue(storeA);
+    expect(storeA.attentionQueue.map((i) => i.id)).toEqual([
+      'permission:req-1',
+      'failed-submission:sub-1',
+    ]);
+
+    pendingA.length = 0;
+    syncAttentionQueue(storeA);
+    expect(storeA.attentionQueue.map((i) => i.id)).toEqual(['failed-submission:sub-1']);
+    storeA.discardFailedSubmission('sub-1');
+    expect(storeA.attentionQueue).toEqual([]);
+
+    // Order B: the same two items, resolved in the opposite order — the
+    // failed submission first, then the permission.
+    const pendingB: unknown[] = [permissionRequest('req-1', 'perm-item')];
+    const { store: storeB } = setUpStore([], null);
+    storeB.session = {
+      sessionState: { current: () => ({ pendingPermissions: pendingB }) },
+    } as never;
+    seedFailedSubmission(storeB, 'sub-1');
+    syncAttentionQueue(storeB);
+    expect(storeB.attentionQueue.map((i) => i.id)).toEqual([
+      'permission:req-1',
+      'failed-submission:sub-1',
+    ]);
+
+    storeB.discardFailedSubmission('sub-1');
+    expect(storeB.attentionQueue.map((i) => i.id)).toEqual(['permission:req-1']);
+    pendingB.length = 0;
+    syncAttentionQueue(storeB);
+    expect(storeB.attentionQueue).toEqual([]);
+  });
 });
 
 // ── AcpChatStore attention-queue traversal ───────────────────────────────────
