@@ -22,10 +22,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  captureTelemetry: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
   useNavigate: () => ({ navigate: mocks.navigate }),
+}));
+
+vi.mock('@renderer/utils/telemetryClient', () => ({
+  captureTelemetry: mocks.captureTelemetry,
 }));
 
 import { WorkflowStageChip } from '@renderer/features/tasks/workflow-stage-chip';
@@ -43,6 +48,7 @@ beforeEach(() => {
   document.body.appendChild(host);
   root = createRoot(host);
   mocks.navigate.mockClear();
+  mocks.captureTelemetry.mockClear();
 });
 
 afterEach(() => {
@@ -78,6 +84,21 @@ describe('WorkflowStageChip (ticket #50)', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('board', {
       projectId: 'p1',
       focusTaskId: 't1',
+    });
+  });
+
+  // Integration-review regression: the chip is a fourth board entry point
+  // (alongside tickets #43/#44's sidebar/command-palette/work-mode-switcher
+  // sites) but shipped with no `board_opened` telemetry at all — leaving
+  // `BoardEntrySource` uncovered for a real navigation path.
+  it("fires board_opened with source 'stage_chip' when activated", async () => {
+    root.render(<WorkflowStageChip projectId="p1" taskId="t1" workflowStage="spec" />);
+    await settle();
+    chipButton().click();
+
+    expect(mocks.captureTelemetry).toHaveBeenCalledWith('board_opened', {
+      source: 'stage_chip',
+      project_id: 'p1',
     });
   });
 

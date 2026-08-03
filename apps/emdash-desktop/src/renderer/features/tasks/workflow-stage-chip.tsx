@@ -1,5 +1,6 @@
 import { STAGE_LABELS } from '@renderer/features/board/board-columns';
 import { useNavigate } from '@renderer/lib/layout/navigation-provider';
+import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 
 /**
@@ -13,6 +14,10 @@ import type { WorkflowStage } from '@shared/core/tasks/tasks';
  * Activating it returns to the project's board with this task focused:
  * `BoardMainPanel` resolves, scrolls to, highlights, and opens the inspector
  * for it (see `board-main-panel.tsx`'s focused-task navigation effects).
+ * Fires `board_opened` with `source: 'stage_chip'` — the fourth board entry
+ * point (tickets #43, #44 built the other three) — so this affordance is not
+ * silently missing from the same entry-source instrumentation every other
+ * board entry point already carries.
  *
  * Kept in its own dependency-light leaf module (only `useNavigate` and the
  * board's presentation-only `board-columns.ts`) rather than defined inline
@@ -32,12 +37,17 @@ export function WorkflowStageChip({
   const { navigate } = useNavigate();
   const stageLabel = STAGE_LABELS[workflowStage ?? 'unstaged'];
 
+  const handleActivate = () => {
+    captureTelemetry('board_opened', { source: 'stage_chip', project_id: projectId });
+    navigate('board', { projectId, focusTaskId: taskId });
+  };
+
   return (
     <button
       type="button"
       title="View on Feature Board"
       aria-label={`Workflow stage: ${stageLabel}. View on Feature Board.`}
-      onClick={() => navigate('board', { projectId, focusTaskId: taskId })}
+      onClick={handleActivate}
       className="hover:bg-muted/30 ml-1 flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-xs text-foreground-muted"
     >
       {stageLabel}

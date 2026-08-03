@@ -25,8 +25,10 @@ export type FocusedRegion = 'main' | 'bottom';
 
 export type FocusTrigger = 'navigation' | 'panel_switch' | 'region_switch';
 
-/** Which UI affordance navigated to a project's Feature Board (tickets #43, #44). */
-export type BoardEntrySource = 'sidebar' | 'command_palette' | 'work_mode_switcher';
+/** Which UI affordance navigated to a project's Feature Board (tickets #43,
+ * #44, #50). `stage_chip` is the task titlebar's Workflow Stage chip, which
+ * carries a focused task id back to the board (ticket #50). */
+export type BoardEntrySource = 'sidebar' | 'command_palette' | 'work_mode_switcher' | 'stage_chip';
 
 export interface TelemetryEnvelope {
   event_ts_ms?: number;
