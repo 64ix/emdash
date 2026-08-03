@@ -228,6 +228,87 @@ describe('turn footer — copy action', () => {
   });
 });
 
+// ── Copy diagnostic (ticket #39) ──────────────────────────────────────────────
+
+describe('turn footer — copy diagnostic action', () => {
+  it('does not render for a plain successful completion — nothing to diagnose', async () => {
+    const { state, host, dispose } = mount();
+    state.transcript.history.seed([
+      turnWith([userMessage('u1', 'Sum 2 and 3'), assistantMessage('a1', 'The sum is 5.')], {
+        kind: 'done',
+      }),
+    ]);
+    await nextPaint();
+
+    await waitFor(() => host.querySelector('[aria-label="Copy turn"]'));
+    expect(host.querySelector('[aria-label="Copy diagnostic"]')).toBeNull();
+    dispose();
+  });
+
+  it.each([
+    { kind: 'error', reason: 'prompt_failed' } as const,
+    { kind: 'interrupted', reason: 'process_closed' } as const,
+    { kind: 'cancelled' } as const,
+  ])('renders for a $kind outcome', async (outcome) => {
+    const { state, host, dispose } = mount();
+    state.transcript.history.seed([turnWith([userMessage('u1', 'Do it')], outcome)]);
+    await nextPaint();
+
+    const button = await waitFor(
+      () => host.querySelector('[aria-label="Copy diagnostic"]') as HTMLButtonElement | null
+    );
+    expect(button).not.toBeNull();
+    dispose();
+  });
+
+  it('renders when a turn completed but hit the context/token limit (max_tokens)', async () => {
+    const { state, host, dispose } = mount();
+    state.transcript.history.seed([
+      turnWith([userMessage('u1', 'Summarize the repo')], { kind: 'done', reason: 'max_tokens' }),
+    ]);
+    await nextPaint();
+
+    expect(host.querySelector('[aria-label="Copy diagnostic"]')).not.toBeNull();
+    dispose();
+  });
+
+  it('does not render for a done outcome with a normal stop reason', async () => {
+    const { state, host, dispose } = mount();
+    state.transcript.history.seed([
+      turnWith([userMessage('u1', 'Hi')], { kind: 'done', reason: 'end_turn' }),
+    ]);
+    await nextPaint();
+
+    await waitFor(() => host.querySelector('[aria-label="Copy turn"]'));
+    expect(host.querySelector('[aria-label="Copy diagnostic"]')).toBeNull();
+    dispose();
+  });
+
+  it('places the bounded diagnostic text (category, turn id, outcome, reason) on the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    const { state, host, dispose } = mount();
+    state.transcript.history.seed([
+      turnWith([userMessage('u1', 'Do it')], { kind: 'error', reason: 'prompt_failed' }),
+    ]);
+    await nextPaint();
+
+    const button = await waitFor(
+      () => host.querySelector('[aria-label="Copy diagnostic"]') as HTMLButtonElement | null
+    );
+    expect(button).not.toBeNull();
+    button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const [copied] = writeText.mock.calls[0] as [string];
+    expect(copied).toContain('provider');
+    expect(copied).toContain('turn-1:outcome');
+    expect(copied).toContain('prompt_failed');
+    dispose();
+  });
+});
+
 // ── Reduced motion ────────────────────────────────────────────────────────────
 
 describe('turn footer — reduced motion', () => {

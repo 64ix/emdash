@@ -430,6 +430,57 @@ export type TurnOutcomeItem = {
   footer: TurnFooterData;
 };
 
+/**
+ * Canonical recovery-card vocabulary (ticket #39, spec #18) — the full set of
+ * failure categories a recovery card can ever be labeled with, shared by
+ * `state/turn-recovery.ts` (turn/tool-outcome cards, this package) and the
+ * desktop app's submission/session-load cards (`acp-recovery-card.ts`,
+ * imported there with `import type` only — see that module's doc for why a
+ * *runtime* import from this package is unsafe in the app's `node` test
+ * project, and why the category vocabulary is still shared as a type).
+ *
+ * Two members are honest placeholders, not currently-reachable outputs of any
+ * classifier in this codebase:
+ *   - 'rate-limit': no ACP error tag, stop reason, or provider-plugin surface
+ *     anywhere in this repo distinguishes "the provider rate-limited this
+ *     request" from any other provider/runtime failure — see
+ *     `errorTurnReasonSchema` in `packages/core/.../models/turns/turn.ts` and
+ *     `AcpRuntimeError` in `packages/core/.../acp/errors.ts`. Only a raw
+ *     `SerializedError.message` string could carry that distinction today,
+ *     and message-string guessing is exactly what this ticket forbids.
+ *   - 'authentication': reachable only from a *session-start* failure
+ *     (`AcpStartError.errorType === 'auth_required'`), never from a settled
+ *     `TranscriptTurnOutcome` — no turn/tool-level classifier in this package
+ *     ever produces it (see `categorizeTurnOutcome`'s doc).
+ * Both remain part of the union so a future, genuinely-typed producer has
+ * somewhere to plug in without a renderer change — mirroring ticket #33's
+ * unwired `'question'` attention-queue extension point.
+ */
+export type RecoveryCategory =
+  | 'authentication'
+  | 'rate-limit'
+  | 'context'
+  | 'provider'
+  | 'interruption'
+  | 'cancellation'
+  | 'unknown';
+
+/**
+ * Actions a recovery card may offer. A card's `actions` list is never a
+ * fixed per-category table — see each producer's own gating (e.g.
+ * `RECOVERY_ACTIONS_FOR_TURN` in `state/turn-recovery.ts`,
+ * `recoveryActionsForSubmission`/`recoveryActionsForLoadError` in the app's
+ * `acp-recovery-card.ts`) for the real, executable precondition behind each
+ * action instance.
+ */
+export type RecoveryAction =
+  | 'retry'
+  | 'edit'
+  | 'discard'
+  | 'sign-in'
+  | 'change-model'
+  | 'copy-diagnostic';
+
 export type SyntheticItem = WorkingItem | TurnOutcomeItem;
 
 export type ChatItem =
