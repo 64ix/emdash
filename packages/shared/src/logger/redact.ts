@@ -12,13 +12,103 @@ type RedactionReplacement = string | ((substring: string, ...args: string[]) => 
 const SECRET_KEY_NAMES =
   'authorization|api[_-]?key|token|password|passphrase|secret|access[_-]?token|refresh[_-]?token|client[_-]?secret';
 
+// Matches the key/quote/separator portion of a JSON-quoted secret: handles both
+// "key":"value" and escaped \"key\":\"value\" forms (the latter shows up when a
+// serialized JSON payload is itself embedded as a string in the log line). The
+// value itself is intentionally NOT matched here — see findJsonStringEnd below —
+// because a regex character class cannot correctly model JSON string escaping
+// (an escaped quote or a backslash inside the value would truncate the match).
+const JSON_KEY_PATTERN = new RegExp(
+  `(\\\\?")(${SECRET_KEY_NAMES})(\\\\?")(\\s*:\\s*)(\\\\?")`,
+  'gi'
+);
+
+/**
+ * Scans forward from just after a JSON string's opening quote to find the
+ * matching closing quote, honoring backslash escaping so an escaped quote
+ * (\") or a literal backslash inside the value never terminates the scan
+ * early. `quoteToken` is the exact opening delimiter that was matched — `"`
+ * for plain JSON, or `\"` for JSON escaped one level deeper (embedded in an
+ * outer string). Runs in a single linear pass (no backtracking) and returns
+ * the index just past the closing quote token, or -1 if the string never
+ * closes.
+ *
+ * Also bails (-1) on a raw control character (code point < 0x20, e.g. a
+ * literal, unescaped newline). Valid JSON strings must escape control
+ * characters, so hitting one bare means this isn't really a well-formed JSON
+ * string value — the "closing quote" we'd otherwise find further along may
+ * belong to unrelated, later content (for instance a different key's
+ * genuinely-closed value). Treating that stray quote as our own close would
+ * consume it, stripping the opening delimiter a subsequent real secret needs
+ * to match and letting it slip through unredacted. Bailing here keeps that
+ * later occurrence intact for the caller to find on its own.
+ */
+function findJsonStringEnd(input: string, start: number, quoteToken: string): number {
+  let i = start;
+  while (i < input.length) {
+    if (input.startsWith(quoteToken, i)) {
+      return i + quoteToken.length;
+    }
+    if (input.charCodeAt(i) < 0x20) {
+      return -1;
+    }
+    if (input[i] === '\\') {
+      // Backslash escape: skip it and whatever it escapes together, so an
+      // escaped quote (or backslash) in the value can never look like a
+      // closing delimiter.
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+/**
+ * Redacts JSON-quoted secret values (see JSON_KEY_PATTERN) using a small
+ * scanner rather than a single regex, since the value can legitimately
+ * contain escaped quotes and backslashes that a `[^"\\]*`-style character
+ * class would stop at prematurely — leaving the tail of the secret in clear
+ * text. Non-secret keys and values without a real closing quote are left
+ * untouched.
+ *
+ * Known limitation, not a regression: the doubly-escaped key form
+ * (`\"key\":\"value\"`, i.e. this whole JSON fragment embedded one level
+ * deeper inside an outer string) combined with an escape *inside* that same
+ * value is ambiguous for a scanner where one backslash always consumes
+ * exactly the next character — disambiguating it correctly needs escape-depth
+ * tracking, not a bigger quoteToken. In that combined case this scanner
+ * closes at the first escaped-looking boundary and leaves the remainder of
+ * the value in clear text, same shape as the original bug, just one nesting
+ * level in. The old single-regex approach redacted nothing at all for that
+ * combination (the character class never matched through the escape), so
+ * this is strictly less exposure, not more — but it is not a full fix.
+ */
+function redactJsonQuotedSecrets(value: string): string {
+  JSON_KEY_PATTERN.lastIndex = 0;
+  let result = '';
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = JSON_KEY_PATTERN.exec(value)) !== null) {
+    const [full, openQuote, keyName, closeQuote, separator, valueQuote] = match;
+    const valueStart = match.index + full.length;
+    const valueEnd = findJsonStringEnd(value, valueStart, valueQuote);
+    if (valueEnd === -1) {
+      // No matching closing quote — malformed/truncated input. Don't touch it
+      // rather than risk redacting past the intended boundary.
+      JSON_KEY_PATTERN.lastIndex = valueStart;
+      continue;
+    }
+    result += value.slice(lastIndex, match.index);
+    result += `${openQuote}${keyName}${closeQuote}${separator}${openQuote}[REDACTED]${openQuote}`;
+    lastIndex = valueEnd;
+    JSON_KEY_PATTERN.lastIndex = valueEnd;
+  }
+  result += value.slice(lastIndex);
+  return result;
+}
+
 const SECRET_PATTERNS: Array<[RegExp, RedactionReplacement]> = [
-  // JSON-quoted key/value: handles both "key":"value" and escaped \"key\":\"value\"
-  [
-    new RegExp(`(\\\\?")(${SECRET_KEY_NAMES})(\\\\?")(\\s*:\\s*)\\\\?"[^"\\\\]*\\\\?"`, 'gi'),
-    (_match, openQuote: string, keyName: string, closeQuote: string, separator: string) =>
-      `${openQuote}${keyName}${closeQuote}${separator}${openQuote}[REDACTED]${openQuote}`,
-  ],
   // Unquoted: key=value or key: bearer value
   [
     new RegExp(`\\b(${SECRET_KEY_NAMES})(\\s*[:=]\\s*)(?:bearer\\s+)?[^\\s,"'}]+`, 'gi'),
@@ -59,7 +149,7 @@ function applyRedactions(value: string, patterns: Array<[RegExp, RedactionReplac
 }
 
 export function redactSecrets(value: string): string {
-  return applyRedactions(value, SECRET_PATTERNS);
+  return applyRedactions(redactJsonQuotedSecrets(value), SECRET_PATTERNS);
 }
 
 export function redactPii(value: string): string {
