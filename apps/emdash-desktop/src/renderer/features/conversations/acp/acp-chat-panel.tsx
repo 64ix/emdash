@@ -57,6 +57,8 @@ import {
   mostAdvancedLinkedIssue,
   type LinkedIssue,
 } from '@shared/core/linked-issue';
+import { AttentionBanner } from './acp-attention-banner';
+import type { AttentionItem } from './acp-attention-queue';
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
@@ -267,10 +269,13 @@ const ComposerForStore = observer(function ComposerForStore({
   store,
   composerSlot,
   onViewerOpen,
+  atBottom,
 }: {
   store: AcpChatStore;
   composerSlot: HTMLElement;
   onViewerOpen: (src?: string, alt?: string) => void;
+  /** Whether the transcript is currently at the tail — see AttentionBanner's offscreen check (ticket #33). */
+  atBottom: boolean;
 }) {
   const editorApiRef = useRef<PromptEditorRef | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -394,6 +399,24 @@ const ComposerForStore = observer(function ComposerForStore({
   const handleJumpToPermissionOrigin = useCallback(
     (itemId: string) => {
       void store.scrollToTranscriptItem(itemId, { align: 'start' });
+    },
+    [store]
+  );
+
+  // Activation for the sticky attention indicator (ticket #33). A transcript
+  // target goes through the same off-DOM/pagination-aware seam
+  // `handleJumpToPermissionOrigin`/`handleSelectChangesEntry` already use. A
+  // composer target (failed submission) has nothing to scroll to — the
+  // composer is a fixed dock, never virtualized away — so activation instead
+  // moves keyboard focus into it, next to the existing Retry/Edit/Discard
+  // banner.
+  const handleActivateAttentionItem = useCallback(
+    (item: AttentionItem) => {
+      if (item.target.kind === 'transcript') {
+        void store.scrollToTranscriptItem(item.target.itemId, { align: 'start' });
+        return;
+      }
+      editorApiRef.current?.focus();
     },
     [store]
   );
@@ -661,6 +684,14 @@ const ComposerForStore = observer(function ComposerForStore({
   return createPortal(
     <>
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileInputChange} />
+      <AttentionBanner
+        queue={store.attentionQueue}
+        focusedItem={store.attentionFocusedItem}
+        atBottom={atBottom}
+        onNext={() => store.focusNextAttentionItem()}
+        onPrevious={() => store.focusPreviousAttentionItem()}
+        onActivate={handleActivateAttentionItem}
+      />
       {store.failedSubmissions.length > 0 && (
         <div
           role="list"
@@ -1103,6 +1134,7 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
             store={store}
             composerSlot={composerSlot}
             onViewerOpen={handleViewerOpen}
+            atBottom={atBottom}
           />
         )}
 

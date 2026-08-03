@@ -469,6 +469,15 @@ describe('AcpChatStore.outline', () => {
 // pending/error state per the *current* request rather than silently
 // swallowing a failed decision.
 describe('AcpChatStore.permissionQueue / resolvePermission', () => {
+  // `permissionQueue` is an explicitly-resynced field (see its doc comment
+  // on `AcpChatStore` — ticket #33's review fixed it from a `computed` that
+  // cached its first evaluation forever once continuously observed), so
+  // these tests call `_syncPermissionQueue()` directly after assigning a
+  // fake `session`, mirroring `_syncAttentionQueue`'s own tests below.
+  function syncPermissionQueue(store: AcpChatStore): void {
+    (store as unknown as { _syncPermissionQueue(): void })._syncPermissionQueue();
+  }
+
   function toolCall(overrides: Record<string, unknown> = {}) {
     return {
       id: 'item-permission-1',
@@ -499,6 +508,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
     store.session = {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
     } as never;
+    syncPermissionQueue(store);
 
     expect(store.permissionQueue).toHaveLength(1);
     const item = store.permissionQueue[0];
@@ -529,6 +539,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
         }),
       },
     } as never;
+    syncPermissionQueue(store);
 
     const item = store.permissionQueue[0];
     expect(item.title).not.toContain(secret);
@@ -548,6 +559,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
       resolvePermission,
     } as never;
+    syncPermissionQueue(store);
 
     store.resolvePermission('allow-once');
 
@@ -575,6 +587,7 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
       resolvePermission,
     } as never;
+    syncPermissionQueue(store);
 
     store.resolvePermission('reject-once');
     await flushMicrotasks();
@@ -595,11 +608,44 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
       sessionState: { current: () => ({ pendingPermissions: [permissionRequest()] }) },
       resolvePermission,
     } as never;
+    syncPermissionQueue(store);
 
     store.resolvePermission('allow-once');
     store.resolvePermission('allow-once');
 
     expect(resolvePermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps reflecting new/resolved pendingPermissions even while kept "hot" by a continuous observer', () => {
+    // Regression test for the bug ticket #33's review found and fixed:
+    // `permissionQueue` shipped by ticket #32 as a `computed` whose only
+    // MobX-tracked dependency was `session` (an `observable.ref`) — the
+    // `pendingPermissions` data itself lives in a plain, non-MobX replicated
+    // store. Once continuously observed (exactly what the composer's
+    // `observer()` render does in production for the permission band), MobX
+    // would cache the first evaluation forever and never see a newly
+    // arrived or resolved permission again. `permissionQueue` is now an
+    // explicitly-resynced field (see `_syncPermissionQueue`), so this must
+    // stay live under the same "kept hot" pressure.
+    const pending: unknown[] = [];
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+    syncPermissionQueue(store);
+    expect(store.permissionQueue).toHaveLength(0);
+
+    const stop = autorun(() => {
+      void store.permissionQueue.length;
+    });
+
+    pending.push(permissionRequest());
+    syncPermissionQueue(store);
+    expect(store.permissionQueue.map((item) => item.requestId)).toEqual(['req-1']);
+
+    pending.length = 0;
+    syncPermissionQueue(store);
+    expect(store.permissionQueue).toHaveLength(0);
+
+    stop();
   });
 });
 
@@ -933,6 +979,394 @@ describe('AcpChatStore reading position', () => {
     // (new) transcript looks like now, not the old one.
     store.setAtBottom(false);
     expect(store.newEventCount).toBe(0);
+  });
+});
+
+// ── AcpChatStore.attentionQueue — ticket #33 ─────────────────────────────────
+//
+// `attentionQueue` is an explicitly-resynced field (see its doc comment), so
+// — mirroring `changesFootprint`/`outline`/`newEventCount`'s own tests —
+// these tests call `_syncAttentionQueue()` directly after mutating the
+// fixtures it reads from, rather than exercising the real event subscriptions
+// in `_subscribeLiveSession` (untested elsewhere in this file for the same
+// reason: the wiring is straightforward glue, the interesting behavior is in
+// what gets recomputed).
+describe('AcpChatStore.attentionQueue', () => {
+  function syncAttentionQueue(store: AcpChatStore): void {
+    (store as unknown as { _syncAttentionQueue(): void })._syncAttentionQueue();
+  }
+
+  function permissionRequest(requestId: string, itemId: string, title = 'Execute a Shell Command') {
+    return {
+      requestId,
+      toolCall: {
+        id: itemId,
+        seq: 0,
+        toolCallId: `call-${itemId}`,
+        title,
+        status: 'pending',
+        kind: 'execute-tool-call',
+        command: 'ls',
+      },
+      options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
+    };
+  }
+
+  function seedFailedSubmission(store: AcpChatStore, localId: string): void {
+    (
+      store as unknown as { _submissions: { failedSubmissions: Record<string, unknown>[] } }
+    )._submissions.failedSubmissions = [
+      { localId, kind: 'direct', text: 'hi', attachments: [], error: 'boom' },
+    ];
+  }
+
+  it('combines a simultaneous permission, failed submission, and turn error in deterministic priority order', () => {
+    const erroredTurn: TranscriptTurn = {
+      id: 'turn-err',
+      seq: 1,
+      initiator: 'agent',
+      items: [{ kind: 'message', id: 'msg-err', seq: 0, role: 'assistant', text: 'oops' }],
+      outcome: { kind: 'error' },
+    };
+    const { store } = setUpStore([erroredTurn], null);
+    store.session = {
+      sessionState: {
+        current: () => ({ pendingPermissions: [permissionRequest('req-1', 'perm-item')] }),
+      },
+    } as never;
+    seedFailedSubmission(store, 'sub-1');
+
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue.map((item) => item.kind)).toEqual([
+      'permission',
+      'failed-submission',
+      'error',
+    ]);
+    expect(store.attentionQueue.map((item) => item.id)).toEqual([
+      'permission:req-1',
+      'failed-submission:sub-1',
+      'error:turn:turn-err',
+    ]);
+  });
+
+  // ── Permission exits ────────────────────────────────────────────────────────
+
+  it('drops a permission the moment it is resolved (no longer listed in pendingPermissions)', () => {
+    const pending: unknown[] = [permissionRequest('req-1', 'perm-item')];
+    const { store } = setUpStore([], null);
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+    syncAttentionQueue(store);
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['permission:req-1']);
+
+    pending.length = 0; // the runtime settled the request
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue).toEqual([]);
+  });
+
+  it('drops a permission the agent cancels outright, without any resolvePermission call, while a sibling request stays queued', () => {
+    const pending: unknown[] = [
+      permissionRequest('req-1', 'perm-1'),
+      permissionRequest('req-2', 'perm-2'),
+    ];
+    const { store } = setUpStore([], null);
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+    syncAttentionQueue(store);
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['permission:req-1', 'permission:req-2']);
+
+    pending.splice(0, 1); // agent cancelled req-1, never resolved by the user
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['permission:req-2']);
+  });
+
+  it('drops a superseded permission and adopts its replacement, never keeping both', () => {
+    const pending: unknown[] = [permissionRequest('req-1', 'perm-item')];
+    const { store } = setUpStore([], null);
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+    syncAttentionQueue(store);
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['permission:req-1']);
+
+    pending[0] = permissionRequest('req-2', 'perm-item-2');
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['permission:req-2']);
+  });
+
+  it('keeps reflecting new pendingPermissions even while `permissionQueue` is kept "hot" by an observer elsewhere', () => {
+    // Regression guard: `permissionQueue` is a `computed` whose only tracked
+    // MobX dependency is `session` (an `observable.ref`) — the
+    // `pendingPermissions` data itself lives in a plain, non-MobX replicated
+    // store. If `_syncAttentionQueue` read `permissionQueue` while it is kept
+    // continuously observed (exactly what the composer's `observer()` render
+    // does in production), MobX would return its cached first evaluation
+    // forever instead of the current data — see `_computePermissionQueue`'s
+    // doc. This proves `_syncAttentionQueue` reads fresh data directly
+    // instead, so it can never inherit that staleness.
+    const pending: unknown[] = [];
+    const { store } = setUpStore([], null);
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+
+    const stop = autorun(() => {
+      void store.permissionQueue.length;
+    });
+
+    pending.push(permissionRequest('req-1', 'perm-item'));
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['permission:req-1']);
+    stop();
+  });
+
+  // ── Failed-submission exits ──────────────────────────────────────────────────
+
+  it('discardFailedSubmission removes the item from the queue', () => {
+    const { store } = setUpStore([], null);
+    seedFailedSubmission(store, 'sub-1');
+    syncAttentionQueue(store);
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['failed-submission:sub-1']);
+
+    store.discardFailedSubmission('sub-1');
+
+    expect(store.attentionQueue).toEqual([]);
+  });
+
+  it('editFailedSubmission removes the item from the queue and hands back its snapshot', () => {
+    const { store } = setUpStore([], null);
+    seedFailedSubmission(store, 'sub-1');
+    syncAttentionQueue(store);
+
+    const snapshot = store.editFailedSubmission('sub-1');
+
+    expect(snapshot?.localId).toBe('sub-1');
+    expect(store.attentionQueue).toEqual([]);
+  });
+
+  it('retryFailedSubmission removes the item once the resend succeeds', async () => {
+    const { store } = setUpStore([], null);
+    seedFailedSubmission(store, 'sub-1');
+    syncAttentionQueue(store);
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['failed-submission:sub-1']);
+
+    store.session = {
+      sessionState: {
+        current: () => ({
+          pendingPermissions: [],
+          isGenerating: false,
+          canSubmit: true,
+          canCancel: false,
+        }),
+      },
+      sendPrompt: vi.fn(async () => ({ success: true, data: { queued: false } })),
+    } as never;
+
+    store.retryFailedSubmission('sub-1');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.attentionQueue).toEqual([]);
+  });
+
+  // ── Turn/tool error scoping — "the latest activity" ──────────────────────────
+
+  it('reflects a newly committed turn’s error outcome once resynced', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    syncAttentionQueue(store);
+    expect(store.attentionQueue).toEqual([]);
+
+    const erroredTurn: TranscriptTurn = {
+      id: 'turn-2',
+      seq: 2,
+      initiator: 'agent',
+      items: [{ kind: 'message', id: 'msg-2', seq: 0, role: 'assistant', text: 'oops' }],
+      outcome: { kind: 'error' },
+    };
+    fakeChatState.transcript.history.append([erroredTurn]);
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['error:turn:turn-2']);
+  });
+
+  it('drops a committed turn’s error once a further turn supersedes it as the latest activity', () => {
+    const erroredTurn: TranscriptTurn = {
+      id: 'turn-2',
+      seq: 2,
+      initiator: 'agent',
+      items: [{ kind: 'message', id: 'msg-2', seq: 0, role: 'assistant', text: 'oops' }],
+      outcome: { kind: 'error' },
+    };
+    const { store, fakeChatState } = setUpStore([makeTurn(1), erroredTurn], null);
+    syncAttentionQueue(store);
+    expect(store.attentionQueue.map((i) => i.id)).toEqual(['error:turn:turn-2']);
+
+    fakeChatState.transcript.history.append([makeTurn(3)]);
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue).toEqual([]);
+  });
+
+  it('never moves the viewport while resyncing, even when the queue changes', () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    const scrollToItem = vi.fn();
+    const scrollToBottom = vi.fn();
+    const setScrollMode = vi.fn();
+    store.bindView({ scrollToItem, scrollToBottom, setScrollMode } as never);
+
+    const erroredTurn: TranscriptTurn = {
+      id: 'turn-2',
+      seq: 2,
+      initiator: 'agent',
+      items: [{ kind: 'message', id: 'msg-2', seq: 0, role: 'assistant', text: 'oops' }],
+      outcome: { kind: 'error' },
+    };
+    fakeChatState.transcript.history.append([erroredTurn]);
+    syncAttentionQueue(store);
+
+    expect(store.attentionQueue).not.toEqual([]);
+    expect(scrollToItem).not.toHaveBeenCalled();
+    expect(scrollToBottom).not.toHaveBeenCalled();
+    expect(setScrollMode).not.toHaveBeenCalled();
+  });
+
+  // ── Different resolution orders ──────────────────────────────────────────────
+
+  it('resolves two simultaneous items correctly regardless of which one is handled first', () => {
+    // Order A: the permission is resolved before the failed submission is discarded.
+    const pendingA: unknown[] = [permissionRequest('req-1', 'perm-item')];
+    const { store: storeA } = setUpStore([], null);
+    storeA.session = {
+      sessionState: { current: () => ({ pendingPermissions: pendingA }) },
+    } as never;
+    seedFailedSubmission(storeA, 'sub-1');
+    syncAttentionQueue(storeA);
+    expect(storeA.attentionQueue.map((i) => i.id)).toEqual([
+      'permission:req-1',
+      'failed-submission:sub-1',
+    ]);
+
+    pendingA.length = 0;
+    syncAttentionQueue(storeA);
+    expect(storeA.attentionQueue.map((i) => i.id)).toEqual(['failed-submission:sub-1']);
+    storeA.discardFailedSubmission('sub-1');
+    expect(storeA.attentionQueue).toEqual([]);
+
+    // Order B: the same two items, resolved in the opposite order — the
+    // failed submission first, then the permission.
+    const pendingB: unknown[] = [permissionRequest('req-1', 'perm-item')];
+    const { store: storeB } = setUpStore([], null);
+    storeB.session = {
+      sessionState: { current: () => ({ pendingPermissions: pendingB }) },
+    } as never;
+    seedFailedSubmission(storeB, 'sub-1');
+    syncAttentionQueue(storeB);
+    expect(storeB.attentionQueue.map((i) => i.id)).toEqual([
+      'permission:req-1',
+      'failed-submission:sub-1',
+    ]);
+
+    storeB.discardFailedSubmission('sub-1');
+    expect(storeB.attentionQueue.map((i) => i.id)).toEqual(['permission:req-1']);
+    pendingB.length = 0;
+    syncAttentionQueue(storeB);
+    expect(storeB.attentionQueue).toEqual([]);
+  });
+});
+
+// ── AcpChatStore attention-queue traversal ───────────────────────────────────
+
+describe('AcpChatStore attention traversal', () => {
+  function syncAttentionQueue(store: AcpChatStore): void {
+    (store as unknown as { _syncAttentionQueue(): void })._syncAttentionQueue();
+  }
+
+  function permissionRequest(requestId: string, itemId: string) {
+    return {
+      requestId,
+      toolCall: {
+        id: itemId,
+        seq: 0,
+        toolCallId: `call-${itemId}`,
+        title: 'Execute a Shell Command',
+        status: 'pending',
+        kind: 'execute-tool-call',
+        command: 'ls',
+      },
+      options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
+    };
+  }
+
+  it('attentionFocusedItem defaults to the front (highest priority) item', () => {
+    const { store } = setUpStore([], null);
+    store.session = {
+      sessionState: {
+        current: () => ({
+          pendingPermissions: [permissionRequest('req-1', 'a'), permissionRequest('req-2', 'b')],
+        }),
+      },
+    } as never;
+    syncAttentionQueue(store);
+
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-1');
+  });
+
+  it('focusNextAttentionItem/focusPreviousAttentionItem cycle through the queue and wrap at both ends', () => {
+    const { store } = setUpStore([], null);
+    store.session = {
+      sessionState: {
+        current: () => ({
+          pendingPermissions: [permissionRequest('req-1', 'a'), permissionRequest('req-2', 'b')],
+        }),
+      },
+    } as never;
+    syncAttentionQueue(store);
+
+    store.focusNextAttentionItem();
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-2');
+
+    store.focusNextAttentionItem();
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-1');
+
+    store.focusPreviousAttentionItem();
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-2');
+  });
+
+  it('resets focus to the new front item once the focused item leaves the queue', () => {
+    const pending: unknown[] = [permissionRequest('req-1', 'a'), permissionRequest('req-2', 'b')];
+    const { store } = setUpStore([], null);
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+    syncAttentionQueue(store);
+    store.focusNextAttentionItem();
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-2');
+
+    pending.splice(1, 1); // req-2 resolved
+    syncAttentionQueue(store);
+
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-1');
+  });
+
+  it('keeps traversal focus on the same item across an unrelated resync', () => {
+    const pending: unknown[] = [permissionRequest('req-1', 'a'), permissionRequest('req-2', 'b')];
+    const { store } = setUpStore([], null);
+    store.session = { sessionState: { current: () => ({ pendingPermissions: pending }) } } as never;
+    syncAttentionQueue(store);
+    store.focusNextAttentionItem();
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-2');
+
+    (
+      store as unknown as { _submissions: { failedSubmissions: Record<string, unknown>[] } }
+    )._submissions.failedSubmissions = [
+      { localId: 'sub-1', kind: 'direct', text: 'hi', attachments: [], error: 'boom' },
+    ];
+    syncAttentionQueue(store);
+
+    expect(store.attentionFocusedItem?.id).toBe('permission:req-2');
+  });
+
+  it('attentionFocusedItem is null when the queue is empty', () => {
+    const { store } = setUpStore([], null);
+    syncAttentionQueue(store);
+    expect(store.attentionFocusedItem).toBeNull();
   });
 });
 

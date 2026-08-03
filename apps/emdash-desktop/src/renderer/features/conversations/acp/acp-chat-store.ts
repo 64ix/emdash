@@ -47,6 +47,11 @@ import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
+import {
+  buildAttentionQueue,
+  deriveErrorAttentionSources,
+  type AttentionItem,
+} from './acp-attention-queue';
 import { createStopController, type StopController } from './acp-chat-stop-controller';
 import { AcpHistoryPagination } from './acp-history-pagination';
 import {
@@ -65,7 +70,11 @@ import type {
   AcpSubmissionSnapshot,
   FailedAcpSubmission,
 } from './acp-submission-recovery';
-import { AcpSubmissionController, resultError } from './acp-submission-recovery';
+import {
+  AcpSubmissionController,
+  failedSubmissionPreview,
+  resultError,
+} from './acp-submission-recovery';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
 import {
   buildChangesFootprint,
@@ -139,6 +148,21 @@ export class AcpChatStore {
    */
   newEventCount = 0;
   /**
+   * Outstanding permission requests from the live session, normalized/
+   * sanitized for display — ticket #32. Recomputed via `_syncPermissionQueue`
+   * at every point `session.sessionState.current().pendingPermissions` can
+   * change (session (re)bind, every `sessionState.onChange` firing), for the
+   * same reason `outline`/`newEventCount`/`attentionQueue` are explicit
+   * fields rather than lazy `computed` getters: `session.sessionState.current()`
+   * is a plain replicated store, not itself MobX-tracked, so a `computed`
+   * reading it (the only tracked dependency being `session` itself) caches
+   * its first evaluation forever once continuously observed — exactly what
+   * the composer's permission band does in production. Shipped as a
+   * `computed` by #32; caught and fixed during #33's review (see
+   * `acp-chat-store.test.ts`'s "kept hot by an observer" regression test).
+   */
+  permissionQueue: PermissionQueueItem[] = [];
+  /**
    * Transcript outline (one entry per prompt and per turn) — ticket #34.
    * Recomputed via `_syncOutline` at every point the transcript can grow, for
    * the same reason `newEventCount` is an explicit field rather than a lazy
@@ -150,6 +174,34 @@ export class AcpChatStore {
    * Shipped as a `computed` by #34; caught during #37's review.
    */
   outline: readonly OutlineEntry[] = [];
+  /**
+   * One deterministically ordered queue combining outstanding permission
+   * requests, failed submissions, and actionable turn/tool errors from the
+   * latest activity (ticket #33, spec #18) — see `acp-attention-queue.ts` for
+   * the ordering/dedup rules and the scoping decision behind "actionable".
+   * Recomputed via `_syncAttentionQueue` at every point one of those three
+   * sources can change: bootstrap, history refresh/load-older, live
+   * active-turn updates, session-state updates (permissions), and every
+   * failed-submission transition. An explicitly-resynced `observable.ref`
+   * field rather than a `computed`, for the same reason as `outline` above —
+   * one of its inputs (`chatState.transcript.state`) is Solid-signal-backed,
+   * and another (`session.sessionState.current()`) is a plain replicated
+   * store with no MobX tracking of its own, so a `computed` reading either
+   * directly would go stale the moment something else keeps it "hot" (see
+   * this ticket's PR notes for the reproduction).
+   */
+  attentionQueue: readonly AttentionItem[] = [];
+  /**
+   * Stable id (see `AttentionItem.id`) of the attention item traversal
+   * currently focuses, or `null` before any traversal / once the previously
+   * focused item leaves the queue (resolved, cancelled, or superseded) — see
+   * `attentionFocusedItem`, which falls back to the queue's front (highest
+   * priority) item whenever this doesn't resolve to a live entry. Tracked by
+   * id, not index: the queue can reorder/shrink out from under an open
+   * traversal, and re-deriving "the same index" after that would silently
+   * refocus a different item than the one the user was looking at.
+   */
+  attentionFocusId: string | null = null;
   /**
    * True while a "return to reading position" jump (see `visitNewestEvent`)
    * is available. Ticket #37: visiting the newest event must not lose the
@@ -250,6 +302,9 @@ export class AcpChatStore {
       isLoadingOlderHistory: observable,
       changesFootprint: observable.ref,
       newEventCount: observable,
+      permissionQueue: observable.ref,
+      attentionQueue: observable.ref,
+      attentionFocusId: observable,
       canReturnToReadingPosition: observable,
       permissionResolutionVersion: observable,
       model: computed,
@@ -259,7 +314,6 @@ export class AcpChatStore {
       effort: computed,
       effortOptions: computed,
       commands: computed,
-      permissionQueue: computed,
       permissionResolution: computed,
       queuedPrompts: computed,
       usage: computed,
@@ -267,11 +321,14 @@ export class AcpChatStore {
       isEmpty: computed,
       failedSubmissions: computed,
       outline: observable.ref,
+      attentionFocusedItem: computed,
       submitPrompt: action,
       queuePrompt: action,
       retryFailedSubmission: action,
       editFailedSubmission: action,
       discardFailedSubmission: action,
+      focusNextAttentionItem: action,
+      focusPreviousAttentionItem: action,
       stop: action,
       setModel: action,
       setMode: action,
@@ -347,29 +404,6 @@ export class AcpChatStore {
     }));
   }
 
-  get permissionQueue(): PermissionQueueItem[] {
-    return (this.session?.sessionState.current().pendingPermissions ?? []).map((request) => ({
-      requestId: request.requestId,
-      // Sanitized (not routed through describePermissionOperation, which only
-      // covers the toolCall payload): a permission request is a security
-      // decision surface, so title/option labels can never be allowed to
-      // spoof via bidi overrides or an embedded line break — see
-      // `sanitizeSingleLineText`. `title` also gets `redactSecrets` (see
-      // `sanitizePermissionTitle`): unlike an option's `name`, `title` is a
-      // free-form summary that can be derived directly from a raw resource
-      // (e.g. a web-fetch title falling back to the raw URL), so it can carry
-      // a secret the same way `toolCall.url` can.
-      title: sanitizePermissionTitle(request.toolCall.title),
-      itemId: request.toolCall.id,
-      operation: describePermissionOperation(request.toolCall),
-      options: request.options.map((option) => ({
-        optionId: option.optionId,
-        name: sanitizeSingleLineText(option.name),
-        kind: option.kind,
-      })),
-    }));
-  }
-
   /**
    * Resolution state for the *current* (front of queue) permission request —
    * `undefined`/`null` while idle, `resolving` while the decision is in
@@ -441,6 +475,135 @@ export class AcpChatStore {
       transcript.turnStatus,
       this.chatState.session.state.pendingPrompt
     );
+  }
+
+  /**
+   * The attention item traversal currently shows: whatever `attentionFocusId`
+   * still resolves to, or the queue's own front (highest-priority) entry
+   * otherwise — covers both "nothing has been focused yet" and "the
+   * previously-focused item just left the queue" without extra bookkeeping
+   * in `_syncAttentionQueue`. `null` when the queue is empty.
+   */
+  get attentionFocusedItem(): AttentionItem | null {
+    if (this.attentionQueue.length === 0) return null;
+    return (
+      this.attentionQueue.find((item) => item.id === this.attentionFocusId) ??
+      this.attentionQueue[0]
+    );
+  }
+
+  /**
+   * Move attention-queue traversal to the next/previous item, wrapping
+   * around at either end. Never removes, reorders, or resolves anything —
+   * see `attentionQueue`'s own doc for what actually does that — so cycling
+   * through several simultaneous items never hides the others.
+   */
+  focusNextAttentionItem(): void {
+    this._stepAttentionFocus(1);
+  }
+
+  focusPreviousAttentionItem(): void {
+    this._stepAttentionFocus(-1);
+  }
+
+  private _stepAttentionFocus(delta: 1 | -1): void {
+    const queue = this.attentionQueue;
+    if (queue.length === 0) {
+      this.attentionFocusId = null;
+      return;
+    }
+    const currentIndex = queue.findIndex((item) => item.id === this.attentionFocusId);
+    // Nothing explicitly focused yet (or the focused item just left the
+    // queue): `attentionFocusedItem` already falls back to the front entry
+    // in that state, so traversal steps relative to index 0 too — otherwise
+    // the first "next" press from the default view would appear to do
+    // nothing (still showing the front item) instead of advancing.
+    const effectiveIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex = (effectiveIndex + delta + queue.length) % queue.length;
+    this.attentionFocusId = queue[nextIndex].id;
+  }
+
+  /**
+   * Fresh (never cached) computation of the permission queue from the live
+   * session's `pendingPermissions` — the single source both `_syncPermissionQueue`
+   * (the public `permissionQueue` field) and `_syncAttentionQueue` recompute
+   * from, so neither can ever read a stale cached value.
+   */
+  private _computePermissionQueue(): PermissionQueueItem[] {
+    return (this.session?.sessionState.current().pendingPermissions ?? []).map((request) => ({
+      requestId: request.requestId,
+      // Sanitized (not routed through describePermissionOperation, which only
+      // covers the toolCall payload): a permission request is a security
+      // decision surface, so title/option labels can never be allowed to
+      // spoof via bidi overrides or an embedded line break — see
+      // `sanitizeSingleLineText`. `title` also gets `redactSecrets` (see
+      // `sanitizePermissionTitle`): unlike an option's `name`, `title` is a
+      // free-form summary that can be derived directly from a raw resource
+      // (e.g. a web-fetch title falling back to the raw URL), so it can carry
+      // a secret the same way `toolCall.url` can.
+      title: sanitizePermissionTitle(request.toolCall.title),
+      itemId: request.toolCall.id,
+      operation: describePermissionOperation(request.toolCall),
+      options: request.options.map((option) => ({
+        optionId: option.optionId,
+        name: sanitizeSingleLineText(option.name),
+        kind: option.kind,
+      })),
+    }));
+  }
+
+  /**
+   * Recompute the public `permissionQueue` field from the live session's
+   * `pendingPermissions` (see `permissionQueue`'s own doc for why this must
+   * be an explicit resync rather than a lazy `computed`). Called at every
+   * point `pendingPermissions` can change: session (re)bind (`_runBootstrap`)
+   * and every `session.sessionState.onChange` firing.
+   */
+  private _syncPermissionQueue(): void {
+    this.permissionQueue = this._computePermissionQueue();
+  }
+
+  /**
+   * Recompute `attentionQueue` (ticket #33) from its three live sources:
+   * outstanding permissions (`_computePermissionQueue`, read fresh — not the
+   * `permissionQueue` field's own last-synced snapshot, so this never lags
+   * one recomputation behind it), failed submissions
+   * (`failedSubmissions`, a genuinely MobX-reactive field so it is safe to
+   * read directly), and actionable turn/tool errors from the latest activity
+   * (`deriveErrorAttentionSources` over `chatState.transcript.state` — see
+   * `acp-attention-queue.ts` for the scoping rationale). Called at every
+   * point one of those three can change — bootstrap, history refresh/
+   * load-older, live active-turn updates, session-state updates, and every
+   * failed-submission transition — mirroring `_syncOutline`/
+   * `_syncChangesFootprint`'s call sites.
+   *
+   * Also reconciles `attentionFocusId`: if the previously-focused item no
+   * longer exists in the freshly-built queue (resolved, cancelled by the
+   * agent, or superseded), traversal focus resets to `null` so
+   * `attentionFocusedItem` falls back to the new front (highest-priority)
+   * item rather than silently pointing at nothing.
+   */
+  private _syncAttentionQueue(): void {
+    const state = this.chatState.transcript.state;
+    const lastCommittedTurn = state.committedTurns.at(-1) ?? null;
+    this.attentionQueue = buildAttentionQueue({
+      permissions: this._computePermissionQueue().map((item) => ({
+        requestId: item.requestId,
+        itemId: item.itemId,
+        summary: item.title,
+      })),
+      failedSubmissions: this.failedSubmissions.map((submission) => ({
+        localId: submission.localId,
+        summary: failedSubmissionPreview(submission),
+      })),
+      errors: deriveErrorAttentionSources(lastCommittedTurn, state.activeTurnSnapshot),
+    });
+    if (
+      this.attentionFocusId !== null &&
+      !this.attentionQueue.some((item) => item.id === this.attentionFocusId)
+    ) {
+      this.attentionFocusId = null;
+    }
   }
 
   bootstrap(): void {
@@ -642,6 +805,7 @@ export class AcpChatStore {
    */
   retryFailedSubmission(localId: string): void {
     this._submissions.retry(localId);
+    this._syncAttentionQueue();
   }
 
   /**
@@ -649,7 +813,9 @@ export class AcpChatStore {
    * the composer can reload it as editable text/attachments.
    */
   editFailedSubmission(localId: string): AcpSubmissionSnapshot | null {
-    return this._submissions.edit(localId);
+    const snapshot = this._submissions.edit(localId);
+    this._syncAttentionQueue();
+    return snapshot;
   }
 
   /**
@@ -658,6 +824,7 @@ export class AcpChatStore {
    */
   discardFailedSubmission(localId: string): void {
     this._submissions.discard(localId);
+    this._syncAttentionQueue();
   }
 
   setDraftText(text: string): void {
@@ -808,6 +975,8 @@ export class AcpChatStore {
         this._syncMessageCount();
         this._syncChangesFootprint();
         this._syncOutline();
+        this._syncPermissionQueue();
+        this._syncAttentionQueue();
       });
     } catch (error) {
       log.error('ACP chat bootstrap failed', {
@@ -914,6 +1083,7 @@ export class AcpChatStore {
         this.chatState.session.setPendingPrompt(null);
         this._syncMessageCount();
       }
+      this._syncAttentionQueue();
     });
     this._toastError(
       failure.kind === 'queued' ? 'Failed to queue message' : 'Failed to send message',
@@ -998,7 +1168,16 @@ export class AcpChatStore {
       session.sessionState.onChange(() =>
         runInAction(() => {
           this._syncMessageCount();
+          // Order matters: `permissionQueue` must be resynced before
+          // `_prunePermissionResolution` reads it, or pruning would act on
+          // the previous `pendingPermissions` snapshot.
+          this._syncPermissionQueue();
           this._prunePermissionResolution();
+          // Covers every exit a pending permission request can take —
+          // resolved, cancelled by the agent, or superseded by a new one —
+          // since all three change `pendingPermissions` and this fires on
+          // every such change.
+          this._syncAttentionQueue();
         })
       ),
       session.activeTurn.onChange(() =>
@@ -1007,6 +1186,7 @@ export class AcpChatStore {
           this._syncChangesFootprint();
           this._syncNewEventCount();
           this._syncOutline();
+          this._syncAttentionQueue();
         })
       ),
       session.draft.onChange((draft) =>
@@ -1092,6 +1272,7 @@ export class AcpChatStore {
       this._syncChangesFootprint();
       this._syncNewEventCount();
       this._syncOutline();
+      this._syncAttentionQueue();
     });
   }
 
@@ -1142,6 +1323,7 @@ export class AcpChatStore {
         this._syncChangesFootprint();
         this._syncNewEventCount();
         this._syncOutline();
+        this._syncAttentionQueue();
       });
     } catch (error) {
       this._historyPagination.abortLoadOlder(epoch);
