@@ -220,6 +220,34 @@ describe('diff card — review states', () => {
     dispose();
   });
 
+  it('a loading diff (running, no content yet) renders only the header — no body, no footer', async () => {
+    const { host, dispose } = mount(
+      turnFor({
+        kind: 'diff',
+        id: 'diff-loading',
+        path: 'src/loading.ts',
+        oldText: null,
+        newText: '',
+        status: 'running',
+      })
+    );
+    await nextPaint();
+    await nextPaint();
+
+    const row = host.querySelector('[data-unit-kind="diff"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toContain('loading.ts');
+    // No diff body card at all yet (distinct from streaming/content/empty/
+    // binary, which all render a body below the header): the card is exactly
+    // header height, with no footer affordances or collapse control.
+    expect(row.getBoundingClientRect().height).toBeLessThan(40);
+    expect(row.textContent).not.toContain('Open full diff');
+    expect(row.textContent).not.toContain('Copy diff');
+    expect(row.querySelector('[data-collapse-id]')).toBeNull();
+
+    dispose();
+  });
+
   it('a streaming diff shows partial content without a footer', async () => {
     const { host, dispose } = mount(
       turnFor({
