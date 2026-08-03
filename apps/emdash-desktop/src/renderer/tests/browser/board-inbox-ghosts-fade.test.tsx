@@ -588,9 +588,13 @@ describe('Ghost Cards remain excluded from sortable ids (ticket #51)', () => {
     await mount();
     await settle();
 
-    // dnd-kit's `useSortable` spreads this exact attribute onto a card that
-    // participates in its sortable id set.
-    expect(cardEl('card-a').getAttribute('aria-roledescription')).toBe('sortable');
+    // dnd-kit's `useSortable` assigns this exact attribute to whichever
+    // element activates the drag. Ticket #52 moved it from the card's own
+    // wrapper onto its dedicated "Move" handle (a sibling button inside the
+    // card) — spreading it on the card body itself would misdescribe it,
+    // since Enter/Space there select the card rather than picking it up.
+    const moveHandle = cardEl('card-a').querySelector(`[aria-label="Move card-a"]`);
+    expect(moveHandle?.getAttribute('aria-roledescription')).toBe('sortable');
   });
 
   it("a Ghost Card never receives dnd-kit's sortable/draggable attributes — mirrors #43's sidebar Board row exclusion", async () => {
@@ -603,6 +607,9 @@ describe('Ghost Cards remain excluded from sortable ids (ticket #51)', () => {
     expect(el).toBeTruthy();
     expect(el.getAttribute('aria-roledescription')).toBeNull();
     expect(el.getAttribute('aria-describedby')).toBeNull();
+    // Ticket #52: a Ghost Card also never gets the real card's "Move" handle
+    // — it is never draggable/sortable at all, so there is nothing to move.
+    expect(el.querySelector('[aria-label^="Move "]')).toBeNull();
   });
 
   it('a drag gesture on a Ghost Card never persists a board position on any task, and the card stays put', async () => {

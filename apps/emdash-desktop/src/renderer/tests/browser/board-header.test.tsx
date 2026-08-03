@@ -42,6 +42,9 @@ const managerTasks = new Map<string, MockStore>();
 
 const mocks = vi.hoisted(() => ({
   captureTelemetry: vi.fn(),
+  // Ticket #52's narrow-window header suite overrides this per test to a
+  // deliberately long project name; every other test keeps the short default.
+  projectDisplayName: vi.fn(() => 'Acme Project'),
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
@@ -51,7 +54,7 @@ vi.mock('@renderer/lib/layout/navigation-provider', () => ({
 
 vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
   getProjectStore: () => ({}),
-  projectDisplayName: () => 'Acme Project',
+  projectDisplayName: mocks.projectDisplayName,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
@@ -160,6 +163,7 @@ const LAYOUT_CSS = `
   .flex { display: flex; }
   .flex-col { flex-direction: column; }
   .flex-1 { flex: 1 1 0%; min-height: 0; }
+  .flex-wrap { flex-wrap: wrap; }
   .h-full { height: 100%; }
   .w-56 { width: 14rem; }
   .shrink-0 { flex-shrink: 0; }
@@ -177,6 +181,14 @@ const LAYOUT_CSS = `
   .pt-4 { padding-top: 1rem; }
   .border { border: 1px solid #ccc; }
   .min-h-0 { min-height: 0; }
+  /* Narrow-window header adaptation (ticket #52): real flex geometry for the
+     project-name group's shrink/truncate behaviour, so the "New task" primary
+     action test below exercises actual layout rather than an unstyled DOM. */
+  .items-center { align-items: center; }
+  .items-baseline { align-items: baseline; }
+  .justify-between { justify-content: space-between; }
+  .min-w-0 { min-width: 0; }
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
 
 // ── Harness ─────────────────────────────────────────────────────────────────
@@ -207,6 +219,11 @@ afterEach(() => {
   style.remove();
   managerTasks.clear();
   mocks.captureTelemetry.mockClear();
+  // A persistent override (`mockReturnValue`, unlike `...Once`) must never
+  // leak into the next test — `vi.clearAllMocks()` isn't called in this file,
+  // so this resets the default explicitly (mirrors board-detail-panel.test.tsx's
+  // own reset of its persistent per-test overrides).
+  mocks.projectDisplayName.mockReturnValue('Acme Project');
   modalStore.closeModal();
 });
 
@@ -338,6 +355,40 @@ describe('Board header — project scope and task creation (ticket #45)', () => 
 
     expect(modalStore.activeModalArgs).toMatchObject({ projectId: 'p1' });
     expect(modalStore.activeModalArgs?.initialWorkflowStage).toBeUndefined();
+  });
+});
+
+// ── Narrow-window adaptation (ticket #52) ───────────────────────────────────
+//
+// The header's project-name group is the one part of the header row without
+// `flex-wrap` protection (the search/filter row below it already wraps). A
+// real project name has no natural line-break opportunity for the browser to
+// wrap on (no spaces or hyphens — a single camelCase/slug token, as many real
+// repo and project names are) — at the app's actual minimum supported window
+// width (700px — `minWidth` in `src/main/app/window.ts`), an unbreakable long
+// name must not force the row wider and push "New task" (the primary action)
+// out of the visible viewport.
+const UNBREAKABLE_LONG_PROJECT_NAME =
+  'SuperLongUnbreakableProjectNameWithNoSpacesOrHyphensForOverflowTesting';
+
+describe('Board header — narrow-window adaptation (ticket #52)', () => {
+  it('keeps "New task" within the visible viewport at the app\'s minimum supported width, even with an unbreakable long project name', async () => {
+    mocks.projectDisplayName.mockReturnValue(UNBREAKABLE_LONG_PROJECT_NAME);
+    await page.viewport(700, 500);
+    await mount();
+
+    const button = newTaskButton();
+    const rect = button.getBoundingClientRect();
+    expect(rect.right).toBeLessThanOrEqual(700);
+    expect(rect.width).toBeGreaterThan(0); // genuinely laid out, not collapsed to nothing
+  });
+
+  it('still shows the full "Feature board" title text at that width, unaffected by a long project name', async () => {
+    mocks.projectDisplayName.mockReturnValue(UNBREAKABLE_LONG_PROJECT_NAME);
+    await page.viewport(700, 500);
+    await mount();
+
+    expect(document.querySelector('h1')?.textContent).toBe('Feature board');
   });
 });
 

@@ -94,7 +94,12 @@ export function GhostCardView({
       }}
       className={cn(
         'cursor-pointer rounded-md border border-dashed border-border/70 bg-background-2/30 p-2 opacity-80',
-        isSelected && 'border-primary ring-1 ring-primary/50'
+        isSelected && 'border-primary ring-1 ring-primary/50',
+        // Visible focus treatment (ticket #52): Ghost Cards are keyboard-
+        // selectable (Enter/Space -> onSelect, above) but never draggable, so
+        // they only need the same selectable-card ring the real task card
+        // carries — never the "Move" handle affordance.
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
       )}
     >
       <div

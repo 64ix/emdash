@@ -1114,3 +1114,326 @@ describe('board columns — Unstaged and Triage exception groups', () => {
     expect(triageIndex).toBe(shippedIndex + 2);
   });
 });
+
+// ── Keyboard-driven drag (ticket #52) ──────────────────────────────────────
+//
+// There is no `KeyboardSensor` anywhere in this repo before this ticket — no
+// keyboard-driven drag existed at all. Each card's body keeps selecting on
+// Enter/Space exactly as before (ticket #40); its dedicated "Move" handle (a
+// sibling `<button>`, never nested inside one) is the sole keyboard-drag
+// activator, located here by its accessible name. `onDragOver`/`onDragEnd`
+// are unchanged and sensor-agnostic, so every assertion below exercises the
+// exact same handlers the pointer-drag suites above already cover — this
+// only drives them through a different sensor.
+
+/** A card's "Move" handle (ticket #52), the sole keyboard-drag activator. */
+function moveHandleFor(name: string): HTMLButtonElement {
+  return host.querySelector(`button[aria-label="Move ${name}"]`) as HTMLButtonElement;
+}
+
+function keydown(target: Element | Document, code: string) {
+  target.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true, cancelable: true }));
+}
+
+/** dnd-kit's `KeyboardSensor` schedules its own document-level keydown
+ * listener one tick after activation (a `setTimeout(fn, 0)` inside its own
+ * `attach()`) — settling a macrotask, not just animation frames, before the
+ * first subsequent key avoids a race where that listener isn't attached yet. */
+async function afterKeyboardPickup() {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await settle();
+}
+
+describe('board drag-and-drop — keyboard-driven (ticket #52)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it('picks up a card with its Move handle (Space) and drops it into the adjacent column with the arrow keys', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+
+    // Nudge right, toward Idea, until the cross-column preview shows the
+    // card actually inside Idea's zone (mirrors the pointer-drag "ghost
+    // preview" assertion above) — robust to however many steps dnd-kit's own
+    // coordinate getter takes to get there.
+    let enteredIdea = false;
+    for (let i = 0; i < 5 && !enteredIdea; i++) {
+      keydown(document, 'ArrowRight');
+      await settle();
+      enteredIdea = columnZone('Idea').contains(cardEl('card-a'));
+    }
+    expect(enteredIdea).toBe(true);
+
+    keydown(document, 'Space');
+    await settle();
+
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('idea', expect.any(String));
+  });
+
+  it('Escape cancels a keyboard pick-up without persisting anything', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+
+    keydown(document, 'ArrowRight');
+    await settle();
+    keydown(document, 'Escape');
+    await settle();
+
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    // The card falls back to its original column once cancelled.
+    expect(columnZone('Unstaged').contains(cardEl('card-a'))).toBe(true);
+  });
+
+  it('reorders within the same column using the arrow keys (Enter to drop), matching pointer reorder semantics', async () => {
+    const top = makeStore('card-top', { workflowStage: 'spec', boardRank: 'a' });
+    const bottom = makeStore('card-bottom', { workflowStage: 'spec', boardRank: 'm' });
+    managerTasks.set(top.data.id, top);
+    managerTasks.set(bottom.data.id, bottom);
+    await mount();
+
+    const handle = moveHandleFor('card-bottom');
+    handle.focus();
+    keydown(handle, 'Enter'); // Enter picks up too (defaultKeyboardCodes.start)
+    await afterKeyboardPickup();
+
+    // Nudge up until card-top's own make-room transform shows it has been
+    // displaced (the same signal the pointer "symmetric swap trigger" suite
+    // above reads) — same-column reordering is a pure CSS-transform preview
+    // until drop, so DOM order itself never changes mid-drag; this is the
+    // correct mid-drag observable, not sortable-list DOM order.
+    let displaced = false;
+    for (let i = 0; i < 5 && !displaced; i++) {
+      keydown(document, 'ArrowUp');
+      await settle(2);
+      const transform = (cardEl('card-top') as HTMLElement).style.transform;
+      displaced = Boolean(transform) && !transform.includes('translate3d(0px, 0px, 0px)');
+    }
+    expect(displaced).toBe(true);
+
+    keydown(document, 'Enter'); // Enter drops too (defaultKeyboardCodes.end)
+    await settle();
+
+    expect(bottom.updateBoardPosition).toHaveBeenCalledTimes(1);
+    const [stage, rank] = bottom.updateBoardPosition.mock.calls[0]!;
+    expect(stage).toBe('spec');
+    expect(rank < 'a').toBe(true); // lands above card-top
+  });
+
+  it("refuses a keyboard-driven drop into a GitHub-authoritative-blocked destination — ticket #48's blocked-destination explanation, now reachable by keyboard", async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues: openSpecLink() });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+
+    // Nudge left, toward Idea (a destination `open-spec` forbids — mirrors
+    // the pointer-driven "disables a cross-stage destination" test above),
+    // until the column itself reports the blocked state.
+    let blocked = false;
+    for (let i = 0; i < 5 && !blocked; i++) {
+      keydown(document, 'ArrowLeft');
+      await settle();
+      blocked = columnContainer('Idea').getAttribute('aria-disabled') === 'true';
+    }
+    expect(blocked).toBe(true);
+    // The same accessible explanation a pointer drag renders — reachable by
+    // keyboard now, exactly what this ticket owns.
+    expect(columnContainer('Idea').getAttribute('title')).toContain('Spec');
+    expect(host.querySelector('[data-board-status]')?.textContent).toContain('Spec');
+
+    keydown(document, 'Space');
+    await settle();
+
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(captureTelemetryMock).toHaveBeenCalledWith(
+      'board_move_blocked',
+      expect.objectContaining({
+        from_stage: 'spec',
+        attempted_stage: 'idea',
+        governing_fact: 'open-spec',
+      })
+    );
+  });
+
+  it('does not activate a keyboard drag when Enter/Space is pressed on the card body itself — selection keeps that key, unchanged since ticket #40', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    (cardEl('card-a') as HTMLElement).focus();
+    keydown(cardEl('card-a'), 'Space');
+    await afterKeyboardPickup();
+    keydown(document, 'ArrowRight');
+    await settle();
+
+    // No keyboard drag ever started from the card body: the card never left
+    // Unstaged, and nothing was ever persisted.
+    expect(columnZone('Unstaged').contains(cardEl('card-a'))).toBe(true);
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+  });
+
+  it('expands a collapsed empty column so a keyboard drag can actually reach it, and still accepts the drop — the same `isDragHovered` state ticket #46 built for pointer', async () => {
+    // Regression test: dnd-kit's own `sortableKeyboardCoordinates` ranks
+    // candidate drop targets by corner-to-corner distance to the active
+    // card's rect. A collapsed empty column (ticket #46) renders as a very
+    // narrow, full-board-height sliver — verified experimentally that this
+    // geometry defeats that ranking: arrow-key navigation skipped straight
+    // over a *collapsed* Idea into Exploring every time, even though the
+    // exact same navigation correctly landed on Idea when it was merely
+    // empty but not collapsed (see the cross-column test above). The board
+    // now force-expands every collapsible empty column for the duration of
+    // a keyboard-activated drag specifically to keep this reachable.
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+
+    // Expanded immediately: the fix forces every collapsible empty column
+    // open for the duration of any keyboard drag, not just once hovered.
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    keydown(document, 'ArrowRight');
+    await settle();
+    expect(columnZone('Idea').contains(cardEl('card-a'))).toBe(true);
+
+    keydown(document, 'Space');
+    await settle();
+
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('idea', expect.any(String));
+  });
+
+  it('collapses back once a keyboard drag that never entered it ends, matching the pointer-drag contract', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    keydown(document, 'Escape');
+    await settle();
+
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    // Idea is still empty (the drag was cancelled), so it is collapsible
+    // again once the keyboard drag that forced it open has ended.
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+  });
+});
+
+// ── Focus traversal and semantic labels (ticket #52) ───────────────────────
+
+describe('board — focus traversal between columns, cards and board controls (ticket #52)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it('every interactive board control this ticket touches is a real, independently focusable, accessibly-named target', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    // Column control (ticket #46, unchanged) — collapsible empty column toggle.
+    const toggle = columnToggle('Idea')!;
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute('aria-label')).toBe('Collapse Idea column');
+
+    // Card body (ticket #40) — still its own focus stop, still selects on Enter/Space.
+    const card = cardEl('card-a') as HTMLElement;
+    card.focus();
+    expect(document.activeElement).toBe(card);
+
+    // The card's "Move" handle (ticket #52) — a distinct focus stop from the
+    // card body itself, never nested inside another button.
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    expect(document.activeElement).toBe(handle);
+    expect(handle.getAttribute('aria-label')).toBe('Move card-a');
+    expect(handle.tagName).toBe('BUTTON');
+
+    // The hover-open arrow (ticket #42) — another distinct focus stop.
+    const openButton = host.querySelector(`button[aria-label="Open card-a"]`) as HTMLElement;
+    openButton.focus();
+    expect(document.activeElement).toBe(openButton);
+  });
+
+  it("a card's accessible position names its 1-based rank and the column's total, and stays correct after a card is added", async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', boardRank: 'a' });
+    const b = makeStore('card-b', { workflowStage: 'spec', boardRank: 'm' });
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    const cardA = cardEl('card-a');
+    const cardB = cardEl('card-b');
+    expect(cardA.getAttribute('aria-posinset')).toBe('1');
+    expect(cardA.getAttribute('aria-setsize')).toBe('2');
+    expect(cardB.getAttribute('aria-posinset')).toBe('2');
+    expect(cardB.getAttribute('aria-setsize')).toBe('2');
+  });
+
+  it("a keyboard drag's screen-reader announcement names the task and the destination Workflow Stage, never a raw id", async () => {
+    // `id` deliberately differs from `name` here — only checking the
+    // announcement text contains the *name*, not the id, proves this reads
+    // the real task rather than dnd-kit's own id-keyed default text.
+    const a = makeStore('task-internal-id-7', { name: 'Refactor the diff viewer' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const handle = moveHandleFor('Refactor the diff viewer');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+    keydown(document, 'ArrowRight');
+    await settle();
+
+    // dnd-kit's own built-in drag-announcement live region (distinct from
+    // this board's own `data-board-status` region, which uses `aria-live`
+    // "polite" rather than the default "assertive").
+    const liveRegion = host.querySelector('[aria-live="assertive"]');
+    expect(liveRegion?.textContent).toContain('Refactor the diff viewer');
+    expect(liveRegion?.textContent).not.toContain('task-internal-id-7');
+    expect(liveRegion?.textContent).toContain('Idea');
+  });
+});

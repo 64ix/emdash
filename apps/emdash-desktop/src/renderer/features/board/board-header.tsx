@@ -65,9 +65,22 @@ export function BoardHeader({
   return (
     <div className="flex flex-col gap-2 border-b border-border px-4 pt-4 pb-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-baseline gap-2">
-          <h1 className="text-sm font-medium">Feature board</h1>
-          <span className="text-xs text-foreground-muted">{projectName}</span>
+        {/* Narrow-window adaptation (ticket #52): `min-w-0` lets this group
+            shrink instead of forcing the row to overflow, and the project
+            name (unlike the fixed "Feature board" label) is the part that
+            actually varies in length — it truncates first, the same
+            protect-the-primary-action pattern the Task Detail Panel's own
+            header already uses for its title row. Without this, a long
+            project name on a narrow supported window could push "New task"
+            (the primary action) out of the visible header entirely. */}
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h1 className="shrink-0 text-sm font-medium">Feature board</h1>
+          <span
+            className="min-w-0 flex-1 truncate text-xs text-foreground-muted"
+            title={projectName}
+          >
+            {projectName}
+          </span>
         </div>
         <Button size="sm" onClick={onCreateTask}>
           <Plus className="size-3.5" />
