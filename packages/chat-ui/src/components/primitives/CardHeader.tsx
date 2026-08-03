@@ -43,10 +43,10 @@ export type CardHeaderProps = {
 
 export function CardHeader(props: CardHeaderProps) {
   return (
-    <div
+    <button
+      type="button"
       class={cardHeader}
       style={{ height: `${props.height}px` }}
-      role="button"
       aria-expanded={props.expanded ? 'true' : 'false'}
       data-collapse-id={props.id}
     >
@@ -86,6 +86,6 @@ export function CardHeader(props: CardHeaderProps) {
           </span>
         </Show>
       </span>
-    </div>
+    </button>
   );
 }

@@ -69,10 +69,10 @@ export function DiffHeader(props: DiffHeaderProps) {
   };
 
   return (
-    <div
+    <button
+      type="button"
       class={diffHeader({ hasBody: props.hasBody })}
       style={assignInlineVars({ [diffCardVars.headerH]: `${props.headerH}px` })}
-      role="button"
       onClick={handleClick}
     >
       {iconClass() ? (
@@ -110,7 +110,7 @@ export function DiffHeader(props: DiffHeaderProps) {
           <IconShieldAlert />
         </span>
       </Show>
-    </div>
+    </button>
   );
 }
 

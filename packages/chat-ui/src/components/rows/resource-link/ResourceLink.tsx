@@ -75,7 +75,7 @@ export function ResourceLink(props: ResourceLinkProps) {
   };
 
   return (
-    <div class={rowClickable} style={{ height: '100%' }} onClick={handleClick} role="button">
+    <button type="button" class={rowClickable} style={{ height: '100%' }} onClick={handleClick}>
       <div class={iconWrap}>
         <Show when={iconName()} fallback={<GenericFileIcon />}>
           <span class={iconName()!} />
@@ -95,6 +95,6 @@ export function ResourceLink(props: ResourceLinkProps) {
           <IconError />
         </span>
       </Show>
-    </div>
+    </button>
   );
 }

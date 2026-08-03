@@ -1,5 +1,6 @@
 import { style } from '@vanilla-extract/css';
 import { recipe } from '@vanilla-extract/recipes';
+import { resetButton } from '@styles/reset.css';
 import { sx } from '@styles/sprinkles.css';
 import { vars } from '@styles/theme.css';
 import { createVariableThemeContract } from '@styles/variable-theme-contract.css';
@@ -23,20 +24,35 @@ export const fileOpCardVars = createVariableThemeContract<FileOpStyleVars>({
 
 export const fileOpRoot = style({ height: fileOpCardVars.height });
 
+/**
+ * clickable:true renders as a native <button> (FileRowItem in
+ * FileOperation.tsx); clickable:false stays a plain <div> for the
+ * non-interactive streaming-preview case. resetButton is harmless on the
+ * div variant (all no-ops there) and required for the button variant.
+ */
 export const fileRow = recipe({
-  base: sx({
-    display: 'flex',
-    alignItems: 'center',
-    gap: '1.5',
-    color: 'fgPassive',
-    fontSize: 'sm',
-  }),
+  base: [
+    resetButton,
+    sx({
+      display: 'flex',
+      alignItems: 'center',
+      gap: '1.5',
+      color: 'fgPassive',
+      fontSize: 'sm',
+    }),
+  ],
   variants: {
     clickable: {
       true: {
+        width: '100%',
         cursor: 'pointer',
         selectors: {
           '&:hover': { color: vars.fgMuted },
+          '&:focus-visible': {
+            color: vars.fgMuted,
+            outline: '2px solid currentColor',
+            outlineOffset: '-2px',
+          },
         },
       },
       false: {},
@@ -44,18 +60,29 @@ export const fileRow = recipe({
   },
 });
 
-export const fileOpHeader = style({
-  display: 'flex',
-  alignItems: 'center',
-  gap: '6px',
-  cursor: 'pointer',
-  color: vars.fgPassive,
-  fontSize: vars.typeBodyFontSize,
-  userSelect: 'none',
-  selectors: {
-    '&:hover': { color: vars.fgMuted },
+// A native <button> (see FileOperation.tsx's deprecated FileOperation
+// component) — resetButton strips native button chrome.
+export const fileOpHeader = style([
+  resetButton,
+  {
+    display: 'flex',
+    alignItems: 'center',
+    width: '100%',
+    gap: '6px',
+    cursor: 'pointer',
+    color: vars.fgPassive,
+    fontSize: vars.typeBodyFontSize,
+    userSelect: 'none',
+    selectors: {
+      '&:hover': { color: vars.fgMuted },
+      '&:focus-visible': {
+        color: vars.fgMuted,
+        outline: '2px solid currentColor',
+        outlineOffset: '-2px',
+      },
+    },
   },
-});
+]);
 
 export const monoRunning = style({
   fontFamily: 'monospace',
