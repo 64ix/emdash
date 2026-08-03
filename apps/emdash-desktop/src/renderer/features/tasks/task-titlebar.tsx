@@ -56,6 +56,7 @@ import { IssueSelector, ProviderLogo } from './components/issue-selector/issue-s
 import { PreviewServerPills } from './components/preview-servers/preview-server-pills';
 import { type SidebarTab } from './types';
 import { useGitActions } from './use-git-actions';
+import { WorkflowStageChip } from './workflow-stage-chip';
 
 export const TaskTitlebar = observer(function TaskTitlebar() {
   const { projectId, taskId } = useTaskViewContext();
@@ -299,6 +300,19 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
             </PopoverContent>
           </Popover>
           {mostAdvancedLink ? <LinkedIssueBadge issue={mostAdvancedLink.issue} /> : null}
+          {/* Workflow Stage chip (ticket #50): only for registered tasks, not
+              an in-flight automation run that hasn't converted into one yet
+              (the same `type === 'task'` gate the Pin control just below
+              already uses). Unstaged is shown explicitly via `STAGE_LABELS`'
+              own `unstaged` entry -- the chip is never hidden for a task
+              with no Workflow Stage set. */}
+          {taskPayload.type === 'task' && (
+            <WorkflowStageChip
+              projectId={projectId}
+              taskId={taskId}
+              workflowStage={taskPayload.workflowStage ?? null}
+            />
+          )}
           {taskPayload.type === 'task' && (
             <button
               className={cn(

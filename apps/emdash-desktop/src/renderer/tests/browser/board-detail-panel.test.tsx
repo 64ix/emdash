@@ -23,6 +23,8 @@ import { page } from 'vitest/browser';
 import { modalStore } from '@renderer/lib/modal/modal-store';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssueRoles } from '@shared/core/linked-issue';
+import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type {
   CreateTaskError,
   CreateTaskSuccess,
@@ -54,6 +56,12 @@ type MockStore = {
     // `GitWorktreeStore` mounted — same shape `board-card-hierarchy.test.tsx`
     // already exercises for the card.
     workspaceGit?: { linesAdded: number; linesDeleted: number };
+    // Ticket #50: `board-filters.ts`'s `matchesSearchQuery` reads this
+    // unconditionally (unlike `authorityForTask`'s defensive `task.prs ??
+    // []`) — defaulted to `[]` by `makeStore`/`makeLiveStore` below so the
+    // focused-task navigation suite's search-filter interaction never trips
+    // it for a mock task that otherwise has no reason to carry any PRs.
+    prs?: PullRequest[];
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
@@ -100,10 +108,15 @@ const mocks = vi.hoisted(() => ({
   // exercising the real RPC/session-id round trip these tests have no
   // reason to cover.
   captureTelemetry: vi.fn(),
+  // Ticket #50: the task titlebar's Workflow Stage chip carries this back to
+  // the board via `useParams('board')`. A mutable field (not a fixed
+  // literal) so individual tests can drive it, mirroring how
+  // `sidebar-board-row.test.tsx` makes its own mocked params configurable.
+  focusTaskId: undefined as string | undefined,
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
-  useParams: () => ({ params: { projectId: 'p1' } }),
+  useParams: () => ({ params: { projectId: 'p1', focusTaskId: mocks.focusTaskId } }),
   useNavigate: () => ({ navigate: mocks.navigate }),
 }));
 
@@ -192,6 +205,7 @@ function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): Mock
       status: 'active',
       type: 'task',
       createdAt: '2026-01-01T00:00:00.000Z',
+      prs: [],
       ...overrides,
     },
     conversationStats: {},
@@ -208,6 +222,7 @@ function makeLiveStore(id: string, overrides: Partial<MockStore['data']> = {}) {
     status: 'active',
     type: 'task',
     createdAt: '2026-01-01T00:00:00.000Z',
+    prs: [] as PullRequest[],
     ...overrides,
   });
   return {
@@ -318,6 +333,7 @@ function setupDom() {
     mocks.getGhostCards.mockImplementation(() => Promise.resolve([]));
     mocks.adoptGhostCard.mockReset();
     mocks.rejectGhostCard.mockImplementation(() => Promise.resolve());
+    mocks.focusTaskId = undefined;
   });
 
   afterEach(() => {
@@ -327,6 +343,7 @@ function setupDom() {
     managerTasks.clear();
     branchByTaskId.clear();
     vi.clearAllMocks();
+    mocks.focusTaskId = undefined;
   });
 }
 
@@ -1503,4 +1520,160 @@ describe('Task Detail Panel — board_inspector_opened telemetry (ticket #49)', 
       project_id: 'p1',
     });
   });
+});
+
+// Ticket #50: focused-task navigation. The task titlebar's Workflow Stage
+// chip (`task-titlebar.test.tsx`) carries an optional `focusTaskId` back to
+// this board via `useParams('board')`. Resolved against exactly the
+// active-task set the board itself already renders (`storeById`, which
+// already excludes archived and Shipped-Faded tasks), reusing
+// `handleSelectTask` (ticket #49) — the one existing selection path — so a
+// focused arrival opens the inspector and highlights the card exactly like a
+// manual click would, and scrolls it into view. An id that never resolves
+// there (invalid, archived, or simply absent) is a silent no-op: the board
+// renders normally, nothing is selected, and nothing throws.
+describe('Board — focused-task navigation (ticket #50)', () => {
+  setupDom();
+
+  /** Whether a card with this name is currently rendered — safe for the
+   * "does not exist at all" cases, unlike `cardEl`, which throws on a miss. */
+  function cardExists(name: string): boolean {
+    return Array.from(host.querySelectorAll('span')).some((s) => s.textContent === name);
+  }
+
+  it('opens the inspector and highlights the focused card on arrival', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    mocks.focusTaskId = 'card-a';
+    await mount();
+
+    expect(panelHeading()).toBe('card-a');
+    expect((cardEl('card-a') as HTMLElement).className).toContain('border-primary');
+    expect((cardEl('card-b') as HTMLElement).className).not.toContain('border-primary');
+  });
+
+  it('scrolls the focused card into view on arrival', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'card-a';
+    const scrollIntoViewSpy = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+
+    await mount();
+
+    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    scrollIntoViewSpy.mockRestore();
+  });
+
+  it('fails safely for a focusTaskId that does not resolve to any task (invalid)', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'does-not-exist';
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    expect(cardExists('card-a')).toBe(true); // the board still renders normally
+  });
+
+  it('fails safely for an archived task id', async () => {
+    const a = makeStore('card-a', { archivedAt: '2026-01-01T00:00:00.000Z' });
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'card-a';
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+  });
+
+  // A Shipped-Faded task (CONTEXT.md "Shipped Fade") is neither invalid nor
+  // archived — it is a real, valid task whose PR merged long enough ago that
+  // `isBoardDisplayable` (the same predicate `storeById` is built from) hides
+  // it from the board's own columns. Resolution must fail exactly as safely
+  // here as for an archived id: no throw, no stale/impossible selection, the
+  // rest of the board renders normally.
+  it('fails safely for a Shipped-Faded task id (real, non-archived, but hidden by the fade window)', async () => {
+    const oldMergedAt = new Date(Date.now() - (SHIPPED_FADE_WINDOW_MS + 1000)).toISOString();
+    const a = makeStore('card-a', {
+      workflowStage: 'shipped',
+      prs: [
+        {
+          url: 'https://github.com/acme/repo/pull/1',
+          title: 'Ship it',
+          identifier: '#1',
+          status: 'merged',
+          isDraft: false,
+          mergedAt: oldMergedAt,
+        } as PullRequest,
+      ],
+    });
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'card-a';
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    expect(cardExists('card-a')).toBe(false); // faded out of the board, same as before navigation
+  });
+
+  it('renders normally with nothing selected when no focusTaskId is present', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    expect(cardExists('card-a')).toBe(true);
+  });
+
+  it('does not re-select or re-scroll on a later, unrelated re-render carrying the same focusTaskId', async () => {
+    const a = makeStore('card-a');
+    const b = makeLiveStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b as unknown as MockStore);
+    mocks.focusTaskId = 'card-a';
+    await mount();
+    expect(panelHeading()).toBe('card-a');
+
+    // A manual click elsewhere, then some unrelated re-render, must not fight
+    // the user's own new selection just because `focusTaskId` is still the
+    // same string it always was. `workflowStage` is read directly by
+    // `BoardMainPanel`'s own render loop (bucketing cards into columns), so
+    // mutating it — unlike a field only a child component reads — genuinely
+    // forces `BoardMainPanel` itself to re-render, the same way the
+    // "disappearance" suite above forces one via `archivedAt`.
+    click(cardEl('card-b'));
+    await settle();
+    expect(panelHeading()).toBe('card-b');
+
+    runInAction(() => {
+      b.data.workflowStage = 'idea';
+    });
+    await settle();
+
+    expect(panelHeading()).toBe('card-b');
+  });
+
+  // The board's own filters (search, Needs Attention, compact filters) are
+  // local `useState`, reset to empty on every mount — and every existing
+  // navigation path that sets `focusTaskId` (the titlebar's Workflow Stage
+  // chip) lands on `board` through a genuine fresh mount (`Workspace` swaps
+  // `MainPanel` components on view change), so "a focused task the board's
+  // own filters currently hide" cannot actually arise today: there is no
+  // way to reach this component with both a `focusTaskId` and a non-default
+  // `filters` value already in place. The `setFilters(EMPTY_BOARD_FILTERS)`
+  // safety net in `board-main-panel.tsx` exists for defense-in-depth against
+  // a future navigation change that stops remounting the board, and is
+  // verified by code review (its condition is exactly the same
+  // `taskPassesBoardFilters` predicate `board-filters.test.ts` already
+  // covers exhaustively) rather than by a test here: reproducing "already
+  // mounted with active filters" would require the mocked `useParams` to be
+  // genuinely reactive the way the real MobX-backed one is (this suite's
+  // `BoardMainPanel` is `observer`-wrapped, which bails out of a bare
+  // `root.render()` repeat when its props -- there are none -- haven't
+  // changed), which is disproportionate machinery for a path that cannot
+  // occur through any registered navigation entry point today.
 });
