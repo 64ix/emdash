@@ -20,9 +20,16 @@ import {
   type AnimateLayoutChanges,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ArrowUpRight, MessageSquare } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  agentStateLabel,
+  cardArtifactBadgeText,
+  cardArtifactTitle,
+  deriveCardArtifact,
+  taskActivityInstant,
+} from '@renderer/features/board/board-card-view-model';
 import { isBoardDisplayable, STAGE_LABELS } from '@renderer/features/board/board-columns';
 import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
@@ -34,24 +41,22 @@ import {
   getProjectStore,
   projectDisplayName,
 } from '@renderer/features/projects/stores/project-selectors';
+import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
 import {
   getTaskManagerStore,
   taskAgentStatus,
 } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
+import { StatusIcon } from '@renderer/lib/components/pr-status-icon';
+import { StackedAgentLogos } from '@renderer/lib/components/stacked-agent-logos';
 import { rpc } from '@renderer/lib/ipc';
 import { useNavigate, useParams } from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
+import { RelativeTime } from '@renderer/lib/ui/relative-time';
 import { cn } from '@renderer/utils/utils';
+import type { AgentStatus } from '@shared/core/agents/agentEvents';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
-import {
-  linkedIssueDisplayIdentifier,
-  linkedIssueRoleLabels,
-  mostAdvancedLinkedIssue,
-  type LinkedIssue,
-  type LinkedIssueRole,
-} from '@shared/core/linked-issue';
 import {
   COLUMNS,
   computeDropPosition,
@@ -60,13 +65,6 @@ import {
   stageOf,
   type ColumnId,
 } from './board-ordering';
-
-/** "Spec #123" (or just "Spec" when the issue has no identifier) for the most-advanced-link badge. */
-function linkedIssueBadgeText(link: { role: LinkedIssueRole; issue: LinkedIssue }): string {
-  const label = linkedIssueRoleLabels[link.role];
-  const identifier = linkedIssueDisplayIdentifier(link.issue);
-  return identifier ? `${label} ${identifier}` : label;
-}
 
 /** dnd-kit id for a column's empty-space drop target (distinct from card ids). */
 const COLUMN_DROP_PREFIX = 'column-drop::';
@@ -568,9 +566,16 @@ const BoardCard = observer(function BoardCard({
   const task = registeredTaskData(store);
   if (!task) return null;
 
-  const sessionCount = Object.values(store.conversationStats).reduce((a, b) => a + b, 0);
-  const linkedIssue = mostAdvancedLinkedIssue(task.linkedIssues);
+  // Card information hierarchy (ticket #47): every fact below comes from an
+  // existing task selector or presentation primitive — the same ones the
+  // Task Detail Panel, the sidebar and the project List view already read —
+  // so a card can never disagree with them about a task's agent state, PR,
+  // Linked Issue, or diff totals (the ticket's load-bearing "no duplicate
+  // state pipeline" criterion).
   const agentStatus = taskAgentStatus(store);
+  const artifact = deriveCardArtifact(task);
+  const hasProviders = Object.keys(store.conversationStats).length > 0;
+  const activityInstant = taskActivityInstant(task);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -596,7 +601,7 @@ const BoardCard = observer(function BoardCard({
         }
       }}
       className={cn(
-        'group relative cursor-grab touch-none rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing',
+        'group relative flex cursor-grab touch-none flex-col gap-1 rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing',
         // The card backing the open Task Detail Panel (CONTEXT.md) is highlighted.
         isSelected && 'border-primary ring-1 ring-primary/50'
       )}
@@ -623,26 +628,91 @@ const BoardCard = observer(function BoardCard({
       >
         <ArrowUpRight className="size-3.5" />
       </button>
-      <span className="block w-full pr-4 text-left text-xs font-medium">{task.name}</span>
-      <div className="mt-1.5 flex items-center justify-between">
+
+      {/* Title (ticket #47): wraps to a small, bounded number of lines — a
+          long name never grows the card past two lines. `title` keeps the
+          full name reachable on hover; card fields stay fixed, not
+          user-configurable. */}
+      <span
+        className="line-clamp-2 block w-full pr-4 text-left text-xs font-medium"
+        title={task.name}
+      >
+        {task.name}
+      </span>
+
+      {/* Actionable agent state: the fact the card leads with, since it
+          answers "what needs my attention?" (CONTEXT.md). Always carries a
+          visible text label — never colour or a bare dot alone — because two
+          of the four non-idle states already share the same dot colour. */}
+      <BoardCardAgentState status={agentStatus} />
+
+      {/* Most relevant delivery artifact + code-change statistics. Both
+          degrade gracefully for a purely local task: `artifact` is `null`
+          with no Linked Issue or PR, and `TaskGitDiffStats` already hides
+          itself when there is nothing to show. */}
+      <div className="flex flex-wrap items-center gap-1.5 empty:hidden">
+        {artifact && (
+          <Badge variant="outline" title={cardArtifactTitle(artifact)} className="gap-1">
+            {artifact.kind === 'pr' && (
+              <StatusIcon pr={artifact.pr} className="size-3" disableTooltip />
+            )}
+            {cardArtifactBadgeText(artifact)}
+          </Badge>
+        )}
+        <TaskGitDiffStats task={store} />
+      </div>
+
+      {/* Compact provider/session context + recent activity. */}
+      {(hasProviders || activityInstant) && (
         <div className="flex items-center gap-1.5">
-          {linkedIssue && (
-            <Badge variant="outline" title={linkedIssue.issue.title}>
-              {linkedIssueBadgeText(linkedIssue)}
-            </Badge>
-          )}
-          {sessionCount > 0 && (
-            <span className="flex items-center gap-0.5 text-[10px] text-foreground-muted">
-              <MessageSquare className="size-3" />
-              {sessionCount}
-            </span>
+          {hasProviders && <StackedAgentLogos stats={store.conversationStats} />}
+          {activityInstant && (
+            <RelativeTime
+              value={activityInstant}
+              compact
+              className="ml-auto shrink-0 text-[10px] text-foreground-passive"
+            />
           )}
         </div>
-        {agentStatus === 'awaiting-input' && <AgentStatusIndicator status={agentStatus} />}
-      </div>
+      )}
     </div>
   );
 });
+
+/**
+ * Card-local agent-state chip (ticket #47): a compact, always-visible label
+ * for the five states `taskAgentStatus` distinguishes (Working, Awaiting
+ * Input, Error, Completed, Idle). Reuses `AgentStatusIndicator` — the same
+ * icon `AgentStatus` already renders elsewhere (sidebar, Task Detail Panel) —
+ * for the four non-idle states, so the glyph itself is never redefined; the
+ * always-visible text label is what the ticket actually requires, since two
+ * of those four states (`awaiting-input`, `completed`) already share the
+ * same dot colour and would otherwise be indistinguishable without it.
+ * `role="status"` plus `aria-label` gives the whole chip one queryable
+ * accessible name for assistive tech, on top of the plain visible text.
+ */
+function BoardCardAgentState({ status }: { status: AgentStatus | null }) {
+  const label = agentStateLabel(status);
+  const toneClass =
+    status === 'error'
+      ? 'text-foreground-error'
+      : status === 'awaiting-input' || status === 'completed'
+        ? 'text-foreground-info'
+        : status === 'working'
+          ? 'text-foreground-muted'
+          : 'text-foreground-passive';
+
+  return (
+    <span
+      role="status"
+      aria-label={`Agent status: ${label}`}
+      className={cn('flex items-center gap-1 text-[10px] font-medium', toneClass)}
+    >
+      {status && status !== 'idle' && <AgentStatusIndicator status={status} disableTooltip />}
+      <span>{label}</span>
+    </span>
+  );
+}
 
 /** Lightweight drag-preview rendered in the `DragOverlay` — no dnd-kit listeners attached. */
 function BoardCardPreview({ store }: { store: TaskStore }) {

@@ -63,10 +63,27 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
   registeredTaskData: (store: MockStore) => store.data,
+  // Ticket #47's card now renders `TaskGitDiffStats`, which imports
+  // `isRegistered` from this module even though these drag-and-drop tests
+  // never surface diff stats (mock stores have no `workspaceGit`/`projectId`,
+  // so it always resolves to "nothing to show") — the mock still needs to
+  // shadow the real export so that import does not resolve to `undefined`.
+  isRegistered: () => true,
 }));
 
 vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
   AgentStatusIndicator: () => null,
+}));
+
+// `StackedAgentLogos` (ticket #47's card, provider/session context) reads
+// agent metadata through `@tanstack/react-query` and, via `PluginIcon`'s
+// theme lookup, transitively reaches the app-wide store graph
+// (`ThemeProvider` -> pty -> `appState` -> `ProjectManagerStore` -> ... ->
+// `open-file-in-file-editor.ts`) — none of it relevant to these drag tests,
+// and each hop needs its own real (unmocked) module. Mocked away wholesale,
+// the same way `AgentStatusIndicator` already is above.
+vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
+  StackedAgentLogos: () => null,
 }));
 
 // BoardMainPanel pulls in BoardLinkSuggestions and GhostCards, which call the
@@ -600,7 +617,13 @@ describe('board drag-and-drop — cross-column ghost preview', () => {
     const specZone = columnZone('Spec');
     const ghost = cardEl('card-a');
     expect(specZone.contains(ghost)).toBe(true);
-    const names = Array.from(specZone.querySelectorAll('span')).map((b) => b.textContent);
+    // Each card's own name is its first <span> descendant (ticket #47 added
+    // further spans to a card's body — agent state, artifact badge, provider
+    // logos — so this reads only the title of each direct card child, not
+    // every span in the zone).
+    const names = Array.from(specZone.children).map(
+      (card) => card.querySelector('span')?.textContent
+    );
     expect(names).toEqual(['card-a', 'card-x']);
     // And it left its source column.
     expect(columnZone('Unstaged').contains(ghost)).toBe(false);
