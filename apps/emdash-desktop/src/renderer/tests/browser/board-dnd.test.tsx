@@ -1295,3 +1295,82 @@ describe('board drag-and-drop — keyboard-driven (ticket #52)', () => {
     expect(a.updateBoardPosition).not.toHaveBeenCalled();
   });
 });
+
+// ── Focus traversal and semantic labels (ticket #52) ───────────────────────
+
+describe('board — focus traversal between columns, cards and board controls (ticket #52)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it('every interactive board control this ticket touches is a real, independently focusable, accessibly-named target', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    // Column control (ticket #46, unchanged) — collapsible empty column toggle.
+    const toggle = columnToggle('Idea')!;
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute('aria-label')).toBe('Collapse Idea column');
+
+    // Card body (ticket #40) — still its own focus stop, still selects on Enter/Space.
+    const card = cardEl('card-a') as HTMLElement;
+    card.focus();
+    expect(document.activeElement).toBe(card);
+
+    // The card's "Move" handle (ticket #52) — a distinct focus stop from the
+    // card body itself, never nested inside another button.
+    const handle = moveHandleFor('card-a');
+    handle.focus();
+    expect(document.activeElement).toBe(handle);
+    expect(handle.getAttribute('aria-label')).toBe('Move card-a');
+    expect(handle.tagName).toBe('BUTTON');
+
+    // The hover-open arrow (ticket #42) — another distinct focus stop.
+    const openButton = host.querySelector(`button[aria-label="Open card-a"]`) as HTMLElement;
+    openButton.focus();
+    expect(document.activeElement).toBe(openButton);
+  });
+
+  it("a card's accessible position names its 1-based rank and the column's total, and stays correct after a card is added", async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', boardRank: 'a' });
+    const b = makeStore('card-b', { workflowStage: 'spec', boardRank: 'm' });
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    const cardA = cardEl('card-a');
+    const cardB = cardEl('card-b');
+    expect(cardA.getAttribute('aria-posinset')).toBe('1');
+    expect(cardA.getAttribute('aria-setsize')).toBe('2');
+    expect(cardB.getAttribute('aria-posinset')).toBe('2');
+    expect(cardB.getAttribute('aria-setsize')).toBe('2');
+  });
+
+  it("a keyboard drag's screen-reader announcement names the task and the destination Workflow Stage, never a raw id", async () => {
+    // `id` deliberately differs from `name` here — only checking the
+    // announcement text contains the *name*, not the id, proves this reads
+    // the real task rather than dnd-kit's own id-keyed default text.
+    const a = makeStore('task-internal-id-7', { name: 'Refactor the diff viewer' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const handle = moveHandleFor('Refactor the diff viewer');
+    handle.focus();
+    keydown(handle, 'Space');
+    await afterKeyboardPickup();
+    keydown(document, 'ArrowRight');
+    await settle();
+
+    // dnd-kit's own built-in drag-announcement live region (distinct from
+    // this board's own `data-board-status` region, which uses `aria-live`
+    // "polite" rather than the default "assertive").
+    const liveRegion = host.querySelector('[aria-live="assertive"]');
+    expect(liveRegion?.textContent).toContain('Refactor the diff viewer');
+    expect(liveRegion?.textContent).not.toContain('task-internal-id-7');
+    expect(liveRegion?.textContent).toContain('Idea');
+  });
+});
