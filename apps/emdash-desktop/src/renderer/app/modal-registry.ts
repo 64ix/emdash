@@ -16,6 +16,7 @@ import { CreatePrModal } from '@renderer/features/tasks/diff-view/changes-panel/
 import { ConflictDialog } from '@renderer/features/tasks/editor/conflict-dialog';
 import { RenameTaskModal } from '@renderer/features/tasks/rename-task-modal';
 import { AddSshConnModal } from '@renderer/lib/components/add-ssh-conn-modal';
+import { ArtifactPreviewDialog } from '@renderer/lib/components/artifact-preview-dialog';
 import { ChangeProjectConnectionModal } from '@renderer/lib/components/change-project-connection-modal';
 import { ConfirmActionDialog } from '@renderer/lib/components/confirm-action-dialog';
 import { ExternalLinkChoiceDialog } from '@renderer/lib/components/external-link-choice-dialog';
@@ -68,5 +69,6 @@ export const modalRegistry = {
   agentSignInModal: createModal(AgentSignInModal, { size: 'lg' }),
   addRemoteModal: createModal(AddRemoteModal),
   deleteTaskModal: createModal(DeleteTaskModal, { size: 'sm' }),
+  artifactPreviewModal: createModal(ArtifactPreviewDialog, { size: 'lg' }),
   // oxlint-disable-next-line typescript/no-explicit-any
 } satisfies Record<string, ModalRegistryEntry<any, any>>;
