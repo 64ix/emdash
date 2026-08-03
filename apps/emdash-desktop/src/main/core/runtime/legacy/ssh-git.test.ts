@@ -110,6 +110,36 @@ describe('LegacySshGitRuntime', () => {
     }
   });
 
+  it('reports oldPath as an absolute (host-joined) path for a staged rename', async () => {
+    const repo = await createRepo();
+    repos.push(repo);
+    const runtime = new LegacySshGitRuntime(localSshProxy as never, TEST_CONNECTION_ID);
+    const lease = await runtime.openWorktree(repo);
+    const worktree = lease.value;
+
+    try {
+      await execFileAsync('git', ['mv', 'tracked.ts', 'renamed.ts'], { cwd: repo });
+      // `git-service.ts` (the GitService this runtime wraps) reports `oldPath`
+      // as a worktree-relative path; `toAbsChange` must remap it onto the
+      // same absolute footing as `path` so a consumer comparing the two
+      // fields never has to know which host produced the status.
+      await expect(worktree.getStatus()).resolves.toMatchObject({
+        kind: 'ok',
+        staged: [
+          expect.objectContaining({
+            path: path.posix.join(repo, 'renamed.ts'),
+            status: 'renamed',
+            oldPath: path.posix.join(repo, 'tracked.ts'),
+          }),
+        ],
+        unstaged: [],
+      });
+    } finally {
+      await lease.release();
+      await runtime.dispose();
+    }
+  });
+
   it('does not accept the first untracked fingerprint poll as a stale baseline', async () => {
     const repo = await createRepo();
     repos.push(repo);
