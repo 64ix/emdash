@@ -327,6 +327,15 @@ export class ProjectManagerStore {
             );
           }
         });
+        // Revalidate the current view's guard now that this project's saved
+        // ProjectViewStore snapshot is in place (ticket #44). If the user is
+        // already sitting on `project` for this projectId -- e.g. it just
+        // reconnected from an SSH-disconnected or mount-error state while
+        // still mounted -- and its persisted work mode is Board,
+        // `projectView.canActivate` could not see that preference before
+        // this project had a mounted view store; this catches that case up
+        // instead of leaving it stuck on List until the next navigation.
+        appState.navigation.revalidate();
         // Load the task list before provisioning so the tasks map is populated.
         const taskManager = this.projects.get(projectId)?.mountedProject?.taskManager;
         if (taskManager) {
