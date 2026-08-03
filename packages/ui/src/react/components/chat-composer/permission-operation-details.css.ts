@@ -74,6 +74,12 @@ export const truncatedNote = style({
   fontStyle: 'italic',
 });
 
+export const resourcesSection = style({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.125rem',
+});
+
 export const resourcesList = style({
   display: 'flex',
   flexDirection: 'column',

@@ -179,7 +179,7 @@ export function PermissionOperationDetails({
         ))}
 
         {operation.resources.length > 0 && (
-          <div className={styles.resourcesList}>
+          <div className={styles.resourcesSection}>
             <span className={styles.metaLabel}>Affected</span>
             <ul className={styles.resourcesList}>
               {operation.resources.map((resource, index) => (
