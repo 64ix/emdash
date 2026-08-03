@@ -1626,6 +1626,7 @@ export function ChatRoot(props: ChatRootProps) {
      */
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.repeat) return; // ignore key auto-repeat while held down
       const t = e.target as HTMLElement;
       const collapseTarget = t.closest('[data-collapse-id]') as HTMLElement | null;
       if (!collapseTarget?.dataset.collapseId) return;
