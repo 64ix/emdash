@@ -86,6 +86,11 @@ export type { TurnStatus, TranscriptApi, ChatHistory } from './state/transcript'
 export { deriveTranscriptOutline } from './state/outline';
 export type { OutlineEntry, OutlineEntryRole, OutlineEntryStatus } from './state/outline';
 
+// ── Turn footer (ticket #38) ─────────────────────────────────────────────────
+
+export { deriveTurnFooter } from './state/turn-footer';
+export type { TurnFooterCost, TurnFooterContext, TurnFooterData, TurnFooterStatus } from './model';
+
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 export type {

@@ -31,8 +31,15 @@
 import type { TranscriptItem, TranscriptMessage, TranscriptTurn } from '@/model';
 import type { PendingPrompt } from './session-state';
 import type { TurnStatus } from './transcript';
+import { activeStatus, statusForOutcome, type TurnNarrativeStatus } from './turn-status';
 
-export type OutlineEntryStatus = 'current' | 'completed' | 'error' | 'cancelled';
+/**
+ * Alias of the shared `TurnNarrativeStatus` vocabulary (see `state/turn-status.ts`).
+ * Kept as a distinct exported name for outline call sites / the public API —
+ * the underlying mapping is shared with the turn footer (ticket #38) so the
+ * two summarizers can never disagree about the same turn.
+ */
+export type OutlineEntryStatus = TurnNarrativeStatus;
 
 /** `'prompt'` — a user message. `'turn'` — the assistant/agent activity that followed it. */
 export type OutlineEntryRole = 'prompt' | 'turn';
@@ -86,22 +93,6 @@ function turnPreview(items: readonly TranscriptItem[]): string {
   if (message) return boundedPreview(message.text);
   const first = items[0];
   return first ? itemPreviewLabel(first) : '';
-}
-
-/** Map a settled turn's outcome to the outline's four-state status vocabulary. */
-function statusForOutcome(outcome: TranscriptTurn['outcome']): OutlineEntryStatus {
-  if (!outcome || outcome.kind === 'done') return 'completed';
-  if (outcome.kind === 'cancelled') return 'cancelled';
-  // 'error' and 'interrupted' both represent an abnormal, non-user-cancelled
-  // stop; the outline only distinguishes explicit cancellation from failure.
-  return 'error';
-}
-
-/** Map the live `TurnStatus` (see `state/transcript.ts`) for the active turn. */
-function activeStatus(turnStatus: TurnStatus): OutlineEntryStatus {
-  if (turnStatus === 'cancelled') return 'cancelled';
-  if (turnStatus === 'done') return 'completed';
-  return 'current';
 }
 
 function pushEntriesForTurn(

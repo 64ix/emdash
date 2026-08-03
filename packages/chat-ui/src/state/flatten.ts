@@ -42,6 +42,7 @@ import { resolveSeamGap } from '@core/spacing';
 import type { ItemSegmenter, Margin, RenderUnit, SegmentCtx } from '@core/units';
 import { stampGroupRoles } from '@core/units';
 import type { ChatItem, ChatMessage, SyntheticItem, TranscriptTurn } from '@/model';
+import { deriveTurnFooter } from './turn-footer';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -124,11 +125,17 @@ export function flattenTier(
       processItem({ kind: 'working', id: `${turn.id}:working` }, turnCtx);
     }
 
-    if (!ctx.active && turn.outcome && turn.outcome.kind !== 'done') {
-      processItem(
-        { kind: 'turn-outcome', id: `${turn.id}:outcome`, outcome: turn.outcome },
-        turnCtx
-      );
+    // Every settled turn (any outcome kind, including 'done') gets exactly one
+    // compact metadata footer (ticket #38) — never the active tier, which
+    // still owns the "Working…"/streaming presentation above.
+    if (!ctx.active && turn.outcome) {
+      const footer = deriveTurnFooter(turn);
+      if (footer) {
+        processItem(
+          { kind: 'turn-outcome', id: `${turn.id}:outcome`, outcome: turn.outcome, footer },
+          turnCtx
+        );
+      }
     }
   }
 

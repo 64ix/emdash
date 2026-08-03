@@ -1,8 +1,11 @@
 /**
  * ToolGroup stories — hierarchical tool calls rendered as collapsible composite rows.
  *
- * Running collapsed groups show a child preview. Settled collapsed groups are
- * header-only until expanded. No visual inset between levels.
+ * Collapsed groups always show a bounded child preview, running or settled
+ * (ticket #38: a completed group must retain a meaningful preview of its
+ * work, not just header text) — subagents are the one exception, using
+ * `SubagentHeader`'s own settled summary instead. No visual inset between
+ * levels.
  */
 
 import type { Meta, StoryObj } from 'storybook-solidjs-vite';
@@ -172,7 +175,8 @@ export const StateMatrix: Story = {
 
 /**
  * A single-level hierarchy: one completed parent tool call with three children.
- * Settled groups start collapsed as a header-only summary. Click the header to expand.
+ * Settled groups start collapsed with a bounded preview of the completed
+ * children. Click the header to expand.
  */
 export const CommittedCollapsed: Story = {
   render: () => (

@@ -2,7 +2,10 @@
  * CollapseHeader — shared collapsible-row header primitive.
  *
  * Renders a `role="button"` container with:
- *   - `data-collapse-id` for the ChatRoot click-delegation handler
+ *   - `data-collapse-id` for the ChatRoot click/keydown-delegation handler
+ *     (see `ChatRoot.tsx`'s `onClick`/`onKeyDown` — Enter/Space toggles the
+ *     same way a click does; ticket #38)
+ *   - `tabIndex={0}` so the row is keyboard-reachable
  *   - `aria-expanded` reflecting the current expanded state
  *   - `text-shimmer` class while the row is active/running
  *   - a rotating `›` chevron (90° when expanded)
@@ -51,6 +54,7 @@ export function CollapseHeader(props: CollapseHeaderProps) {
       class={collapseHeader}
       style={{ height: `${props.height}px` }}
       role="button"
+      tabIndex={0}
       aria-expanded={props.expanded ? 'true' : 'false'}
       data-collapse-id={props.id}
     >

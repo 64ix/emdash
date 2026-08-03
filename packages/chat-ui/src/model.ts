@@ -342,10 +342,51 @@ export type WorkingItem = {
   id: string;
 };
 
+/** Coarse status for a settled turn's footer — 'interrupted' outcomes fold into 'error'. */
+export type TurnFooterStatus = 'completed' | 'cancelled' | 'error';
+
+/**
+ * Session-scoped context-window usage, when a producer can attribute it to
+ * this specific turn. Mirrors `SessionUsage` (see
+ * `packages/core/src/acp/models/config.ts`), which is cumulative across the
+ * whole session — no current producer narrows it to one turn (see
+ * `state/turn-footer.ts`'s module doc).
+ */
+export type TurnFooterContext = {
+  contextUsed: number;
+  contextSize: number;
+};
+
+/** Provider-reported cost, when a producer can attribute it to this specific turn. */
+export type TurnFooterCost = {
+  amount: number;
+  currency: string;
+};
+
+/**
+ * Compact metadata footer for one completed turn (ticket #38, spec #18).
+ * See `state/turn-footer.ts#deriveTurnFooter` for the derivation and an
+ * explanation of why `durationMs`/`context`/`cost` are never populated today.
+ */
+export type TurnFooterData = {
+  status: TurnFooterStatus;
+  /** Full human-readable status line, e.g. "Turn cancelled (user_requested)". */
+  statusLabel: string;
+  /** Best-effort duration in ms; absent unless a genuine per-turn timing producer exists. */
+  durationMs?: number;
+  /** Context-window usage attributable to this turn; absent today (see module doc). */
+  context?: TurnFooterContext;
+  /** Cost attributable to this turn; absent today (see module doc). */
+  cost?: TurnFooterCost;
+  /** Plain-text payload for the footer's Copy action, scoped to this turn. */
+  copyText: string;
+};
+
 export type TurnOutcomeItem = {
   kind: 'turn-outcome';
   id: string;
   outcome: TranscriptTurnOutcome;
+  footer: TurnFooterData;
 };
 
 export type SyntheticItem = WorkingItem | TurnOutcomeItem;

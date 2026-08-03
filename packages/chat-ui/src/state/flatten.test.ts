@@ -245,6 +245,64 @@ describe('flatten — turnOutcome scoping', () => {
   });
 });
 
+describe('flatten — turn footer emission (ticket #38)', () => {
+  const turnOutcomeSegmenter: ItemSegmenter = {
+    kind: 'turn-outcome',
+    segment: (item) => [unit('turn-outcome', item, item, { key: 'self' })],
+  };
+  const FOOTER_SEGMENTERS: Record<string, ItemSegmenter> = {
+    ...STUB_SEGMENTERS,
+    'turn-outcome': turnOutcomeSegmenter,
+  };
+
+  it('emits a turn-outcome footer unit for a successfully completed ("done") turn', () => {
+    const tx = createTranscript();
+    tx.history.seed([{ ...turn('t1', 0, tool('a', 0)), outcome: { kind: 'done' } }]);
+
+    const units = flattenTier(tx.state.committedTurns, segCtx, FOOTER_SEGMENTERS);
+
+    expect(units.map((u) => u.kind)).toEqual(['tool', 'turn-outcome']);
+    const footerUnit = units[1].data as { footer: { status: string; statusLabel: string } };
+    expect(footerUnit.footer.status).toBe('completed');
+    expect(footerUnit.footer.statusLabel).toBe('Turn completed');
+  });
+
+  it.each([
+    ['cancelled' as const, 'cancelled'],
+    ['error' as const, 'error'],
+    ['interrupted' as const, 'error'],
+  ])('emits a footer for a %s turn with status %s', (outcomeKind, expectedStatus) => {
+    const tx = createTranscript();
+    tx.history.seed([{ ...turn('t1', 0, tool('a', 0)), outcome: { kind: outcomeKind } }]);
+
+    const units = flattenTier(tx.state.committedTurns, segCtx, FOOTER_SEGMENTERS);
+
+    const footerUnit = units.at(-1)?.data as { footer: { status: string } };
+    expect(units.at(-1)?.kind).toBe('turn-outcome');
+    expect(footerUnit.footer.status).toBe(expectedStatus);
+  });
+
+  it('emits no footer for a committed turn with no recorded outcome', () => {
+    const tx = createTranscript();
+    tx.history.seed([turn('t1', 0, tool('a', 0))]);
+
+    const units = flattenTier(tx.state.committedTurns, segCtx, FOOTER_SEGMENTERS);
+
+    expect(units.map((u) => u.kind)).toEqual(['tool']);
+  });
+
+  it('never emits a footer for the active (still-streaming) turn, even if it somehow carries an outcome', () => {
+    const activeTurn: TranscriptTurn = {
+      ...turn('t1', 0, tool('a', 0)),
+      outcome: { kind: 'done' },
+    };
+
+    const units = flattenTier([activeTurn], { ...segCtx, active: true }, FOOTER_SEGMENTERS);
+
+    expect(units.map((u) => u.kind)).toEqual(['tool']);
+  });
+});
+
 describe('collectUserTurnUnits', () => {
   it('returns empty array when no user messages', () => {
     const tx = createTranscript();
