@@ -27,7 +27,7 @@ import { vars } from '@styles/theme.css';
 // ── Secondary label ─────────────────────────────────────────────────────────
 
 function secondaryLabel(uri: string, target: ResourceTarget): string {
-  if (target.kind === 'workspace-file') {
+  if (target.kind === 'workspace-file' || target.kind === 'local-file') {
     return target.path;
   }
   if (target.kind === 'external') {

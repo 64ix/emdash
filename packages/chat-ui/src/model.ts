@@ -206,11 +206,18 @@ export type ChatDiff = {
  *
  * `workspace-file` — the URI resolves to a file inside the current workspace;
  *   `path` is the workspace-relative or absolute path, ready for the editor.
+ * `local-file` — a local filesystem path outside the current workspace (e.g.
+ *   an absolute path the agent referenced directly). `path` is the resolved
+ *   absolute path; clicking it goes through the same local-artifact preview
+ *   policy as any other chat link (trusted-root check, size/type caps, and
+ *   an explicit confirmation step when the path is outside every trusted
+ *   root) — never a raw open.
  * `external` — an http(s) URL or other browser-openable resource.
  * `opaque` — a custom MCP server scheme the client cannot resolve locally.
  */
 export type ResourceTarget =
   | { kind: 'workspace-file'; path: string }
+  | { kind: 'local-file'; path: string }
   | { kind: 'external'; url: string }
   | { kind: 'opaque' };
 
