@@ -47,12 +47,10 @@ const emptySnapshot: AcpSearchTranscriptSnapshot = {
 function setUp(matcher: AcpSearchMatcher<FakeResult>) {
   const onChange = vi.fn();
   const onJump = vi.fn();
-  const controller = new AcpChatSearchController(
-    () => emptySnapshot,
-    matcher,
-    realAdvance,
-    { onChange, onJump }
-  );
+  const controller = new AcpChatSearchController(() => emptySnapshot, matcher, realAdvance, {
+    onChange,
+    onJump,
+  });
   return { controller, onChange, onJump };
 }
 

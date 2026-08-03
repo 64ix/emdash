@@ -85,9 +85,9 @@
  * file contents).
  */
 
-import type { PendingPrompt } from './session-state';
 import { redactSecrets } from '@emdash/shared/logger';
 import type { ToolNode, TranscriptItem, TranscriptTurn } from '@/model';
+import type { PendingPrompt } from './session-state';
 
 /**
  * `ToolNode` minus its one non-tool-call member (`ToolGroup`) — chat-ui's
@@ -194,7 +194,10 @@ function toolCallCandidates(item: ToolCallNode): Candidate[] {
   pushTool(item.inputSummary);
 
   if ('outputText' in item && item.outputText) {
-    out.push({ kind: item.status === 'error' ? 'tool-error' : 'tool-result', text: item.outputText });
+    out.push({
+      kind: item.status === 'error' ? 'tool-error' : 'tool-result',
+      text: item.outputText,
+    });
   }
 
   return out;
@@ -326,7 +329,11 @@ export function searchTranscript(
   } else if (pendingPrompt) {
     // Mirrors ChatRoot's / deriveTranscriptOutline's synthetic pending-prompt
     // turn: a prompt sent but not yet acknowledged by the agent.
-    const built = matchCandidate({ kind: 'prompt', text: pendingPrompt.text }, needle, contextCodePoints);
+    const built = matchCandidate(
+      { kind: 'prompt', text: pendingPrompt.text },
+      needle,
+      contextCodePoints
+    );
     if (built) {
       results.push({
         id: pendingPrompt.id,

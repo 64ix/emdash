@@ -159,7 +159,10 @@ export function TranscriptSearchBar({
             onKeyDown={handleKeyDown}
           />
         </div>
-        <span className="w-20 shrink-0 text-center text-xs text-foreground-muted" aria-live="polite">
+        <span
+          className="w-20 shrink-0 text-center text-xs text-foreground-muted"
+          aria-live="polite"
+        >
           {count}
         </span>
         <Button
@@ -191,7 +194,7 @@ export function TranscriptSearchBar({
           onClick={() => onSelectResult(currentResult)}
           className="flex flex-col items-start gap-0.5 rounded-md px-1.5 py-1 text-left hover:bg-background-2"
         >
-          <span className="text-[10px] uppercase text-foreground-passive">
+          <span className="text-[10px] text-foreground-passive uppercase">
             {resultKindLabel(currentResult.kind)}
           </span>
           <HighlightedSnippet result={currentResult} />

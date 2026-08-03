@@ -7,7 +7,11 @@
 import { describe, expect, it } from 'vitest';
 import type { TranscriptItem, TranscriptTurn } from '@/model';
 import type { PendingPrompt } from './session-state';
-import { advanceSearchResultIndex, searchTranscript, splitSnippetAtMatch } from './transcript-search';
+import {
+  advanceSearchResultIndex,
+  searchTranscript,
+  splitSnippetAtMatch,
+} from './transcript-search';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -164,7 +168,11 @@ describe('searchTranscript — field coverage', () => {
   });
 
   it('matches a read tool resource field as a path result', () => {
-    const t = turn({ id: 't1', seq: 0, items: [readTool('r1', { resource: 'resource://config/app' })] });
+    const t = turn({
+      id: 't1',
+      seq: 0,
+      items: [readTool('r1', { resource: 'resource://config/app' })],
+    });
     const [result] = searchTranscript([t], null, null, 'config/app');
     expect(result).toMatchObject({ itemId: 'r1', kind: 'path' });
   });
@@ -180,19 +188,31 @@ describe('searchTranscript — field coverage', () => {
   });
 
   it('matches an execute tool call command', () => {
-    const t = turn({ id: 't1', seq: 0, items: [executeTool('e1', { command: 'pnpm run typecheck' })] });
+    const t = turn({
+      id: 't1',
+      seq: 0,
+      items: [executeTool('e1', { command: 'pnpm run typecheck' })],
+    });
     const [result] = searchTranscript([t], null, null, 'typecheck');
     expect(result).toMatchObject({ itemId: 'e1', kind: 'tool' });
   });
 
   it('matches a search tool call query', () => {
-    const t = turn({ id: 't1', seq: 0, items: [searchTool('s1', { query: 'scrollToTranscriptItem' })] });
+    const t = turn({
+      id: 't1',
+      seq: 0,
+      items: [searchTool('s1', { query: 'scrollToTranscriptItem' })],
+    });
     const [result] = searchTranscript([t], null, null, 'scrolltotranscript');
     expect(result).toMatchObject({ itemId: 's1', kind: 'tool' });
   });
 
   it('matches an mcp tool call server/tool identity', () => {
-    const t = turn({ id: 't1', seq: 0, items: [mcpTool('m1', { server: 'github', tool: 'search_issues' })] });
+    const t = turn({
+      id: 't1',
+      seq: 0,
+      items: [mcpTool('m1', { server: 'github', tool: 'search_issues' })],
+    });
     const [result] = searchTranscript([t], null, null, 'search_issues');
     expect(result).toMatchObject({ itemId: 'm1', kind: 'tool' });
   });
@@ -201,7 +221,9 @@ describe('searchTranscript — field coverage', () => {
     const t = turn({
       id: 't1',
       seq: 0,
-      items: [executeTool('e1', { command: 'ls', outputText: 'index.ts\npackage.json', status: 'done' })],
+      items: [
+        executeTool('e1', { command: 'ls', outputText: 'index.ts\npackage.json', status: 'done' }),
+      ],
     });
     const [result] = searchTranscript([t], null, null, 'package.json');
     expect(result).toMatchObject({ itemId: 'e1', kind: 'tool-result' });
@@ -211,7 +233,9 @@ describe('searchTranscript — field coverage', () => {
     const t = turn({
       id: 't1',
       seq: 0,
-      items: [executeTool('e1', { command: 'ls', outputText: 'permission denied', status: 'error' })],
+      items: [
+        executeTool('e1', { command: 'ls', outputText: 'permission denied', status: 'error' }),
+      ],
     });
     const [result] = searchTranscript([t], null, null, 'permission denied');
     expect(result).toMatchObject({ itemId: 'e1', kind: 'tool-error' });
@@ -262,7 +286,9 @@ describe('searchTranscript — redaction', () => {
     const t = turn({
       id: 't1',
       seq: 0,
-      items: [executeTool('e1', { command: 'env', outputText: 'token=sk-livesecretvalue1234567890' })],
+      items: [
+        executeTool('e1', { command: 'env', outputText: 'token=sk-livesecretvalue1234567890' }),
+      ],
     });
 
     // The raw secret value is not found post-redaction.
@@ -329,9 +355,11 @@ describe('searchTranscript — grapheme-safe snippets', () => {
     expect(result).toBeDefined();
     // No lone surrogate anywhere in the produced snippet.
     // eslint-disable-next-line no-control-regex
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/.test(result.snippet)).toBe(
-      false
-    );
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/.test(
+        result.snippet
+      )
+    ).toBe(false);
   });
 });
 
@@ -366,12 +394,20 @@ describe('searchTranscript — chronological ordering', () => {
     const pendingPrompt: PendingPrompt = { id: 'pending-1', text: 'alpha pending' };
     const results = searchTranscript([], null, pendingPrompt, 'alpha');
     expect(results).toEqual([
-      expect.objectContaining({ itemId: 'pending-1', turnId: 'pending:pending-1:turn', kind: 'prompt' }),
+      expect.objectContaining({
+        itemId: 'pending-1',
+        turnId: 'pending:pending-1:turn',
+        kind: 'prompt',
+      }),
     ]);
   });
 
   it('prefers the activeTurn over a stale non-matching pendingPrompt', () => {
-    const active = turn({ id: 't-active', seq: 5, items: [userMessage('pending-1', 'alpha now active')] });
+    const active = turn({
+      id: 't-active',
+      seq: 5,
+      items: [userMessage('pending-1', 'alpha now active')],
+    });
     const pendingPrompt: PendingPrompt = { id: 'pending-1', text: 'alpha now active' };
 
     const results = searchTranscript([], active, pendingPrompt, 'alpha');
@@ -410,9 +446,7 @@ describe('searchTranscript — one result per item', () => {
     const t = turn({
       id: 't1',
       seq: 0,
-      items: [
-        readTool('r1', { path: 'src/alpha.ts', inputSummary: 'Read alpha configuration' }),
-      ],
+      items: [readTool('r1', { path: 'src/alpha.ts', inputSummary: 'Read alpha configuration' })],
     });
     const results = searchTranscript([t], null, null, 'alpha');
     expect(results).toHaveLength(1);
@@ -471,9 +505,9 @@ describe('splitSnippetAtMatch', () => {
     // No lone surrogate in any piece.
     for (const piece of [before, match, after]) {
       // eslint-disable-next-line no-control-regex
-      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/.test(piece)).toBe(
-        false
-      );
+      expect(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/.test(piece)
+      ).toBe(false);
     }
   });
 
