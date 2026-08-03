@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TranscriptItem, TranscriptTurn } from '@/model';
 import type { PendingPrompt } from './session-state';
-import { advanceSearchResultIndex, searchTranscript } from './transcript-search';
+import { advanceSearchResultIndex, searchTranscript, splitSnippetAtMatch } from './transcript-search';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -98,7 +98,7 @@ function resourceLink(
   opts: { uri: string; name: string; title?: string; description?: string },
   seq = 1
 ): TranscriptItem {
-  return { kind: 'resource-link', id, seq, uri: opts.uri, name: opts.name, ...opts };
+  return { kind: 'resource-link', id, seq, ...opts };
 }
 
 function turn(opts: {
@@ -444,5 +444,61 @@ describe('advanceSearchResultIndex', () => {
   it('steps forward/backward within bounds', () => {
     expect(advanceSearchResultIndex(3, 0, 1)).toBe(1);
     expect(advanceSearchResultIndex(3, 1, -1)).toBe(0);
+  });
+});
+
+// ── splitSnippetAtMatch ────────────────────────────────────────────────────────
+
+describe('splitSnippetAtMatch', () => {
+  it('splits a plain-ASCII snippet into before/match/after', () => {
+    expect(
+      splitSnippetAtMatch({ snippet: 'the quick brown fox', matchStart: 4, matchLength: 5 })
+    ).toEqual({ before: 'the ', match: 'quick', after: ' brown fox' });
+  });
+
+  it('splits using code-point offsets, never bisecting a surrogate pair', () => {
+    // '🎉' is one code point but two UTF-16 code units; matchStart counts code
+    // points, so index 1 must land right after the emoji, not mid-surrogate.
+    const snippet = '🎉MATCH tail';
+    const { before, match, after } = splitSnippetAtMatch({
+      snippet,
+      matchStart: 1,
+      matchLength: 5,
+    });
+    expect(before).toBe('🎉');
+    expect(match).toBe('MATCH');
+    expect(after).toBe(' tail');
+    // No lone surrogate in any piece.
+    for (const piece of [before, match, after]) {
+      // eslint-disable-next-line no-control-regex
+      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/.test(piece)).toBe(
+        false
+      );
+    }
+  });
+
+  it('clamps an out-of-range matchStart/matchLength instead of throwing', () => {
+    expect(splitSnippetAtMatch({ snippet: 'short', matchStart: 100, matchLength: 5 })).toEqual({
+      before: 'short',
+      match: '',
+      after: '',
+    });
+    expect(splitSnippetAtMatch({ snippet: 'short', matchStart: -5, matchLength: 3 })).toEqual({
+      before: '',
+      match: 'sho',
+      after: 'rt',
+    });
+  });
+
+  it('round-trips: before + match + after reconstructs the snippet', () => {
+    const snippet = 'redacted [REDACTED] value here';
+    const matchStart = snippet.indexOf('REDACTED');
+    const { before, match, after } = splitSnippetAtMatch({
+      snippet,
+      matchStart,
+      matchLength: 'REDACTED'.length,
+    });
+    expect(before + match + after).toBe(snippet);
+    expect(match).toBe('REDACTED');
   });
 });

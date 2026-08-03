@@ -356,3 +356,33 @@ export function advanceSearchResultIndex(
   if (currentIndex === null) return direction === 1 ? 0 : resultCount - 1;
   return (currentIndex + direction + resultCount) % resultCount;
 }
+
+// ── Rendering the match, safely ──────────────────────────────────────────────
+
+/**
+ * Split `snippet` into the (before, match, after) text around
+ * `matchStart`/`matchLength` for highlighting, without ever bisecting a
+ * surrogate pair or otherwise slicing by UTF-16 code unit — mirrors
+ * `buildSnippet`'s own code-point windowing above. `matchStart`/`matchLength`
+ * are already code-point offsets (see `TranscriptSearchResult`'s field docs),
+ * so callers must index with `Array.from`, never `String.prototype.slice`,
+ * to stay aligned with them.
+ *
+ * The three pieces are always plain text: `snippet` itself is never
+ * markdown/HTML (see `TranscriptSearchResult.snippet`), so a caller can
+ * render `before`/`match`/`after` as separate text nodes (e.g. wrapping
+ * `match` in a `<mark>`) without ever interpreting the query or matched
+ * content as markup.
+ */
+export function splitSnippetAtMatch(
+  result: Pick<TranscriptSearchResult, 'snippet' | 'matchStart' | 'matchLength'>
+): { before: string; match: string; after: string } {
+  const codePoints = Array.from(result.snippet);
+  const start = Math.min(Math.max(result.matchStart, 0), codePoints.length);
+  const end = Math.min(Math.max(start + result.matchLength, start), codePoints.length);
+  return {
+    before: codePoints.slice(0, start).join(''),
+    match: codePoints.slice(start, end).join(''),
+    after: codePoints.slice(end).join(''),
+  };
+}

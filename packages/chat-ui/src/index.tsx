@@ -86,6 +86,19 @@ export type { TurnStatus, TranscriptApi, ChatHistory } from './state/transcript'
 export { deriveTranscriptOutline } from './state/outline';
 export type { OutlineEntry, OutlineEntryRole, OutlineEntryStatus } from './state/outline';
 
+// ── Transcript search (ticket #36) ───────────────────────────────────────────
+
+export {
+  advanceSearchResultIndex,
+  searchTranscript,
+  splitSnippetAtMatch,
+} from './state/transcript-search';
+export type {
+  TranscriptSearchOptions,
+  TranscriptSearchResult,
+  TranscriptSearchResultKind,
+} from './state/transcript-search';
+
 // ── Reading position (ticket #37) ────────────────────────────────────────────
 
 export { captureReadWatermark, countNewTranscriptEvents } from './state/reading-position';
