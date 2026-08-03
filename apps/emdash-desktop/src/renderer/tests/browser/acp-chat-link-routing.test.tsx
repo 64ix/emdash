@@ -24,10 +24,10 @@ import type {
   ChatState,
   TranscriptTurn,
 } from '@emdash/chat-ui';
-import { userEvent } from 'vitest/browser';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { activateChatLink } from '@renderer/features/conversations/acp/chat-link-activation';
 import { ChatTranscript, type ChatCommands } from '@renderer/lib/chat/chat-transcript';
 

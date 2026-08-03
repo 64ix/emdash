@@ -1,7 +1,7 @@
 import { globalStyle, style } from '@vanilla-extract/css';
 import { recipe } from '@vanilla-extract/recipes';
-import { resetButton } from '@styles/reset.css';
 import { textShimmer } from '@styles/effects.css';
+import { resetButton } from '@styles/reset.css';
 import { vars } from '@styles/theme.css';
 import { createVariableThemeContract } from '@styles/variable-theme-contract.css';
 

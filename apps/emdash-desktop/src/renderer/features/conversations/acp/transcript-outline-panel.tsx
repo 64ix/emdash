@@ -167,7 +167,11 @@ export function TranscriptOutlineRail({
           <X className="size-3.5" />
         </Button>
       </div>
-      <TranscriptOutlineList entries={entries} selectedItemId={selectedItemId} onSelect={onSelect} />
+      <TranscriptOutlineList
+        entries={entries}
+        selectedItemId={selectedItemId}
+        onSelect={onSelect}
+      />
     </div>
   );
 }

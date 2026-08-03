@@ -14,9 +14,9 @@
  * `transcript-outline-panel.test.tsx` (ticket #34).
  */
 
-import { userEvent } from 'vitest/browser';
-import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_THEME } from '@core/theme';
+import { describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { createChatContext } from '@/chat-context';
 import { createChatView } from '@/chat-view';
 import type { ChatCommands } from '@/commands';
