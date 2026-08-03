@@ -462,14 +462,29 @@ export class AcpChatStore {
    * count immediately (the user is about to see everything up to now) rather
    * than waiting for the async `setAtBottom(true)` callback that follows the
    * scroll animation, so the badge never lingers stale mid-jump.
+   *
+   * Re-arms a fresh watermark at "now" rather than clearing to `null`: the
+   * scroll below is a *smooth* animation, and `ChatRoot` only reports
+   * `onAtBottomChange` on a genuine true/false transition. If the user
+   * interrupts the animation (scrolls away again) before it ever gets close
+   * enough to the tail to report `true`, no transition fires at all — a
+   * `null` watermark would then never be re-captured, permanently disabling
+   * new-event tracking for the rest of the session. Capturing "seen up to
+   * now" here instead keeps counting alive through that interruption. This
+   * only applies when actually leaving an anchored position — if the view
+   * was already at the tail (`current.kind === 'tail'`), there is nothing to
+   * re-arm; `_readWatermark` stays `null` as normal.
    */
   visitNewestEvent(): void {
     const current = this.chatState.scroll.get();
     if (current.kind === 'anchor') {
       this._returnAnchor = current;
       this.canReturnToReadingPosition = true;
+      const state = this.chatState.transcript.state;
+      this._readWatermark = captureReadWatermark(state.committedTurns, state.activeTurnSnapshot);
+    } else {
+      this._readWatermark = null;
     }
-    this._readWatermark = null;
     this._syncNewEventCount();
     this._view?.scrollToBottom({ behavior: 'smooth' });
   }

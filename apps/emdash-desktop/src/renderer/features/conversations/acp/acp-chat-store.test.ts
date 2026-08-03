@@ -580,6 +580,34 @@ describe('AcpChatStore reading position', () => {
     expect(store.canReturnToReadingPosition).toBe(false);
   });
 
+  it('keeps counting new events if the smooth jump is interrupted before the view ever reports reaching the tail', () => {
+    // `ChatRoot.onAtBottomChange` only fires on a genuine true/false
+    // transition. If the user scrolls away again mid-animation before the
+    // smooth `scrollToBottom` gets close enough to the tail to ever report
+    // `true`, no transition fires at all — `setAtBottom` is never called
+    // again to re-arm a baseline. A watermark nulled out by `visitNewestEvent`
+    // would then never come back, silently disabling new-event tracking for
+    // the rest of the session (see acp-chat-store.ts's `visitNewestEvent`
+    // doc comment). This simulates exactly that: `visitNewestEvent` runs, but
+    // no subsequent `setAtBottom` call ever follows it.
+    const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
+    fakeChatState.scroll.set({ kind: 'anchor', itemId: 'msg-1', edge: 'top', offset: 10 });
+    store.setAtBottom(false);
+    fakeChatState.transcript.history.append([makeTurn(2)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(1);
+
+    store.bindView({ scrollToBottom: vi.fn(), setScrollMode: vi.fn() } as never);
+    store.visitNewestEvent();
+    expect(store.newEventCount).toBe(0);
+
+    // A further turn commits while the (interrupted) animation is still
+    // "in flight" — it must still be counted, not silently dropped.
+    fakeChatState.transcript.history.append([makeTurn(3)]);
+    syncNewEventCount(store);
+    expect(store.newEventCount).toBe(1);
+  });
+
   it('_resetReadingPosition (called on a fresh bootstrap seed) clears the watermark, return anchor, and count', () => {
     const { store, fakeChatState } = setUpStore([makeTurn(1)], null);
     fakeChatState.scroll.set({ kind: 'anchor', itemId: 'msg-1', edge: 'top', offset: 0 });
