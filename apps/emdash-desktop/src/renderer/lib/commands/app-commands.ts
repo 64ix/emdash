@@ -17,7 +17,8 @@ function isLibraryView(viewId: string): boolean {
   return viewId === 'library' || viewId === 'skills' || viewId === 'mcp';
 }
 
-function createAppCommandProvider(): CommandProvider {
+/** Exported for the project-aware Feature Board command's unit tests (ticket #43). */
+export function createAppCommandProvider(): CommandProvider {
   return {
     scopeId: 'app',
 
