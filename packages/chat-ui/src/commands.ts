@@ -43,6 +43,15 @@ export type ChatCommands = {
   onOpenFile?: (arg: { path: string; itemId: string; source: 'diff' | 'file-op' }) => void;
 
   /**
+   * Called when the user clicks "Open full diff" in a diff card's footer.
+   * Distinct from `onOpenFile` (which opens the raw file in an editor): this
+   * asks the host to open its existing full-diff review surface for `path`
+   * (e.g. the task's Changes/diff tab) so the user can review beyond the
+   * bounded in-transcript preview.
+   */
+  onOpenDiff?: (arg: { path: string; itemId: string; source: 'diff' }) => void;
+
+  /**
    * Called when the user clicks an image attachment thumbnail inside a user
    * message bubble.
    */

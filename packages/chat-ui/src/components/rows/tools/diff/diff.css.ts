@@ -9,11 +9,13 @@ import { createVariableThemeContract } from '@styles/variable-theme-contract.css
 export type DiffStyleVars = {
   height: number;
   headerH: number;
+  footerH: number;
 };
 
 export const diffCardVars = createVariableThemeContract<DiffStyleVars>({
   height: null,
   headerH: null,
+  footerH: null,
 });
 
 export const diffRoot = style({ height: diffCardVars.height });
@@ -120,6 +122,91 @@ export const diffLineContent = style({
   overflow: 'hidden',
   paddingLeft: '12px',
   paddingRight: '12px',
+});
+
+// ── Line-number gutter ────────────────────────────────────────────────────────
+//
+// Two narrow columns (old-side / new-side), numbered relative to the ACP-
+// supplied snippet (oldText/newText), not the whole file — see diff-lines.ts.
+// Numbers come straight from DiffRow.oldIdx/newIdx, so they cannot drift
+// between the collapsed and expanded windows: both slice the same row array.
+
+export const diffGutter = style({
+  display: 'flex',
+  flexShrink: 0,
+  userSelect: 'none',
+});
+
+export const diffGutterCell = style({
+  width: '2.25em',
+  textAlign: 'right',
+  paddingRight: '6px',
+  color: vars.fgPassive,
+  fontSize: vars.typeCodeFontSize,
+  fontFamily: vars.typeCodeFontFamily,
+  flexShrink: 0,
+});
+
+// ── Scrollable expanded body ──────────────────────────────────────────────────
+//
+// Wraps the row list only while expanded and overflowing its clamp height —
+// mirrors the execute card's scroll treatment (execute.css.ts) so a large
+// expanded diff scrolls internally instead of growing without bound.
+
+export const diffScrollBody = style({
+  position: 'relative',
+  boxSizing: 'content-box',
+  scrollbarWidth: 'thin',
+});
+
+globalStyle(`${diffScrollBody}::-webkit-scrollbar`, {
+  width: 'var(--diff-scrollbar-size)',
+  height: 'var(--diff-scrollbar-size)',
+});
+
+// ── Message body (empty / binary states) ─────────────────────────────────────
+
+export const diffMessageBody = style({
+  display: 'flex',
+  alignItems: 'center',
+  color: vars.fgPassive,
+  fontSize: vars.typeBodyFontSize,
+  paddingLeft: '12px',
+  paddingRight: '12px',
+});
+
+// ── Footer bar (truncation summary + copy / open-full-diff / expand-collapse) ─
+
+export const diffFooter = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+  height: diffCardVars.footerH,
+  paddingLeft: '8px',
+  paddingRight: '8px',
+  borderTop: `1px solid ${vars.border}`,
+  fontSize: '0.75rem',
+  color: vars.fgPassive,
+});
+
+export const diffFooterSummary = style({
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+});
+
+export const diffFooterSpacer = style({ flex: '1 1 0%' });
+
+export const diffFooterButton = style({
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  gap: '4px',
+  color: vars.fgPassive,
+  fontSize: '0.75rem',
+  selectors: {
+    '&:hover': { color: vars.fg },
+  },
 });
 
 // ── Shiki line styles ─────────────────────────────────────────────────────────

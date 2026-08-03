@@ -1,15 +1,22 @@
 /**
- * diff-lines — pure line-level diff using the Myers algorithm.
+ * diff-lines — pure line-level diff + review-surface shaping for the diff card.
  *
  * No external dependencies. Operates on the replaced region supplied by ACP
  * (`oldText` = old_string, `newText` = new_string), not on whole-file content.
  *
- * Public API:
- *   computeDiffRows(oldText, newText) — full interleaved row list, pure (no cache)
- *   countChanges(rows)               — adds + dels over the whole diff
- *   selectPreview(rows)              — window of ≤12 rows around the first change
+ * Layered public API:
+ *   computeDiffRows(oldText, newText)      -- full interleaved row list, pure (no cache)
+ *   countChanges(rows)                     -- adds + dels over the whole diff
+ *   looksBinary(text)                      -- content-based binary heuristic (NUL byte)
+ *   selectCollapsedWindow(rows, ...)       -- bounded window anchored at the first change
+ *   selectExpandedWindow(rows, ...)        -- bounded window from the top of the diff
+ *   formatOmittedSummary(before, after)    -- human-readable omitted-line count
+ *   formatPatchText(rows)                  -- full (untruncated) unified-diff-style text
+ *   resolveDiffGeometry(params)             -- which of the 5 review states applies + window
  *
- * Memoization is handled by the per-instance ChatCaches bundle in core/caches.ts.
+ * Memoization of computeDiffRows itself is handled by the per-instance
+ * ChatCaches bundle in core/caches.ts. Everything else here is cheap and
+ * recomputed per render/measure call.
  */
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -129,7 +136,24 @@ function myersDiff(a: string[], b: string[]): EditOp[] {
   return ops;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Line splitting ────────────────────────────────────────────────────────────
+
+/**
+ * Split text into lines for diffing/display.
+ *
+ * Normalizes CRLF to LF first: without this, every line of a CRLF-terminated
+ * string carries a trailing carriage-return that survives `split('\n')`,
+ * which (a) makes every line compare unequal to its LF counterpart —
+ * spuriously marking a same-content CRLF file as "all changed" — and (b)
+ * renders a stray control character at the end of each line. A file with no
+ * trailing newline is unaffected: `split('\n')` never emits a trailing empty
+ * entry unless the source text actually ends with `\n`.
+ */
+function toLines(text: string): string[] {
+  return text.replace(/\r\n/g, '\n').split('\n');
+}
+
+// ── Public API — row computation ───────────────────────────────────────────────
 
 /**
  * Compute a line-level diff between `oldText` and `newText`.
@@ -139,11 +163,11 @@ function myersDiff(a: string[], b: string[]): EditOp[] {
  */
 export function computeDiffRows(oldText: string | null, newText: string): DiffRow[] {
   if (oldText === null) {
-    return newText.split('\n').map((text, i) => ({ type: 'add' as const, text, newIdx: i }));
+    return toLines(newText).map((text, i) => ({ type: 'add' as const, text, newIdx: i }));
   }
 
-  const aLines = oldText.split('\n');
-  const bLines = newText.split('\n');
+  const aLines = toLines(oldText);
+  const bLines = toLines(newText);
   const ops = myersDiff(aLines, bLines);
 
   return ops.map((op) => {
@@ -175,15 +199,148 @@ export function countChanges(rows: DiffRow[]): { adds: number; dels: number } {
   return { adds, dels };
 }
 
+/** A NUL byte, expressed via fromCharCode so no literal control character sits in this source file. */
+const NUL = String.fromCharCode(0);
+
 /**
- * Select a preview window of `maxLines` rows anchored at the first changed line,
- * with `context` leading context lines before the first change.
- *
- * Returns an empty array when there are no changes.
+ * Content-based binary heuristic: a NUL byte never appears in well-formed
+ * text but is common in binary payloads that end up smuggled into a text
+ * field. ACP edit tool calls always carry text, so this is a defensive
+ * backstop rather than a common case — but when it fires, running the line
+ * diff would be meaningless (or, for large payloads, expensive) so the diff
+ * card should show a distinct "binary/unsupported" state instead.
  */
-export function selectPreview(rows: DiffRow[], maxLines = 12, context = 1): DiffRow[] {
+export function looksBinary(text: string): boolean {
+  return text.includes(NUL);
+}
+
+// ── Public API — window selection ──────────────────────────────────────────────
+
+export type DiffWindow = {
+  /** Rows to render for this window (a contiguous slice of the full row list). */
+  rows: DiffRow[];
+  /** Number of rows omitted before `rows[0]`. */
+  omittedBefore: number;
+  /** Number of rows omitted after `rows.at(-1)`. */
+  omittedAfter: number;
+};
+
+/**
+ * Collapsed-state window: bounded, anchored around the first changed line
+ * with `context` leading context rows, so the preview opens on the
+ * interesting part of the diff rather than its (possibly irrelevant) start.
+ *
+ * Returns an empty window when there are no changes at all (caller should
+ * treat that as the "no changes to preview" / empty state, not a truncated one).
+ */
+export function selectCollapsedWindow(
+  rows: DiffRow[],
+  maxLines: number,
+  context: number
+): DiffWindow {
   const firstChange = rows.findIndex((r) => r.type !== 'context');
-  if (firstChange === -1) return [];
+  if (firstChange === -1) return { rows: [], omittedBefore: 0, omittedAfter: 0 };
   const start = Math.max(0, firstChange - context);
-  return rows.slice(start, start + maxLines);
+  const end = Math.min(rows.length, start + maxLines);
+  return { rows: rows.slice(start, end), omittedBefore: start, omittedAfter: rows.length - end };
+}
+
+/**
+ * Expanded-state window: reads top-to-bottom from the start of the diff (not
+ * anchored on the first change) so an expanded review reads like a normal
+ * diff, not a "jump to change" preview. Still capped at `maxLines` — an
+ * explicit, discoverable safety net so a pathological edit spanning
+ * thousands of lines never renders an unbounded DOM. Realistic diffs sit far
+ * under the cap and come back with `omittedAfter === 0` (nothing hidden).
+ */
+export function selectExpandedWindow(rows: DiffRow[], maxLines: number): DiffWindow {
+  const end = Math.min(rows.length, maxLines);
+  return { rows: rows.slice(0, end), omittedBefore: 0, omittedAfter: rows.length - end };
+}
+
+/** Human-readable summary of hidden lines, or null when nothing is hidden. */
+export function formatOmittedSummary(omittedBefore: number, omittedAfter: number): string | null {
+  const total = omittedBefore + omittedAfter;
+  if (total <= 0) return null;
+  return `${total} line${total === 1 ? '' : 's'} hidden`;
+}
+
+/**
+ * Render the FULL (untruncated) row list as unified-diff-style text, prefixing
+ * added/removed/context lines with `+`/`-`/` ` respectively.
+ *
+ * Deliberately operates on the complete row list, never a truncated preview
+ * window — "Copy" must always return the intended patch content regardless of
+ * how much of it the collapsed/expanded preview currently renders.
+ */
+export function formatPatchText(rows: DiffRow[]): string {
+  return rows
+    .map((row) => {
+      const prefix = row.type === 'add' ? '+' : row.type === 'remove' ? '-' : ' ';
+      return `${prefix}${row.text}`;
+    })
+    .join('\n');
+}
+
+// ── Public API — review-state resolution ───────────────────────────────────────
+
+export type DiffGeometry =
+  /** Running, no content streamed in yet — header-only shimmer. */
+  | { kind: 'loading' }
+  /** Running, content is arriving — bounded preview, no interactive footer. */
+  | { kind: 'streaming'; window: DiffWindow }
+  /** Settled, content looks binary/unsupported — no line diff is rendered. */
+  | { kind: 'binary' }
+  /** Settled, no line-level changes (identical content, mode-only, etc). */
+  | { kind: 'empty' }
+  /** Settled, normal reviewable diff. */
+  | { kind: 'content'; window: DiffWindow; expanded: boolean };
+
+export type DiffGeometryParams = {
+  isRunning: boolean;
+  oldText: string | null;
+  newText: string;
+  /** Full row list — typically the cached result of computeDiffRows. */
+  rows: DiffRow[];
+  /** Current expand/collapse state (ctx.expanded(item.id) / viewState.isCollapsed(item.id)). */
+  expanded: boolean;
+  collapsedMaxLines: number;
+  collapsedContext: number;
+  expandedRowCap: number;
+};
+
+/**
+ * Resolve which of the five diff-card review states applies, and (for the
+ * states with a body) which row window to render. The single source of truth
+ * for "loading vs streaming vs binary vs empty vs content" so measure() and
+ * Render() can never disagree about which state they're in.
+ */
+export function resolveDiffGeometry(params: DiffGeometryParams): DiffGeometry {
+  const {
+    isRunning,
+    oldText,
+    newText,
+    rows,
+    expanded,
+    collapsedMaxLines,
+    collapsedContext,
+    expandedRowCap,
+  } = params;
+
+  if (isRunning && newText.length === 0) return { kind: 'loading' };
+  if (isRunning) {
+    return {
+      kind: 'streaming',
+      window: selectCollapsedWindow(rows, collapsedMaxLines, collapsedContext),
+    };
+  }
+  if (looksBinary(oldText ?? '') || looksBinary(newText)) return { kind: 'binary' };
+
+  const { adds, dels } = countChanges(rows);
+  if (adds === 0 && dels === 0) return { kind: 'empty' };
+
+  const window = expanded
+    ? selectExpandedWindow(rows, expandedRowCap)
+    : selectCollapsedWindow(rows, collapsedMaxLines, collapsedContext);
+  return { kind: 'content', window, expanded };
 }

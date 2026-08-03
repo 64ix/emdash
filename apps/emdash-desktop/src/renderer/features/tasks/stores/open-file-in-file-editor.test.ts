@@ -1,16 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { openFileInTaskEditor } from './open-file-in-file-editor';
+import { openDiffInReviewSurface, openFileInTaskEditor } from './open-file-in-file-editor';
 
-const mocks = vi.hoisted(() => ({
-  asProvisioned: vi.fn(),
-  getTaskStore: vi.fn(),
-  getTaskView: vi.fn(),
-  workspaceGet: vi.fn(),
-  toast: vi.fn(),
-  fileExists: vi.fn(),
-  clipboardWriteText: vi.fn(),
-  focusTransition: vi.fn(),
-}));
+/**
+ * `asProvisioned` defaults to the real narrowing (task-store.ts#isProvisioned:
+ * `state === 'provisioned'`) so tests can drive it purely through
+ * `getTaskStore`. It stays a `vi.fn` so a test that would rather hand back a
+ * provisioned store directly can override it — see `narrowByState()` for
+ * restoring the default afterwards.
+ *
+ * task-selectors is stubbed rather than imported so this test doesn't pull in
+ * its real transitive chain (project-manager/app-state/telemetryClient), which
+ * has DOM/singleton side effects unrelated to this unit.
+ */
+const mocks = vi.hoisted(() => {
+  const narrow = (store: { state?: string } | undefined) =>
+    store && store.state === 'provisioned' ? store : undefined;
+  return {
+    narrow,
+    asProvisioned: vi.fn(narrow),
+    getTaskStore: vi.fn(),
+    getTaskView: vi.fn(),
+    workspaceGet: vi.fn(),
+    toast: vi.fn(),
+    fileExists: vi.fn(),
+    clipboardWriteText: vi.fn(),
+    focusTransition: vi.fn(),
+  };
+});
+
+function narrowByState() {
+  mocks.asProvisioned.mockImplementation(mocks.narrow);
+}
 
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   asProvisioned: mocks.asProvisioned,
@@ -18,13 +38,15 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   getTaskView: mocks.getTaskView,
 }));
 
-vi.mock('./workspace-registry', () => ({
+vi.mock('@renderer/features/tasks/stores/workspace-registry', () => ({
   workspaceRegistry: { get: mocks.workspaceGet },
 }));
 
 vi.mock('@renderer/lib/hooks/use-toast', () => ({
   toast: mocks.toast,
 }));
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 
 vi.mock('@renderer/lib/ipc', () => ({
   rpc: {
@@ -39,6 +61,7 @@ vi.mock('@renderer/utils/focus-tracker', () => ({
 
 function makeProvisioned() {
   return {
+    state: 'provisioned',
     workspaceId: 'ws1',
     viewModel: {
       activePane: { open: vi.fn() },
@@ -50,6 +73,7 @@ function makeProvisioned() {
 describe('openFileInTaskEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    narrowByState();
     mocks.workspaceGet.mockReturnValue({ path: '/Users/dev/workspace' });
     mocks.clipboardWriteText.mockResolvedValue({ success: true });
   });
@@ -99,5 +123,62 @@ describe('openFileInTaskEditor', () => {
     expect(provisioned.viewModel.activePane.open).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledTimes(1);
     expect(mocks.toast.mock.calls[0][0].description).toBe('/Users/dev/workspace/src/missing.ts');
+  });
+});
+
+function provisionedStore(open: (kind: string, args: unknown, config?: unknown) => void) {
+  return {
+    state: 'provisioned',
+    workspaceId: 'ws-1',
+    viewModel: { activePane: { open } },
+  };
+}
+
+describe('openDiffInReviewSurface', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    narrowByState();
+    mocks.workspaceGet.mockReturnValue({ path: '/repo' });
+    mocks.fileExists.mockResolvedValue({ success: true, data: { exists: true } });
+  });
+
+  it('opens the task diff pane (disk vs HEAD) with the resolved path', async () => {
+    const open = vi.fn();
+    mocks.getTaskStore.mockReturnValue(provisionedStore(open));
+
+    await openDiffInReviewSurface('project-1', 'task-1', 'src/format-user.ts');
+
+    expect(mocks.focusTransition).toHaveBeenCalledWith({ mainPanel: 'editor' }, 'panel_switch');
+    expect(open).toHaveBeenCalledWith(
+      'diff',
+      {
+        activeFile: {
+          path: '/repo/src/format-user.ts',
+          type: 'disk',
+          group: 'disk',
+          originalRef: { kind: 'commit', sha: 'HEAD' },
+        },
+      },
+      { preview: false }
+    );
+  });
+
+  it('does nothing when the task is not provisioned', async () => {
+    mocks.getTaskStore.mockReturnValue({ state: 'unregistered' });
+
+    await openDiffInReviewSurface('project-1', 'task-1', 'src/format-user.ts');
+
+    expect(mocks.fileExists).not.toHaveBeenCalled();
+    expect(mocks.focusTransition).not.toHaveBeenCalled();
+  });
+
+  it('does not open the diff pane when the file no longer exists in the workspace', async () => {
+    const open = vi.fn();
+    mocks.getTaskStore.mockReturnValue(provisionedStore(open));
+    mocks.fileExists.mockResolvedValue({ success: true, data: { exists: false } });
+
+    await openDiffInReviewSurface('project-1', 'task-1', 'src/deleted.ts');
+
+    expect(open).not.toHaveBeenCalled();
   });
 });

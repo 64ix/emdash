@@ -172,8 +172,13 @@ export type ChatExecute = {
 /**
  * A diff preview row — produced by ACP `kind: 'edit'` tool calls.
  *
- * Renders a compact, non-scrollable preview of the first changed region
- * (capped at 12 lines with ±1 context), with syntax + diff highlighting.
+ * Renders a progressive review surface with syntax + diff highlighting:
+ * collapsed shows a bounded window anchored on the first change (with an
+ * explicit hidden-line count), expanded shows the diff from the top up to a
+ * hard row cap with internal scrolling, and loading/streaming/binary/empty
+ * states are visually and semantically distinct. See `diff-lines.ts`
+ * (`resolveDiffGeometry`) for the exact state machine and window math, and
+ * `diff.def.tsx`'s `DIFF_VARS` for the current collapsed/expanded bounds.
  * One `ChatDiff` is created per changed file within a single tool call.
  *
  * `oldText` is the replaced region (old_string). `null` means a new file —
