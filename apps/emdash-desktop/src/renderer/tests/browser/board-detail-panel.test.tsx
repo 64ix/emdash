@@ -23,6 +23,7 @@ import { page } from 'vitest/browser';
 import { modalStore } from '@renderer/lib/modal/modal-store';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssueRoles } from '@shared/core/linked-issue';
+import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type {
   CreateTaskError,
@@ -1586,6 +1587,36 @@ describe('Board — focused-task navigation (ticket #50)', () => {
     await mount();
 
     expect(panelHeading()).toBeNull();
+  });
+
+  // A Shipped-Faded task (CONTEXT.md "Shipped Fade") is neither invalid nor
+  // archived — it is a real, valid task whose PR merged long enough ago that
+  // `isBoardDisplayable` (the same predicate `storeById` is built from) hides
+  // it from the board's own columns. Resolution must fail exactly as safely
+  // here as for an archived id: no throw, no stale/impossible selection, the
+  // rest of the board renders normally.
+  it('fails safely for a Shipped-Faded task id (real, non-archived, but hidden by the fade window)', async () => {
+    const oldMergedAt = new Date(Date.now() - (SHIPPED_FADE_WINDOW_MS + 1000)).toISOString();
+    const a = makeStore('card-a', {
+      workflowStage: 'shipped',
+      prs: [
+        {
+          url: 'https://github.com/acme/repo/pull/1',
+          title: 'Ship it',
+          identifier: '#1',
+          status: 'merged',
+          isDraft: false,
+          mergedAt: oldMergedAt,
+        } as PullRequest,
+      ],
+    });
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'card-a';
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    expect(cardExists('card-a')).toBe(false); // faded out of the board, same as before navigation
   });
 
   it('renders normally with nothing selected when no focusTaskId is present', async () => {
