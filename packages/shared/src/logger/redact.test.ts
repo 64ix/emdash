@@ -92,7 +92,22 @@ describe('redactSecrets', () => {
       expect(result).not.toContain('secretvalue');
     });
 
-    it('stays linear on an adversarial run of quotes and backslashes (no catastrophic backtracking)', () => {
+    it('does not let a raw control char in a malformed value swallow a later secret', () => {
+      // A literal, unescaped newline inside a "JSON string" is not valid JSON,
+      // so this is malformed/truncated input by the scanner's own definition.
+      // Before this stopped at raw control characters, the scan for apiKey's
+      // closing quote would run past the newline and land on the *next* key's
+      // opening quote instead, consuming it — which stripped the delimiter
+      // "token"'s own value needs to match, letting a real secret leak in
+      // full. The malformed apiKey value is left untouched, but the
+      // well-formed token value after it must still be redacted.
+      const input = '{"apiKey":"abc\ndef no closing here ... "token":"realsecret123"}';
+      const result = redactSecrets(input);
+      expect(result).not.toContain('realsecret123');
+      expect(result).toContain('"token":"[REDACTED]"');
+    });
+
+    it('stays linear on an adversarial run of quotes and backslashes (no catastrophic backtrack)', () => {
       const adversarial = `"apiKey":"${'\\\\'.repeat(50000)}${'\\"'.repeat(50000)}unterminated`;
       const start = Date.now();
       redactSecrets(adversarial);

@@ -32,12 +32,25 @@ const JSON_KEY_PATTERN = new RegExp(
  * outer string). Runs in a single linear pass (no backtracking) and returns
  * the index just past the closing quote token, or -1 if the string never
  * closes.
+ *
+ * Also bails (-1) on a raw control character (code point < 0x20, e.g. a
+ * literal, unescaped newline). Valid JSON strings must escape control
+ * characters, so hitting one bare means this isn't really a well-formed JSON
+ * string value — the "closing quote" we'd otherwise find further along may
+ * belong to unrelated, later content (for instance a different key's
+ * genuinely-closed value). Treating that stray quote as our own close would
+ * consume it, stripping the opening delimiter a subsequent real secret needs
+ * to match and letting it slip through unredacted. Bailing here keeps that
+ * later occurrence intact for the caller to find on its own.
  */
 function findJsonStringEnd(input: string, start: number, quoteToken: string): number {
   let i = start;
   while (i < input.length) {
     if (input.startsWith(quoteToken, i)) {
       return i + quoteToken.length;
+    }
+    if (input.charCodeAt(i) < 0x20) {
+      return -1;
     }
     if (input[i] === '\\') {
       // Backslash escape: skip it and whatever it escapes together, so an
@@ -58,6 +71,18 @@ function findJsonStringEnd(input: string, start: number, quoteToken: string): nu
  * class would stop at prematurely — leaving the tail of the secret in clear
  * text. Non-secret keys and values without a real closing quote are left
  * untouched.
+ *
+ * Known limitation, not a regression: the doubly-escaped key form
+ * (`\"key\":\"value\"`, i.e. this whole JSON fragment embedded one level
+ * deeper inside an outer string) combined with an escape *inside* that same
+ * value is ambiguous for a scanner where one backslash always consumes
+ * exactly the next character — disambiguating it correctly needs escape-depth
+ * tracking, not a bigger quoteToken. In that combined case this scanner
+ * closes at the first escaped-looking boundary and leaves the remainder of
+ * the value in clear text, same shape as the original bug, just one nesting
+ * level in. The old single-regex approach redacted nothing at all for that
+ * combination (the character class never matched through the escape), so
+ * this is strictly less exposure, not more — but it is not a full fix.
  */
 function redactJsonQuotedSecrets(value: string): string {
   JSON_KEY_PATTERN.lastIndex = 0;
