@@ -83,7 +83,7 @@ describe('PermissionResolutionController', () => {
 
   it('retry re-attempts the last-chosen option for the same request', async () => {
     let call = 0;
-    const resolveFn = vi.fn(() => {
+    const resolveFn = vi.fn((): Promise<Result<void, unknown>> => {
       call += 1;
       return Promise.resolve(call === 1 ? err(new Error('network down')) : ok());
     });

@@ -24,8 +24,8 @@
  * crash or blank render here is worse than a plain one.
  */
 
-import { redactSecrets } from '@emdash/shared/logger';
 import type { ToolCallItem } from '@emdash/core/acp/client';
+import { redactSecrets } from '@emdash/shared/logger';
 
 // ── Bounds ────────────────────────────────────────────────────────────────────
 
@@ -298,7 +298,8 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
 
     case 'unknown-tool-call': {
       const params: PermissionParam[] = [{ label: 'Tool', value: paramValue(toolCall.name) }];
-      if (toolCall.toolKind) params.push({ label: 'Raw kind', value: paramValue(toolCall.toolKind) });
+      if (toolCall.toolKind)
+        params.push({ label: 'Raw kind', value: paramValue(toolCall.toolKind) });
       return {
         kind: 'unknown',
         operationLabel: 'Unrecognized tool request',
@@ -306,7 +307,9 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
         rawToolKind: toolCall.toolKind,
         params,
         resources: [],
-        riskCues: ['Emdash does not recognize this tool. Review the raw details carefully before approving.'],
+        riskCues: [
+          'Emdash does not recognize this tool. Review the raw details carefully before approving.',
+        ],
       };
     }
   }
@@ -326,7 +329,9 @@ export function buildPermissionCopyText(detail: PermissionOperationDetail): stri
   }
   for (const param of detail.params) lines.push(`${param.label}: ${param.value}`);
   for (const resource of detail.resources) {
-    lines.push(resource.kind === 'url' ? `Resource: ${resource.url}` : `Resource: ${resource.path}`);
+    lines.push(
+      resource.kind === 'url' ? `Resource: ${resource.url}` : `Resource: ${resource.path}`
+    );
   }
   if (detail.riskCues.length > 0) lines.push('', 'Notes:', ...detail.riskCues);
   return lines.join('\n');

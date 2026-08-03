@@ -145,8 +145,11 @@ export class AcpChatStore {
    * Bumped on every `PermissionResolutionController` state change so
    * `permissionResolution` (a MobX computed) has an observable dependency —
    * the controller itself is framework-free and holds no observable state.
+   * Public only because MobX's `makeObservable` annotations map requires a
+   * plain (non-private) data field; not meant for external reads — use
+   * `permissionResolution` instead.
    */
-  private _permissionResolutionVersion = 0;
+  permissionResolutionVersion = 0;
 
   constructor(
     readonly conversationId: string,
@@ -182,11 +185,10 @@ export class AcpChatStore {
         this.session?.resolvePermission(requestId, optionId) ??
         Promise.resolve(err(new Error('ACP session is not connected'))),
       {
-        isPending: (requestId) =>
-          this.permissionQueue.some((item) => item.requestId === requestId),
+        isPending: (requestId) => this.permissionQueue.some((item) => item.requestId === requestId),
         onChange: () =>
           runInAction(() => {
-            this._permissionResolutionVersion += 1;
+            this.permissionResolutionVersion += 1;
           }),
       }
     );
@@ -200,7 +202,7 @@ export class AcpChatStore {
       isCancelling: observable,
       isLoadingOlderHistory: observable,
       changesFootprint: observable.ref,
-      _permissionResolutionVersion: observable,
+      permissionResolutionVersion: observable,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -317,7 +319,7 @@ export class AcpChatStore {
   get permissionResolution(): PermissionResolutionEntry | null {
     // Read to establish this computed's MobX dependency — the controller
     // itself is framework-free and holds no observable state of its own.
-    const _permissionResolutionDependency = this._permissionResolutionVersion;
+    const _permissionResolutionDependency = this.permissionResolutionVersion;
     const request = this.permissionQueue[0];
     if (!request) return null;
     return this._permissionResolution.stateFor(request.requestId) ?? null;

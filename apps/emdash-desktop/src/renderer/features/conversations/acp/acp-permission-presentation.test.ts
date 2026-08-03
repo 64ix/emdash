@@ -8,19 +8,23 @@ import {
   summarizePermissionText,
 } from './acp-permission-presentation';
 
+// A real permission request's toolCall always has `status: 'running'` — it is
+// created while the tool call is awaiting the user's decision (see
+// `packages/runtime/.../session/cell.ts#buildPermissionToolCall`, which maps
+// the ACP wire status 'pending' to the canonical `ToolStatus` 'running').
 function base(overrides: Partial<ToolCallItem> = {}): {
   id: string;
   seq: number;
   toolCallId: string;
   title: string;
-  status: 'pending';
+  status: 'running';
 } {
   return {
     id: 'item-1',
     seq: 0,
     toolCallId: 'call-1',
     title: 'Default title',
-    status: 'pending',
+    status: 'running',
     ...overrides,
   } as never;
 }
@@ -169,9 +173,7 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
     } as ToolCallItem);
 
     expect(detail.kind).toBe('fetch');
-    expect(detail.resources).toEqual([
-      { kind: 'url', url: 'https://example.com/data.json' },
-    ]);
+    expect(detail.resources).toEqual([{ kind: 'url', url: 'https://example.com/data.json' }]);
     expect(detail.params).toEqual([
       { label: 'URL', value: 'https://example.com/data.json' },
       { label: 'Page title', value: 'Example data' },
@@ -236,7 +238,9 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
 
 describe('summarizePermissionText — redaction and bounding', () => {
   it('redacts a secret pattern before display, never partially through truncation', () => {
-    const block = summarizePermissionText('curl -H "Authorization: Bearer sk-ant-abcdef0123456789ABCDEF"');
+    const block = summarizePermissionText(
+      'curl -H "Authorization: Bearer sk-ant-abcdef0123456789ABCDEF"'
+    );
     expect(block.text).not.toContain('sk-ant-abcdef0123456789ABCDEF');
     expect(block.text).toContain('[REDACTED');
     expect(block.fullText).not.toContain('sk-ant-abcdef0123456789ABCDEF');

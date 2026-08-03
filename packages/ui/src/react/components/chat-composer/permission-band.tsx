@@ -17,11 +17,11 @@ import { Loader2Icon, ShieldAlertIcon } from 'lucide-react';
 import * as React from 'react';
 import { Button } from '@/react/primitives/button';
 import { SplitButton, type SplitButtonOption } from '@/react/primitives/split-button';
-import * as styles from './permission-band.css';
 import {
   PermissionOperationDetails,
   type ComposerPermissionOperation,
 } from './permission-operation-details';
+import * as styles from './permission-band.css';
 
 export type {
   ComposerPermissionOperation,
@@ -170,7 +170,10 @@ export function PermissionBand({
       </div>
 
       {resolution?.status === 'error' && (
-        <div className={cx(styles.bandSection, styles.bandSectionDivider, styles.errorRow)} role="alert">
+        <div
+          className={cx(styles.bandSection, styles.bandSectionDivider, styles.errorRow)}
+          role="alert"
+        >
           <span className={styles.errorMessage} title={resolution.message}>
             {resolution.message}
           </span>

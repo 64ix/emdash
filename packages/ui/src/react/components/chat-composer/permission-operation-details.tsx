@@ -94,13 +94,7 @@ function CopyIconButton({ text, label }: { text: string; label: string }) {
 
 // ── Bounded text section ──────────────────────────────────────────────────────
 
-function TextBlockSection({
-  label,
-  block,
-}: {
-  label: string;
-  block: ComposerPermissionTextBlock;
-}) {
+function TextBlockSection({ label, block }: { label: string; block: ComposerPermissionTextBlock }) {
   return (
     <div className={styles.textSection}>
       <div className={styles.textSectionHeader}>
@@ -129,7 +123,11 @@ export function PermissionOperationDetails({
   className,
 }: PermissionOperationDetailsProps) {
   return (
-    <Collapsible.Root open={open} onOpenChange={onOpenChange} className={cx(styles.root, className)}>
+    <Collapsible.Root
+      open={open}
+      onOpenChange={onOpenChange}
+      className={cx(styles.root, className)}
+    >
       <Collapsible.Trigger>Details</Collapsible.Trigger>
       <Collapsible.Panel className={styles.panel}>
         <div className={styles.metaRow}>
