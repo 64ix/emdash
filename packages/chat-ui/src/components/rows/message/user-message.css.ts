@@ -104,6 +104,14 @@ export const stopButtonOverlay = recipe({
       '&:focus-visible': { opacity: 1 },
       '&:hover': { color: vars.fg },
     },
+    // Hover has no equivalent on touch: keep Stop visible by default on
+    // devices that report no hover capability, so it is discoverable without
+    // a mouse or a keyboard.
+    '@media': {
+      '(hover: none)': {
+        opacity: 1,
+      },
+    },
   },
   variants: {
     pending: {

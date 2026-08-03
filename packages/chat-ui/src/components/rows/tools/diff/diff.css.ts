@@ -1,5 +1,6 @@
 import { globalStyle, style } from '@vanilla-extract/css';
 import { recipe } from '@vanilla-extract/recipes';
+import { resetButton } from '@styles/reset.css';
 import { textShimmer } from '@styles/effects.css';
 import { vars } from '@styles/theme.css';
 import { createVariableThemeContract } from '@styles/variable-theme-contract.css';
@@ -22,22 +23,34 @@ export const diffRoot = style({ height: diffCardVars.height });
 
 // ── DiffHeader ────────────────────────────────────────────────────────────────
 
+// A native <button> (see Diff.tsx's DiffHeader) — resetButton strips native
+// button chrome (border/background/font) so it reads identically to the
+// old clickable div.
 export const diffHeader = recipe({
-  base: {
-    height: diffCardVars.headerH,
-    border: `1px solid ${vars.border}`,
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    paddingLeft: '8px',
-    paddingRight: '8px',
-    cursor: 'pointer',
-    fontSize: '0.75rem',
-    transition: 'background 150ms',
-    selectors: {
-      '&:hover': { background: vars.bg3 },
+  base: [
+    resetButton,
+    {
+      height: diffCardVars.headerH,
+      width: '100%',
+      border: `1px solid ${vars.border}`,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      paddingLeft: '8px',
+      paddingRight: '8px',
+      cursor: 'pointer',
+      fontSize: '0.75rem',
+      transition: 'background 150ms',
+      selectors: {
+        '&:hover': { background: vars.bg3 },
+        '&:focus-visible': {
+          background: vars.bg3,
+          outline: '2px solid currentColor',
+          outlineOffset: '-2px',
+        },
+      },
     },
-  },
+  ],
   variants: {
     hasBody: {
       true: {

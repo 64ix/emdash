@@ -1,4 +1,5 @@
 import { style } from '@vanilla-extract/css';
+import { resetButton } from '@styles/reset.css';
 import { vars } from '@styles/theme.css';
 import { createVariableThemeContract } from '@styles/variable-theme-contract.css';
 
@@ -22,7 +23,11 @@ const rowBase = style({
   height: '100%',
 });
 
+// A native <button> (see ResourceLink.tsx) — resetButton strips native
+// button chrome (border/background/font) so it reads identically to the
+// old clickable div.
 export const rowClickable = style([
+  resetButton,
   rowBase,
   {
     cursor: 'pointer',
@@ -35,6 +40,12 @@ export const rowClickable = style([
       '&:hover': {
         background: vars.bg2,
         color: vars.fg,
+      },
+      '&:focus-visible': {
+        background: vars.bg2,
+        color: vars.fg,
+        outline: '2px solid currentColor',
+        outlineOffset: '-2px',
       },
     },
   },

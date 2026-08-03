@@ -71,18 +71,28 @@ export function SubagentHeader(props: {
           {name()}
         </span>
       </div>
-      <div
-        class={clsx(subagentStatusRow, props.collapsible && subagentStatusRowCollapsible)}
-        data-collapse-id={props.collapsible ? props.item.id : undefined}
-        role={props.collapsible ? 'button' : undefined}
-        aria-expanded={props.collapsible ? Boolean(props.expanded) : undefined}
-        title={props.item.phase === 'failed' ? (props.item.error ?? 'Failed') : undefined}
+      <Show
+        when={props.collapsible}
+        fallback={
+          <div
+            class={subagentStatusRow}
+            title={props.item.phase === 'failed' ? (props.item.error ?? 'Failed') : undefined}
+          >
+            <span>{label()}</span>
+          </div>
+        }
       >
-        <span>{label()}</span>
-        <Show when={props.collapsible}>
+        <button
+          type="button"
+          class={clsx(subagentStatusRow, subagentStatusRowCollapsible)}
+          data-collapse-id={props.item.id}
+          aria-expanded={Boolean(props.expanded)}
+          title={props.item.phase === 'failed' ? (props.item.error ?? 'Failed') : undefined}
+        >
+          <span>{label()}</span>
           <span class={clsx(subagentChevron, props.expanded && subagentChevronExpanded)}>›</span>
-        </Show>
-      </div>
+        </button>
+      </Show>
     </div>
   );
 }

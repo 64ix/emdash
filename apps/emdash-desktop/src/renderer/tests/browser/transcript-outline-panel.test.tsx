@@ -1,12 +1,13 @@
 /**
- * Browser tests for TranscriptOutlinePanel (ticket #34, spec #18): rendering
- * and navigation for the presentational outline rail/drawer. Selection
- * semantics (which turns become entries, labels, statuses) are covered by
+ * Browser tests for the transcript outline rail/drawer (ticket #34, spec
+ * #18; drawer accessibility hardened for ticket #26). Selection semantics
+ * (which turns become entries, labels, statuses) are covered by
  * `deriveTranscriptOutline`'s own unit tests in `@emdash/chat-ui`; the
  * off-DOM virtualizer jump itself is covered by that package's
  * `chat-view-scroll-to-item.contract.test.tsx`. This file only asserts what
- * requires real rendering: entry content, wide/narrow layout, selection
- * highlighting, and focus behavior.
+ * requires real rendering: entry content, rail vs. drawer layout, selection
+ * highlighting, and focus behavior — including the drawer's modal dialog
+ * semantics and focus trap (ticket #26).
  */
 
 import type { OutlineEntry } from '@emdash/chat-ui';
@@ -15,7 +16,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   OUTLINE_NARROW_BREAKPOINT_PX,
-  TranscriptOutlinePanel,
+  TranscriptOutlineDrawer,
+  TranscriptOutlineRail,
 } from '@renderer/features/conversations/acp/transcript-outline-panel';
 
 beforeAll(() => {
@@ -48,7 +50,13 @@ const ENTRIES: OutlineEntry[] = [
   },
 ];
 
-describe('TranscriptOutlinePanel', () => {
+const nextFrame = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()));
+
+async function settle(frames = 3): Promise<void> {
+  for (let i = 0; i < frames; i++) await nextFrame();
+}
+
+describe('TranscriptOutlineRail', () => {
   let host: HTMLDivElement;
   let root: Root;
 
@@ -63,14 +71,13 @@ describe('TranscriptOutlinePanel', () => {
     host.remove();
   });
 
-  async function renderPanel(props: Partial<React.ComponentProps<typeof TranscriptOutlinePanel>>) {
+  async function renderRail(props: Partial<React.ComponentProps<typeof TranscriptOutlineRail>>) {
     const onSelect = props.onSelect ?? vi.fn();
     const onClose = props.onClose ?? vi.fn();
     await act(async () => {
       root.render(
-        <TranscriptOutlinePanel
+        <TranscriptOutlineRail
           entries={props.entries ?? ENTRIES}
-          wide={props.wide ?? true}
           selectedItemId={props.selectedItemId ?? null}
           onSelect={onSelect}
           onClose={onClose}
@@ -82,7 +89,7 @@ describe('TranscriptOutlinePanel', () => {
   }
 
   it('renders every entry with its preview and a textual status label', async () => {
-    await renderPanel({});
+    await renderRail({});
 
     expect(host.textContent).toContain('Fix the flaky test');
     expect(host.textContent).toContain('Stabilized the retry loop.');
@@ -95,7 +102,7 @@ describe('TranscriptOutlinePanel', () => {
   });
 
   it('renders textual labels for the error and cancelled statuses', async () => {
-    await renderPanel({
+    await renderRail({
       entries: [
         { itemId: 'e1', turnId: 't1', role: 'turn', preview: 'Ran the migration', status: 'error' },
         {
@@ -114,14 +121,14 @@ describe('TranscriptOutlinePanel', () => {
   });
 
   it('shows an empty-state message when there are no entries yet', async () => {
-    await renderPanel({ entries: [] });
+    await renderRail({ entries: [] });
 
     expect(host.querySelectorAll('nav button')).toHaveLength(0);
     expect(host.textContent).toContain('Nothing to show yet.');
   });
 
   it('calls onSelect with the clicked entry', async () => {
-    const { onSelect } = await renderPanel({});
+    const { onSelect } = await renderRail({});
 
     const rows = host.querySelectorAll<HTMLButtonElement>('nav button');
     await act(async () => rows[1].click());
@@ -131,7 +138,7 @@ describe('TranscriptOutlinePanel', () => {
   });
 
   it('marks the selected entry as the current row without disturbing the others', async () => {
-    await renderPanel({ selectedItemId: 'assistant-1' });
+    await renderRail({ selectedItemId: 'assistant-1' });
 
     const rows = host.querySelectorAll<HTMLButtonElement>('nav button');
     expect(rows[0].getAttribute('aria-current')).toBeNull();
@@ -139,25 +146,16 @@ describe('TranscriptOutlinePanel', () => {
     expect(rows[2].getAttribute('aria-current')).toBeNull();
   });
 
-  it('renders as an in-flow rail when wide, reserving transcript width via layout, not overlay', async () => {
-    await renderPanel({ wide: true });
+  it('renders as an in-flow rail, reserving transcript width via layout, not overlay', async () => {
+    await renderRail({});
 
     const panel = host.firstElementChild as HTMLElement;
     expect(panel.className).toContain('relative');
     expect(panel.className).not.toContain('absolute');
   });
 
-  it('renders as an absolutely-positioned overlay drawer when narrow', async () => {
-    await renderPanel({ wide: false });
-
-    const panel = host.firstElementChild as HTMLElement;
-    expect(panel.className).toContain('absolute');
-    expect(panel.className).toContain('inset-y-0');
-    expect(panel.className).toContain('right-0');
-  });
-
-  it('closes on Escape from within the panel', async () => {
-    const { onClose } = await renderPanel({});
+  it('closes on Escape from within the rail', async () => {
+    const { onClose } = await renderRail({});
 
     const panel = host.firstElementChild as HTMLElement;
     const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
@@ -168,7 +166,7 @@ describe('TranscriptOutlinePanel', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('moves focus into the panel on mount and returns it to the trigger on close', async () => {
+  it('moves focus into the rail on mount and returns it to the trigger on close', async () => {
     const trigger = document.createElement('button');
     trigger.textContent = 'Show outline';
     document.body.appendChild(trigger);
@@ -176,7 +174,7 @@ describe('TranscriptOutlinePanel', () => {
     expect(document.activeElement).toBe(trigger);
 
     const returnFocusRef = { current: trigger };
-    await renderPanel({ returnFocusRef });
+    await renderRail({ returnFocusRef });
 
     expect(document.activeElement).not.toBe(trigger);
     expect(host.contains(document.activeElement)).toBe(true);
@@ -185,6 +183,151 @@ describe('TranscriptOutlinePanel', () => {
 
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
+  });
+});
+
+describe('TranscriptOutlineDrawer', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    host.remove();
+    // Base UI portals into document.body; make sure nothing lingers between tests.
+    document.querySelectorAll('[data-slot="sheet-content"]').forEach((el) => el.remove());
+  });
+
+  async function renderDrawer(
+    props: Partial<React.ComponentProps<typeof TranscriptOutlineDrawer>> = {}
+  ) {
+    const onSelect = props.onSelect ?? vi.fn();
+    const onOpenChange = props.onOpenChange ?? vi.fn();
+    await act(async () => {
+      root.render(
+        <TranscriptOutlineDrawer
+          open={props.open ?? true}
+          onOpenChange={onOpenChange}
+          entries={props.entries ?? ENTRIES}
+          selectedItemId={props.selectedItemId ?? null}
+          onSelect={onSelect}
+        />
+      );
+    });
+    await settle();
+    return { onSelect, onOpenChange };
+  }
+
+  function popup(): HTMLElement {
+    const el = document.querySelector<HTMLElement>('[data-slot="sheet-content"]');
+    if (!el) throw new Error('drawer popup not found');
+    return el;
+  }
+
+  it('renders as a modal dialog with an accessible name, not a plain overlay', async () => {
+    await renderDrawer();
+
+    const dialog = popup();
+    expect(dialog.getAttribute('role')).toBe('dialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.getAttribute('aria-label')).toBe('Outline');
+  });
+
+  it('renders entries with the same textual content as the rail', async () => {
+    await renderDrawer();
+
+    const dialog = popup();
+    expect(dialog.textContent).toContain('Fix the flaky test');
+    expect(dialog.querySelectorAll('nav button')).toHaveLength(3);
+  });
+
+  it('moves focus inside the dialog on open and traps Tab within it', async () => {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Show outline';
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    await renderDrawer();
+
+    const dialog = popup();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // Tabbing forward from the last focusable element in the dialog must not
+    // escape to the trigger or the rest of the document — that would mean
+    // the transcript behind the drawer is reachable while it is open.
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])')
+    );
+    expect(focusable.length).toBeGreaterThan(0);
+    focusable[focusable.length - 1].focus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    const tabEvent = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    });
+    document.activeElement?.dispatchEvent(tabEvent);
+    await settle();
+
+    // Focus manager intercepts the keydown (composite navigation) rather than
+    // letting the browser's default tab order run past the dialog boundary.
+    expect(document.activeElement).not.toBe(trigger);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    trigger.remove();
+  });
+
+  it('closes on Escape and returns focus to the element that opened it', async () => {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Show outline';
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const onOpenChange = vi.fn();
+    await renderDrawer({ onOpenChange });
+
+    const dialog = popup();
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    await act(async () => {
+      dialog.dispatchEvent(escape);
+    });
+    await settle();
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+
+    // Simulate the host reacting to onOpenChange(false) by unmounting the
+    // open drawer, matching AcpChatPanel's controlled `open` prop.
+    await act(async () => {
+      root.render(
+        <TranscriptOutlineDrawer
+          open={false}
+          onOpenChange={onOpenChange}
+          entries={ENTRIES}
+          selectedItemId={null}
+          onSelect={vi.fn()}
+        />
+      );
+    });
+    await settle();
+
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
+  it('calls onSelect with the clicked entry', async () => {
+    const { onSelect } = await renderDrawer();
+
+    const rows = popup().querySelectorAll<HTMLButtonElement>('nav button');
+    await act(async () => rows[1].click());
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(ENTRIES[1]);
   });
 });
 

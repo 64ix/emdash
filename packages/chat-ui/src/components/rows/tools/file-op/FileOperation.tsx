@@ -30,15 +30,27 @@ const VERB: Record<FileOpKind, string> = {
 
 function FileRowItem(props: { verb: string; path: string; lineH: number; onClick?: () => void }) {
   return (
-    <div
-      class={fileRow({ clickable: !!props.onClick })}
-      style={{ height: `${props.lineH}px` }}
-      role={props.onClick ? 'button' : undefined}
-      onClick={props.onClick}
+    <Show
+      when={props.onClick}
+      fallback={
+        <div class={fileRow({ clickable: false })} style={{ height: `${props.lineH}px` }}>
+          <span>{props.verb}</span>
+          <span title={props.path}>{basename(props.path)}</span>
+        </div>
+      }
     >
-      <span>{props.verb}</span>
-      <span title={props.path}>{basename(props.path)}</span>
-    </div>
+      {(onClick) => (
+        <button
+          type="button"
+          class={fileRow({ clickable: true })}
+          style={{ height: `${props.lineH}px` }}
+          onClick={onClick()}
+        >
+          <span>{props.verb}</span>
+          <span title={props.path}>{basename(props.path)}</span>
+        </button>
+      )}
+    </Show>
   );
 }
 
@@ -249,9 +261,9 @@ export function FileOperation(props: FileOperationProps) {
       }
     >
       <div>
-        <div
+        <button
+          type="button"
           class={fileOpHeader}
-          role="button"
           aria-expanded={expanded() ? 'true' : 'false'}
           data-collapse-id={props.item.id}
         >
@@ -261,7 +273,7 @@ export function FileOperation(props: FileOperationProps) {
           <span class={chevronSm({ expanded: expanded() })} aria-hidden="true">
             ›
           </span>
-        </div>
+        </button>
         <Show when={expanded()}>
           <For each={props.item.ops}>
             {(op) => (

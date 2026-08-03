@@ -1,4 +1,5 @@
 import { style } from '@vanilla-extract/css';
+import { resetButton } from '@styles/reset.css';
 import { vars } from '@styles/theme.css';
 import { createVariableThemeContract } from '@styles/variable-theme-contract.css';
 
@@ -83,12 +84,28 @@ export const subagentStatusRow = style({
   fontSize: vars.typeBodyFontSize,
 });
 
-export const subagentStatusRowCollapsible = style({
-  cursor: 'pointer',
-  selectors: {
-    '&:hover': { color: vars.fgMuted },
+// Applied alongside subagentStatusRow (via clsx) when the row is a native
+// <button> (see Subagent.tsx) — resetButton strips native button chrome.
+// marginLeft is re-declared (not just inherited from subagentStatusRow)
+// because resetButton's `margin: 0` is a separate style() rule combined at
+// the class-list level, not composed in the same array — re-asserting it
+// here keeps the 22px indent regardless of stylesheet emission order.
+export const subagentStatusRowCollapsible = style([
+  resetButton,
+  {
+    width: '100%',
+    marginLeft: '22px',
+    cursor: 'pointer',
+    selectors: {
+      '&:hover': { color: vars.fgMuted },
+      '&:focus-visible': {
+        color: vars.fgMuted,
+        outline: '2px solid currentColor',
+        outlineOffset: '-2px',
+      },
+    },
   },
-});
+]);
 
 export const subagentChevron = style({
   display: 'inline-block',

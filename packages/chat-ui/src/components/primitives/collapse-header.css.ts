@@ -1,4 +1,5 @@
 import { style } from '@vanilla-extract/css';
+import { resetButton } from '@styles/reset.css';
 import { sx } from '@styles/sprinkles.css';
 import { vars } from '@styles/theme.css';
 
@@ -14,14 +15,20 @@ export const collapseRow = sx({
 export const collapseRowHover = style({
   selectors: {
     '&:hover': { color: vars.fgMuted },
+    '&:focus-visible': {
+      color: vars.fgMuted,
+      outline: '2px solid currentColor',
+      outlineOffset: '-2px',
+    },
   },
 });
 
-/** Combined class for the header row element. */
+/** Combined class for the header row element (a native <button> — see CollapseHeader.tsx). */
 export const collapseHeader = style([
+  resetButton,
   collapseRow,
   collapseRowHover,
-  { fontSize: vars.typeBodyFontSize },
+  { width: '100%', fontSize: vars.typeBodyFontSize },
 ]);
 
 export const chevron = style({

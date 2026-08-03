@@ -44,6 +44,14 @@ export const textShimmer = style({
   color: 'transparent',
   WebkitTextFillColor: 'transparent',
   animation: `${shimmerMove} 3s linear infinite`,
+  // Decorative only — the running/active state is never conveyed by this
+  // motion alone (status text and icons carry the same meaning), so it can
+  // be switched off outright for users who prefer reduced motion.
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      animation: 'none',
+    },
+  },
 });
 
 // ── fade-overlay-top ──────────────────────────────────────────────────────────
@@ -86,6 +94,13 @@ export const streamWord = style({
   display: 'inline-block',
   // easeOutCubic — a soft, decelerating curve so words settle gently.
   animation: `${fadeIn} ${fallbackVar(streamWordDuration, '200ms')} cubic-bezier(0.215, 0.61, 0.355, 1) both`,
+  // Purely a paint-in flourish — the word's text content is identical either
+  // way, so reduced-motion users just see it appear immediately.
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      animation: 'none',
+    },
+  },
 });
 
 // ── plan-spinner ──────────────────────────────────────────────────────────────
@@ -94,4 +109,12 @@ export const planSpinner = style({
   transformOrigin: 'center',
   transformBox: 'fill-box',
   animation: `${planSpin} 1s linear infinite`,
+  // The in-progress vs. pending glyphs already differ by shape (arc segment +
+  // center dot vs. a dotted ring — see PlanInProgressIcon/PlanPendingIcon), so
+  // turning off the spin for reduced motion loses no status information.
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      animation: 'none',
+    },
+  },
 });

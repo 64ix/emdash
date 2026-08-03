@@ -67,7 +67,11 @@ import { openChangesFootprintEntry } from './changes/changes-rail-actions';
 import { isChangesRailNarrow } from './changes/changes-rail-layout';
 import { activateChatLink } from './chat-link-activation';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
-import { OUTLINE_NARROW_BREAKPOINT_PX, TranscriptOutlinePanel } from './transcript-outline-panel';
+import {
+  OUTLINE_NARROW_BREAKPOINT_PX,
+  TranscriptOutlineDrawer,
+  TranscriptOutlineRail,
+} from './transcript-outline-panel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1107,14 +1111,23 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
         </div>
       </div>
 
-      {outlineOpen && (
-        <TranscriptOutlinePanel
+      {outlineWide ? (
+        outlineOpen && (
+          <TranscriptOutlineRail
+            entries={store.outline}
+            selectedItemId={outlineSelectedItemId}
+            onSelect={handleSelectOutlineEntry}
+            onClose={() => setOutlineOpen(false)}
+            returnFocusRef={outlineToggleRef}
+          />
+        )
+      ) : (
+        <TranscriptOutlineDrawer
+          open={outlineOpen}
+          onOpenChange={setOutlineOpen}
           entries={store.outline}
-          wide={outlineWide}
           selectedItemId={outlineSelectedItemId}
           onSelect={handleSelectOutlineEntry}
-          onClose={() => setOutlineOpen(false)}
-          returnFocusRef={outlineToggleRef}
         />
       )}
 
