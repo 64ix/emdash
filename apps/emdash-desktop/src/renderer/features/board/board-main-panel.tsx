@@ -582,8 +582,10 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
             explanation to screen readers as a drag hovers it. Visually
             hidden — the column itself carries the same text via
             `aria-label`/`title` for pointer users and assistive tech that
-            reads the hovered element directly. */}
-        <div role="status" aria-live="polite" className="sr-only">
+            reads the hovered element directly. `data-board-status` keeps
+            this region distinguishable from dnd-kit's own built-in
+            drag-announcement live region, which also renders `role="status"`. */}
+        <div data-board-status role="status" aria-live="polite" className="sr-only">
           {blockedHover?.explanation ?? ''}
         </div>
         {panelTarget && (
