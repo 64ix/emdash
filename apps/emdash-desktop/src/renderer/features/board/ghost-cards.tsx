@@ -83,7 +83,15 @@ export function GhostCardView({
   return (
     <div
       data-ghost-card={ghostCard.id}
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       className={cn(
         'cursor-pointer rounded-md border border-dashed border-border/70 bg-background-2/30 p-2 opacity-80',
         isSelected && 'border-primary ring-1 ring-primary/50'

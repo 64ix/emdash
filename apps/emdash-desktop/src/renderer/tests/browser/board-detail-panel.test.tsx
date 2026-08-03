@@ -837,6 +837,19 @@ describe('Task Detail Panel — ghost mode (ticket #42)', () => {
     expect(panelSection('vitals')).toBeNull();
   });
 
+  it('a keyboard Enter on a focused Ghost Card also opens ghost mode', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    const el = ghostCardEl(ghostCard.id) as HTMLElement;
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle();
+
+    expect(panelHeading()).toBe(ghostCard.issue.title);
+  });
+
   it('re-clicking a different real task card switches the panel away from ghost mode', async () => {
     const ghostCard = makeGhostCard();
     mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
