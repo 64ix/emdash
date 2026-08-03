@@ -69,7 +69,28 @@ export function isTaskShippedFaded(task: Task, now?: number): boolean {
  * showing must never leave the panel rendering it on stale data.
  */
 export function isBoardDisplayable(task: Task, now?: number): boolean {
-  return task.type === 'task' && !task.archivedAt && !isTaskShippedFaded(task, now);
+  return isBoardRankCandidate(task) && !isTaskShippedFaded(task, now);
+}
+
+/**
+ * Broader than `isBoardDisplayable` — used only to build the "true" (rank-math)
+ * per-column membership `board-main-panel.tsx` keeps alongside its filtered
+ * view (`trueRawByColumn`/`trueSortedByColumn`), so `computeDropRank`'s
+ * collision guard (ticket #45) can see a card Shipped Fade currently hides,
+ * not only one an explicit board filter hides. Shipped Fade (ticket #51) is a
+ * *display* rule: a faded `shipped` card still holds its stored Board Rank,
+ * and a drop landing between two *visible* Shipped cards can collide with
+ * that hidden rank exactly the way a filter-hidden card can (`board-ordering
+ * .ts`'s `computeDropRank` doc comment) — but until this helper existed, the
+ * "true" set was built from `isBoardDisplayable` itself, which already
+ * excludes Shipped-Faded tasks, so that specific collision was never actually
+ * guarded against. `isBoardDisplayable` must stay narrower than this (it also
+ * backs the Task Detail Panel's disappearance handling, which *should* close
+ * on a faded task) — this helper exists only for rank arithmetic, never for
+ * deciding what is on screen or what backs an open panel.
+ */
+export function isBoardRankCandidate(task: Task): boolean {
+  return task.type === 'task' && !task.archivedAt;
 }
 
 /**

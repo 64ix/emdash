@@ -6,6 +6,7 @@ import {
   columnEmphasis,
   columnPermitsManualCreation,
   isBoardDisplayable,
+  isBoardRankCandidate,
   isTaskShippedFaded,
   PIPELINE_COLUMNS,
   SHIPPED_FADE_DISCLOSURE,
@@ -220,6 +221,38 @@ describe('isBoardDisplayable', () => {
     const recentMergedAt = new Date(now - (SHIPPED_FADE_WINDOW_MS - 1000)).toISOString();
     const task = makeTask('shipped', [makePr({ status: 'merged', mergedAt: recentMergedAt })]);
     expect(isBoardDisplayable(task, now)).toBe(true);
+  });
+});
+
+describe('isBoardRankCandidate', () => {
+  const now = new Date('2026-07-31T00:00:00.000Z').getTime();
+
+  it('is true for a plain, non-archived task', () => {
+    expect(isBoardRankCandidate(makeTask('spec'))).toBe(true);
+  });
+
+  it('is false for an archived task', () => {
+    const task = makeTask('spec', [], { archivedAt: '2026-01-02T00:00:00.000Z' });
+    expect(isBoardRankCandidate(task)).toBe(false);
+  });
+
+  it('is false for a non-task row (e.g. an automation run)', () => {
+    const task = makeTask('spec', [], { type: 'automation-run' });
+    expect(isBoardRankCandidate(task)).toBe(false);
+  });
+
+  // The load-bearing difference from `isBoardDisplayable`: a task Shipped
+  // Fade hides from the board still counts here, since it still occupies a
+  // real Board Rank in the `shipped` column — see `board-main-panel.tsx`'s
+  // `trueRawByColumn` and `computeDropRank`'s hidden-card collision guard.
+  it('is true for a shipped task faded out past the Shipped Fade window, unlike isBoardDisplayable', () => {
+    const oldMergedAt = new Date(
+      now - (SHIPPED_FADE_WINDOW_DAYS * 24 * 60 * 60 * 1000 + 1000)
+    ).toISOString();
+    const task = makeTask('shipped', [makePr({ status: 'merged', mergedAt: oldMergedAt })]);
+    expect(isTaskShippedFaded(task, now)).toBe(true);
+    expect(isBoardDisplayable(task, now)).toBe(false);
+    expect(isBoardRankCandidate(task)).toBe(true);
   });
 });
 

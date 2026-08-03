@@ -23,6 +23,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import type { LinkedIssueRoles } from '@shared/core/linked-issue';
+import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 
 // ── Store mocks ───────────────────────────────────────────────────────────────
@@ -129,6 +130,41 @@ function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): Mock
     data: { id, name: id, status: 'active', type: 'task', ...overrides },
     conversationStats: {},
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+/** A merged PR, for a `shipped` task — `mergedAt` decides whether Shipped
+ * Fade (ticket #51) currently hides the card it belongs to. */
+function mergedPr(overrides: Partial<PullRequest> = {}): PullRequest {
+  return {
+    url: 'https://github.com/acme/repo/pull/1',
+    provider: 'github',
+    repositoryUrl: 'https://github.com/acme/repo',
+    baseRefName: 'main',
+    baseRefOid: 'abc',
+    headRepositoryUrl: 'https://github.com/acme/repo',
+    headRefName: 'feature',
+    headRefOid: 'def',
+    identifier: '#1',
+    title: 'Merged PR',
+    description: null,
+    status: 'merged',
+    isDraft: false,
+    additions: null,
+    deletions: null,
+    changedFiles: null,
+    commitCount: null,
+    mergeableStatus: null,
+    mergeStateStatus: null,
+    reviewDecision: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    mergedAt: new Date().toISOString(),
+    author: null,
+    labels: [],
+    assignees: [],
+    checks: [],
+    ...overrides,
   };
 }
 
@@ -1008,6 +1044,67 @@ describe('board drag-and-drop — GitHub-authoritative cards (ticket #48)', () =
 
     expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
     expect(a.updateBoardPosition).toHaveBeenCalledWith('idea', expect.any(String));
+  });
+});
+
+// Integration-review regression (tickets #45 x #51): `computeDropRank`'s
+// hidden-card collision guard was built for a card an explicit board filter
+// hides, but the "true" (unfiltered) per-column set it reads
+// (`trueRawByColumn` in board-main-panel.tsx) was originally built from
+// `isBoardDisplayable`, which itself already excludes a Shipped-Faded task —
+// so a card Shipped Fade hides was invisible to the collision guard too, not
+// just to the board. This suite proves the guard now also covers that case.
+describe('board drag-and-drop — Shipped Fade rank-collision guard (tickets #45/#51 integration)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it("never lands a drop on a Shipped-Faded card's own rank, even though that card never renders", async () => {
+    const fadedMergedAt = new Date(Date.now() - SHIPPED_FADE_WINDOW_MS - 1000).toISOString();
+    // Stored order in `shipped`: '4' < '5' (faded, hidden) < '6' < 'z'.
+    // `prs: []` on the visible cards mirrors the real `Task` domain type
+    // (always an array, never `undefined`) — `isTaskShippedFaded` iterates it
+    // unconditionally for any `shipped`-stage card.
+    const shipA = makeStore('ship-a', { workflowStage: 'shipped', boardRank: '4', prs: [] });
+    const shipHidden = makeStore('ship-hidden', {
+      workflowStage: 'shipped',
+      boardRank: '5',
+      prs: [
+        mergedPr({
+          url: 'https://github.com/acme/repo/pull/5',
+          identifier: '#5',
+          mergedAt: fadedMergedAt,
+        }),
+      ],
+    });
+    const shipC = makeStore('ship-c', { workflowStage: 'shipped', boardRank: '6', prs: [] });
+    const mover = makeStore('ship-mover', { workflowStage: 'shipped', boardRank: 'z', prs: [] });
+    for (const s of [shipA, shipHidden, shipC, mover]) managerTasks.set(s.data.id, s);
+    await mount();
+
+    // The faded card never renders — the visible Shipped column is
+    // [ship-a(4), ship-c(6), ship-mover(z)].
+    const hiddenLabel = Array.from(host.querySelectorAll('span')).find(
+      (s) => s.textContent === 'ship-hidden'
+    );
+    expect(hiddenLabel).toBeUndefined();
+
+    // Drag the bottom card up to land between the two visible neighbours —
+    // exactly the naive midpoint the hidden card's own rank ('5') occupies.
+    const target = center(cardEl('ship-c'));
+    await drag(cardEl('ship-mover'), target.x, target.y - 10);
+
+    expect(mover.updateBoardPosition).toHaveBeenCalledTimes(1);
+    const [stage, rank] = mover.updateBoardPosition.mock.calls[0]!;
+    expect(stage).toBe('shipped');
+    expect(rank > '4').toBe(true);
+    expect(rank < '6').toBe(true);
+    // The regression: without true-order plumbing that also covers Shipped
+    // Fade (not just explicit board filters), this would be exactly '5' —
+    // the hidden card's own already-in-use Board Rank.
+    expect(rank).not.toBe('5');
   });
 });
 

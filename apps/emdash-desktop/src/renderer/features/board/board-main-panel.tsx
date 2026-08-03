@@ -43,6 +43,7 @@ import {
   columnEmphasis,
   columnPermitsManualCreation,
   isBoardDisplayable,
+  isBoardRankCandidate,
   PIPELINE_COLUMNS,
   SHIPPED_FADE_DISCLOSURE,
   SHIPPED_FADE_WINDOW_DAYS,
@@ -315,21 +316,29 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // own filters, so the two can never read a different status for one card.
   const agentStatusById = new Map<string, AgentStatus | null>();
   const rawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
-  // True (unfiltered) per-column membership — every displayable task,
-  // regardless of the board's own filters. Kept alongside the filtered
-  // `rawByColumn` above purely so drop-rank math (`computeDropRank`'s
-  // `trueEntries`) can interpolate against a filtered-out card's *real*
-  // neighbours when a filter hides an interior card, instead of colliding
-  // with its stored rank — see `board-ordering.ts`. Never itself used to
-  // decide what's on screen; `rawByColumn`/`displayByColumn` still own that.
+  // True (unfiltered) per-column membership — every task `isBoardRankCandidate`
+  // admits (broader than `isBoardDisplayable`: it also includes a Shipped-Faded
+  // task, which is hidden from the board but still holds its stored Board
+  // Rank in the `shipped` column). Kept alongside the filtered `rawByColumn`
+  // above purely so drop-rank math (`computeDropRank`'s `trueEntries`) can
+  // interpolate against a *hidden* card's real neighbours — whether hidden by
+  // an explicit board filter (ticket #45) or by Shipped Fade (ticket #51) —
+  // instead of colliding with its stored rank; see `board-ordering.ts` and
+  // `isBoardRankCandidate`'s own doc comment. Never itself used to decide
+  // what's on screen or what backs an open panel; `rawByColumn`/
+  // `displayByColumn`/`storeById` (gated on the narrower `isBoardDisplayable`)
+  // still own that.
   const trueRawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
   if (manager) {
     for (const [, store] of manager.tasks) {
       const task = registeredTaskData(store);
-      if (!task || !isBoardDisplayable(task)) continue;
+      if (!task) continue;
+      if (isBoardRankCandidate(task)) {
+        trueRawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
+      }
+      if (!isBoardDisplayable(task)) continue;
       storeById.set(task.id, store);
       agentStatusById.set(task.id, taskAgentStatus(store));
-      trueRawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
     }
     // Filtering (ticket #45) is applied here, at the source: every downstream
     // drag-and-drop computation (sorting, awaiting-input partition,
@@ -593,12 +602,13 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     const authority = authorityByCardId.get(activeId);
     if (authority?.governs && !isStageDestinationSafe(authority.fact, columnToStage(overColumn))) {
       setDragPreview(null);
+      // `describeStageAuthorityFact` is exhaustive over every fact kind (see
+      // its own doc comment) and always returns an explanation now — no
+      // fallback string is reachable here.
       const description = describeStageAuthorityFact(authority.fact);
       setBlockedHover({
         column: overColumn,
-        explanation: description
-          ? `${description.fact} ${description.action}`
-          : 'This destination is not available for this task right now.',
+        explanation: `${description.fact} ${description.action}`,
       });
       return;
     }
