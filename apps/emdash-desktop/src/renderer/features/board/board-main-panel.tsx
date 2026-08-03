@@ -20,12 +20,16 @@ import {
   type AnimateLayoutChanges,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { MessageSquare } from 'lucide-react';
+import { ArrowUpRight, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
-import { isTaskShippedFaded, STAGE_LABELS } from '@renderer/features/board/board-columns';
+import { isBoardDisplayable, STAGE_LABELS } from '@renderer/features/board/board-columns';
 import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
+import {
+  TaskDetailPanel,
+  type TaskDetailPanelTarget,
+} from '@renderer/features/board/task-detail-panel';
 import {
   getProjectStore,
   projectDisplayName,
@@ -95,6 +99,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   const {
     params: { projectId },
   } = useParams('board');
+  const { navigate } = useNavigate();
   const manager = getTaskManagerStore(projectId);
   const projectName = projectDisplayName(getProjectStore(projectId)) ?? 'Project';
   const { ghostCards, adopt: adoptGhostCard, reject: rejectGhostCard } = useGhostCards(projectId);
@@ -104,6 +109,11 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // slot and make-room displacement then work across columns exactly like
   // they do within one. Persistence still derives from store data at drop.
   const [dragPreview, setDragPreview] = useState<{ column: ColumnId; index: number } | null>(null);
+  // Task Detail Panel (CONTEXT.md): ephemeral board view state — which task
+  // (or Ghost Card) is shown on the right. Local to this component, so it
+  // never survives leaving the board (unmount resets it) and writes nothing
+  // to the database. `null` means the panel is closed.
+  const [panelTarget, setPanelTarget] = useState<TaskDetailPanelTarget | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   // Board open triggers an immediate derivation pass (PR facts + inbound issues);
@@ -115,6 +125,48 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     void rpc.issues.syncIssuesNow(projectId);
   }, [projectId]);
 
+  // Built unconditionally, ahead of the `!manager` early return below, so the
+  // disappearance effect that follows always runs in the same hook order
+  // regardless of whether the project's task manager is mounted yet.
+  const storeById = new Map<string, TaskStore>();
+  const rawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
+  if (manager) {
+    for (const [, store] of manager.tasks) {
+      const task = registeredTaskData(store);
+      if (!task || !isBoardDisplayable(task)) continue;
+      storeById.set(task.id, store);
+      rawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
+    }
+  }
+
+  // Disappearance handling (CONTEXT.md "Task Detail Panel"): a task archived
+  // elsewhere, or faded out by Shipped Fade, or a Ghost Card that stopped
+  // being a candidate (adopted, rejected, or dropped by a sync pass) must
+  // never keep the panel open rendering stale or missing data — close it
+  // instead. Adopting the very ghost the panel shows is handled separately
+  // (`handleAdoptGhostCard` below switches the target before this can fire).
+  const panelTargetGone =
+    panelTarget !== null &&
+    (panelTarget.kind === 'task'
+      ? !storeById.has(panelTarget.taskId)
+      : !ghostCards.some((card) => card.id === panelTarget.ghostCard.id));
+  useEffect(() => {
+    if (panelTargetGone) setPanelTarget(null);
+  }, [panelTargetGone]);
+
+  // Escape closes the panel (alongside the close button rendered in it).
+  useEffect(() => {
+    if (panelTarget === null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setPanelTarget(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [panelTarget]);
+
   if (!manager) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-foreground-muted">
@@ -123,15 +175,28 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
     );
   }
 
-  const storeById = new Map<string, TaskStore>();
-  const rawByColumn = new Map<ColumnId, CardEntry[]>(COLUMNS.map((c) => [c, []]));
-  for (const [, store] of manager.tasks) {
-    const task = registeredTaskData(store);
-    if (!task || task.archivedAt || task.type !== 'task') continue;
-    if (isTaskShippedFaded(task)) continue; // Shipped Fade: hidden from the board, stage intact
-    storeById.set(task.id, store);
-    rawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
-  }
+  // Direct navigation (CONTEXT.md "Task Detail Panel"): the hover arrow on a
+  // card and the panel's "Open task" button both land here. Mirrors
+  // `SidebarTaskItem`'s open gesture — provision first when the task has
+  // never been provisioned and isn't already busy, then navigate straight to
+  // the full task view.
+  const handleOpenTask = (taskId: string) => {
+    const store = storeById.get(taskId);
+    if (store?.state === 'unprovisioned' && store.phase === 'idle') {
+      void manager.provisionTask(taskId);
+    }
+    navigate('task', { projectId, taskId });
+  };
+
+  // Adopting a Ghost Card creates the real task and switches the panel to it
+  // (CONTEXT.md "Task Detail Panel", "Ghost Card") so management can continue
+  // immediately — the ghost-card action itself is unchanged (`useGhostCards`).
+  const handleAdoptGhostCard = async (ghostCard: GhostCard) => {
+    const result = await adoptGhostCard(ghostCard);
+    if (result?.success) {
+      setPanelTarget({ kind: 'task', taskId: result.data.task.id });
+    }
+  };
 
   const awaitingInputIds = new Set<string>();
   for (const [id, store] of storeById) {
@@ -346,41 +411,62 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
         <span className="text-xs text-foreground-muted">{projectName}</span>
       </div>
       <BoardLinkSuggestions projectId={projectId} />
-      <DndContext
-        sensors={sensors}
-        collisionDetection={columnAwareCollision}
-        // The board always overflows horizontally (8 fixed-width columns), so
-        // dnd-kit's default 20%-of-container autoscroll band covers a whole
-        // visible column: hovering a drop target inside it scrolls the board
-        // under the pointer and the drop lands columns to the right of the
-        // one the user aimed at. 5% keeps edge-push scrolling for offscreen
-        // columns while leaving visible targets stationary.
-        autoScroll={{ threshold: { x: 0.05, y: 0.2 } }}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragEnd={handleDragEnd}
-        onDragCancel={handleDragCancel}
-      >
-        <div className="flex flex-1 gap-3 overflow-x-auto px-4 pb-4">
-          {COLUMNS.map((column) => (
-            <BoardColumn
-              key={column}
-              column={column}
-              entries={displayByColumn.get(column) ?? []}
-              storeById={storeById}
-              projectId={projectId}
-              // Ghost Cards (ticket #9) are not tasks and never sort/drag —
-              // they only ever live in the `idea` column, after real cards.
-              ghostCards={column === 'idea' ? ghostCards : undefined}
-              onAdoptGhostCard={adoptGhostCard}
-              onRejectGhostCard={rejectGhostCard}
-            />
-          ))}
-        </div>
-        <DragOverlay>
-          {activeDragStore ? <BoardCardPreview store={activeDragStore} /> : null}
-        </DragOverlay>
-      </DndContext>
+      {/* Task Detail Panel (CONTEXT.md): a fixed-width sibling to the right of
+          the board, not an overlay — the board stays fully interactive
+          (including drag-and-drop) while it is open. */}
+      <div className="flex min-h-0 flex-1">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={columnAwareCollision}
+          // The board always overflows horizontally (8 fixed-width columns), so
+          // dnd-kit's default 20%-of-container autoscroll band covers a whole
+          // visible column: hovering a drop target inside it scrolls the board
+          // under the pointer and the drop lands columns to the right of the
+          // one the user aimed at. 5% keeps edge-push scrolling for offscreen
+          // columns while leaving visible targets stationary.
+          autoScroll={{ threshold: { x: 0.05, y: 0.2 } }}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
+          <div className="flex flex-1 gap-3 overflow-x-auto px-4 pb-4">
+            {COLUMNS.map((column) => (
+              <BoardColumn
+                key={column}
+                column={column}
+                entries={displayByColumn.get(column) ?? []}
+                storeById={storeById}
+                selectedTaskId={panelTarget?.kind === 'task' ? panelTarget.taskId : null}
+                onSelectTask={(taskId) => setPanelTarget({ kind: 'task', taskId })}
+                onOpenTask={handleOpenTask}
+                // Ghost Cards (ticket #9) are not tasks and never sort/drag —
+                // they only ever live in the `idea` column, after real cards.
+                ghostCards={column === 'idea' ? ghostCards : undefined}
+                selectedGhostCardId={
+                  panelTarget?.kind === 'ghost' ? panelTarget.ghostCard.id : null
+                }
+                onSelectGhostCard={(ghostCard) => setPanelTarget({ kind: 'ghost', ghostCard })}
+                onAdoptGhostCard={handleAdoptGhostCard}
+                onRejectGhostCard={rejectGhostCard}
+              />
+            ))}
+          </div>
+          <DragOverlay>
+            {activeDragStore ? <BoardCardPreview store={activeDragStore} /> : null}
+          </DragOverlay>
+        </DndContext>
+        {panelTarget && (
+          <TaskDetailPanel
+            projectId={projectId}
+            target={panelTarget}
+            onClose={() => setPanelTarget(null)}
+            onOpenTask={handleOpenTask}
+            onAdoptGhostCard={handleAdoptGhostCard}
+            onRejectGhostCard={rejectGhostCard}
+          />
+        )}
+      </div>
     </div>
   );
 });
@@ -389,16 +475,24 @@ const BoardColumn = observer(function BoardColumn({
   column,
   entries,
   storeById,
-  projectId,
+  selectedTaskId,
+  onSelectTask,
+  onOpenTask,
   ghostCards,
+  selectedGhostCardId,
+  onSelectGhostCard,
   onAdoptGhostCard,
   onRejectGhostCard,
 }: {
   column: ColumnId;
   entries: CardEntry[];
   storeById: Map<string, TaskStore>;
-  projectId: string;
+  selectedTaskId: string | null;
+  onSelectTask: (taskId: string) => void;
+  onOpenTask: (taskId: string) => void;
   ghostCards?: GhostCard[];
+  selectedGhostCardId?: string | null;
+  onSelectGhostCard: (ghostCard: GhostCard) => void;
   onAdoptGhostCard: (ghostCard: GhostCard) => void;
   onRejectGhostCard: (ghostCard: GhostCard) => void;
 }) {
@@ -429,13 +523,23 @@ const BoardColumn = observer(function BoardColumn({
           {entries.map((entry) => {
             const store = storeById.get(entry.id);
             if (!store) return null;
-            return <BoardCard key={entry.id} store={store} projectId={projectId} />;
+            return (
+              <BoardCard
+                key={entry.id}
+                store={store}
+                isSelected={entry.id === selectedTaskId}
+                onSelect={onSelectTask}
+                onOpenTask={onOpenTask}
+              />
+            );
           })}
           {/* Ghost Cards are not tasks: rendered after the sortable cards, never draggable. */}
           {ghostCards?.map((ghostCard) => (
             <GhostCardView
               key={ghostCard.id}
               ghostCard={ghostCard}
+              isSelected={ghostCard.id === selectedGhostCardId}
+              onSelect={() => onSelectGhostCard(ghostCard)}
               onAdopt={() => onAdoptGhostCard(ghostCard)}
               onReject={() => onRejectGhostCard(ghostCard)}
             />
@@ -448,12 +552,15 @@ const BoardColumn = observer(function BoardColumn({
 
 const BoardCard = observer(function BoardCard({
   store,
-  projectId,
+  isSelected,
+  onSelect,
+  onOpenTask,
 }: {
   store: TaskStore;
-  projectId: string;
+  isSelected: boolean;
+  onSelect: (taskId: string) => void;
+  onOpenTask: (taskId: string) => void;
 }) {
-  const { navigate } = useNavigate();
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: store.data.id,
     animateLayoutChanges: animateBoardLayoutChanges,
@@ -471,20 +578,52 @@ const BoardCard = observer(function BoardCard({
     opacity: isDragging ? 0.4 : 1,
   };
 
+  // Re-clicking the already-shown card is a no-op (no toggle): this always
+  // (re-)selects `task.id`, never clears it.
+  const handleSelect = () => onSelect(task.id);
+
   return (
     <div
       ref={setNodeRef}
       style={style}
       {...attributes}
       {...listeners}
-      className="cursor-grab touch-none rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing"
+      onClick={handleSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          handleSelect();
+        }
+      }}
+      className={cn(
+        'group relative cursor-grab touch-none rounded-md border border-border bg-background p-2 shadow-sm active:cursor-grabbing',
+        // The card backing the open Task Detail Panel (CONTEXT.md) is highlighted.
+        isSelected && 'border-primary ring-1 ring-primary/50'
+      )}
     >
+      {/* Direct navigation (CONTEXT.md "Task Detail Panel"): hover-revealed,
+          navigates straight to the full task view instead of the panel.
+          `onPointerDown` stops here so dnd-kit's drag activation (attached to
+          this card via `listeners`) never sees the press, and the click
+          itself stops here too so it never also opens/switches the panel.
+          `onKeyDown` stops here for the same reason on the keyboard path: a
+          keydown still bubbles to the card's own onKeyDown (Enter/Space ->
+          handleSelect) even though a click does not. */}
       <button
-        className="w-full text-left text-xs font-medium hover:underline"
-        onClick={() => navigate('task', { projectId, taskId: task.id })}
+        type="button"
+        aria-label={`Open ${task.name}`}
+        title="Open task"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenTask(task.id);
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="absolute top-1 right-1 rounded p-0.5 text-foreground-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
       >
-        {task.name}
+        <ArrowUpRight className="size-3.5" />
       </button>
+      <span className="block w-full pr-4 text-left text-xs font-medium">{task.name}</span>
       <div className="mt-1.5 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           {linkedIssue && (

@@ -7,7 +7,7 @@ import type {
 import z from 'zod';
 import type { Conversation } from '@shared/core/conversations/conversations';
 import type { LinkedIssueRoles } from '@shared/core/linked-issue';
-import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
+import type { PullRequest, PullRequestStatus } from '@shared/core/pull-requests/pull-requests';
 import type { TaskConfig } from '@shared/core/tasks/task-config';
 import type { WorkspaceConfig } from '@shared/core/workspaces/workspace-config';
 
@@ -176,4 +176,33 @@ export type TaskDeletePreflightItem = {
 
 export type DeletePreflightResult = {
   tasks: TaskDeletePreflightItem[];
+};
+
+/** A PR that proves — or, once the next board-sync pass catches up, will prove —
+ * a task's Workflow Stage through its Spec Linked Issue Role. See CONTEXT.md
+ * ("Workflow Stage") and docs/adr/0003-board-stages-derived-not-declared.md. */
+export type StageHoldingPr = {
+  url: string;
+  title: string;
+  identifier: string | null;
+  status: PullRequestStatus;
+  isDraft: boolean;
+};
+
+/**
+ * Result of the `tasks.getTaskStageAuthority` RPC: whether a task's Workflow
+ * Stage is presently proven by a Spec-referencing PR.
+ */
+export type TaskStageAuthority = {
+  /** `null` when the task has no Spec Linked Issue Role, or no PR references it. */
+  holdingPr: StageHoldingPr | null;
+  /**
+   * `true` when `holdingPr` currently governs the Workflow Stage — the next
+   * board-sync pass will (re)write it, so the Task Detail Panel must lock its
+   * stage selector and explain the stage using `holdingPr` instead of offering a
+   * write the sync would silently overwrite. Always `false` in `triage`: the
+   * periodic pass never re-derives a triaged task, so nothing contests a manual
+   * move out of it even when `holdingPr` is the very fact that put it there.
+   */
+  isCurrentStageGithubProven: boolean;
 };

@@ -54,6 +54,11 @@ vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   getTaskManagerStore: () => ({ tasks: managerTasks }),
   taskAgentStatus: () => 'idle',
+  // Statically imported by task-detail-panel.tsx even though these
+  // drag-and-drop tests never click a card (drag suppresses the click, so
+  // the panel never opens) — the mock still needs to shadow the real exports.
+  getTaskStore: (_projectId: string, taskId: string) => managerTasks.get(taskId),
+  getTaskGitWorktreeStore: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
@@ -216,8 +221,10 @@ function columnZone(label: string): Element {
 }
 
 function cardEl(name: string): Element {
-  const btn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent === name)!;
-  return btn.parentElement!; // sortable wrapper div
+  // The card name is a <span> (not a <button>): the whole card is the click
+  // target since Task Detail Panel ticket #40, not just its name.
+  const label = Array.from(host.querySelectorAll('span')).find((s) => s.textContent === name)!;
+  return label.parentElement!; // sortable wrapper div
 }
 
 describe('board drag-and-drop — every column, wide viewport', () => {
@@ -593,7 +600,7 @@ describe('board drag-and-drop — cross-column ghost preview', () => {
     const specZone = columnZone('Spec');
     const ghost = cardEl('card-a');
     expect(specZone.contains(ghost)).toBe(true);
-    const names = Array.from(specZone.querySelectorAll('button')).map((b) => b.textContent);
+    const names = Array.from(specZone.querySelectorAll('span')).map((b) => b.textContent);
     expect(names).toEqual(['card-a', 'card-x']);
     // And it left its source column.
     expect(columnZone('Unstaged').contains(ghost)).toBe(false);

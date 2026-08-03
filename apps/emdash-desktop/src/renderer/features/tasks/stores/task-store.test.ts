@@ -204,6 +204,18 @@ describe('TaskStore.updateBoardPosition', () => {
     expect(registeredTaskData(store)?.boardRank).toBe('m');
   });
 
+  it('leaves the task unranked when rank is null (the Task Detail Panel stage selector gesture)', async () => {
+    const task = makeTask({ workflowStage: 'idea', boardRank: 'a' });
+    const store = createUnprovisionedTask(task);
+    vi.mocked(rpc.tasks.updateTaskBoardPosition).mockResolvedValue(undefined);
+
+    await store.updateBoardPosition('implementing', null);
+
+    expect(registeredTaskData(store)?.workflowStage).toBe('implementing');
+    expect(registeredTaskData(store)?.boardRank).toBeUndefined();
+    expect(rpc.tasks.updateTaskBoardPosition).toHaveBeenCalledWith('task-1', 'implementing', null);
+  });
+
   it('rolls back stage and rank when the RPC call fails', async () => {
     const task = makeTask({ workflowStage: 'idea', boardRank: 'a' });
     const store = createUnprovisionedTask(task);
