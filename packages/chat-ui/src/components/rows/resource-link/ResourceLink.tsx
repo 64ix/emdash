@@ -20,27 +20,10 @@ import { useCommands } from '@components/contexts/CommandsContext';
 import { GenericFileIcon, IconError } from '@components/primitives/icons';
 import { resolveFileIconClass } from '@lib/file-icons';
 import { Show } from 'solid-js';
-import type { ChatResourceLink, ResourceTarget } from '@/model';
+import type { ChatResourceLink } from '@/model';
 import { iconWrap, pathText, rowClickable, sizeText, titleText } from './resource-link.css';
+import { secondaryLabel } from './secondary-label';
 import { vars } from '@styles/theme.css';
-
-// ── Secondary label ─────────────────────────────────────────────────────────
-
-function secondaryLabel(uri: string, target: ResourceTarget): string {
-  if (target.kind === 'workspace-file' || target.kind === 'local-file') {
-    return target.path;
-  }
-  if (target.kind === 'external') {
-    try {
-      return new URL(target.url).hostname;
-    } catch {
-      return target.url;
-    }
-  }
-  // opaque: show the scheme or the raw uri, capped
-  const colon = uri.indexOf(':');
-  return colon > 0 ? uri.slice(0, colon + 1) + '//' + '…' : uri;
-}
 
 // ── Size formatting ─────────────────────────────────────────────────────────
 
