@@ -3,6 +3,7 @@ import { events } from '@main/lib/events';
 import { planEventChannel } from '@shared/events/appEvents';
 import { createRPCController } from '@shared/lib/ipc/rpc';
 import { resolveWorkspace } from '../../projects/utils';
+import { previewLocalArtifact } from './artifact-preview';
 import { fileErrorToMessage, isPermissionDenied } from './file-errors';
 import { readWorkspaceImage } from './image-support';
 import { copyLocalFilesToWorkspace } from './local-imports';
@@ -138,6 +139,35 @@ export const workspaceFileSystemController = createRPCController({
       return err({ type: 'fs_error' as const, message: fileErrorToMessage(result.error) });
     }
     return ok({ path: result.data });
+  },
+
+  /**
+   * Preview a local chat artifact (spec #18 ticket #21). Read-only: never
+   * writes, never executes, and never trusts the renderer's own link
+   * classification — `candidatePath` is re-resolved and re-validated here
+   * from scratch (workspace/app-temp trust check, symlink-safe containment,
+   * size cap, and a magic-byte/binary-content sniff) regardless of what the
+   * caller believes about the path. See `previewLocalArtifact` for the full
+   * policy.
+   */
+  previewArtifact: async (
+    projectId: string,
+    workspaceId: string,
+    candidatePath: string,
+    confirmed: boolean
+  ) => {
+    const resolved = resolveWorkspaceFiles(projectId, workspaceId);
+    if (!resolved.success) return resolved;
+    const { env, fileSystem } = resolved.data;
+
+    return ok(
+      await previewLocalArtifact({
+        workspacePath: env.path,
+        fileSystem,
+        candidatePath,
+        confirmed,
+      })
+    );
   },
 
   copyLocalFiles: async (

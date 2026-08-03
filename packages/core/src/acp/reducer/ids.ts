@@ -50,6 +50,18 @@ export function makeToolId(turnId: string, toolCallId: string): string {
 }
 
 /**
+ * Stable resource-link item id.
+ * Format: `${turnId}:resource-link:${messageId}:${index}`
+ *
+ * `index` disambiguates multiple resource links carried by the same message
+ * (each ACP notification carries exactly one content block, so several
+ * `resource_link` chunks can share a `messageId`).
+ */
+export function makeResourceLinkId(turnId: string, messageId: string, index: number): string {
+  return `${turnId}:resource-link:${messageId}:${index}`;
+}
+
+/**
  * Stable tool group item id.
  * Format: `${firstChildId}:group`
  */

@@ -77,6 +77,7 @@ function itemPreviewLabel(item: TranscriptItem): string {
   if (item.kind === 'message') return boundedPreview(item.text);
   if (item.kind === 'thinking') return 'Thinking…';
   if (item.kind === 'tool-group') return boundedPreview(item.label);
+  if (item.kind === 'resource-link') return boundedPreview(item.title ?? item.name);
   return boundedPreview(item.title);
 }
 

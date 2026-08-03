@@ -145,6 +145,91 @@ describe('classifyChatLink', () => {
     });
   });
 
+  // ── local-artifact: absolute paths outside the workspace with a
+  //    previewable extension (ticket #21) ───────────────────────────────────
+
+  describe('local artifact candidates', () => {
+    it('classifies an absolute image path outside the workspace as local-artifact', () => {
+      expect(classify('/Users/dev/Desktop/chart.png')).toEqual({
+        kind: 'local-artifact',
+        path: '/Users/dev/Desktop/chart.png',
+      });
+    });
+
+    it('classifies an absolute markdown/csv/text path outside the workspace as local-artifact', () => {
+      expect(classify('/Users/dev/Desktop/notes.md')).toEqual({
+        kind: 'local-artifact',
+        path: '/Users/dev/Desktop/notes.md',
+      });
+      expect(classify('/Users/dev/Desktop/data.csv')).toEqual({
+        kind: 'local-artifact',
+        path: '/Users/dev/Desktop/data.csv',
+      });
+    });
+
+    it('classifies a drive-letter image path outside the workspace as local-artifact', () => {
+      expect(classify('D:\\Photos\\chart.png', 'C:/Users/dev/workspace')).toEqual({
+        kind: 'local-artifact',
+        path: 'D:/Photos/chart.png',
+      });
+    });
+
+    it('still blocks an absolute path outside the workspace with an unsupported extension', () => {
+      expect(classify('/etc/passwd')).toEqual({
+        kind: 'blocked',
+        reason: 'outside-workspace',
+        target: '/etc/passwd',
+      });
+    });
+
+    it('still blocks an absolute path outside the workspace with no extension', () => {
+      expect(classify('/Users/dev/Desktop/README')).toEqual({
+        kind: 'blocked',
+        reason: 'outside-workspace',
+        target: '/Users/dev/Desktop/README',
+      });
+    });
+
+    it('never offers local-artifact for a relative path that traverses outside the workspace, even with a previewable extension', () => {
+      const result = classify('docs/../../Desktop/chart.png');
+      expect(result).toEqual({
+        kind: 'blocked',
+        reason: 'outside-workspace',
+        target: '/Users/dev/Desktop/chart.png',
+      });
+    });
+
+    it('never offers local-artifact for a percent-encoded relative traversal with a previewable extension', () => {
+      const result = classify('docs%2f..%2f..%2fchart.png');
+      expect(result.kind).toBe('blocked');
+      expect((result as { reason: string }).reason).toBe('outside-workspace');
+    });
+
+    it('still blocks svg outside the workspace (active content risk; not previewed this increment)', () => {
+      expect(classify('/Users/dev/Desktop/icon.svg')).toEqual({
+        kind: 'blocked',
+        reason: 'outside-workspace',
+        target: '/Users/dev/Desktop/icon.svg',
+      });
+    });
+
+    it('still blocks pdf/executables outside the workspace', () => {
+      for (const path of ['/Users/dev/Desktop/doc.pdf', '/Users/dev/Desktop/installer.exe']) {
+        const result = classify(path);
+        expect(result.kind).toBe('blocked');
+        expect((result as { reason: string }).reason).toBe('outside-workspace');
+      }
+    });
+
+    it('has no active workspace -> stays blocked even for a previewable extension', () => {
+      expect(classify('/Users/dev/Desktop/chart.png', null)).toEqual({
+        kind: 'blocked',
+        reason: 'outside-workspace',
+        target: '/Users/dev/Desktop/chart.png',
+      });
+    });
+  });
+
   // ── external http(s) ────────────────────────────────────────────────────────
 
   describe('external http(s)', () => {
@@ -333,7 +418,7 @@ describe('classifyChatLink', () => {
     });
   });
 
-  // ── never falls through: every result is one of the three typed kinds ──────
+  // ── never falls through: every result is one of the four typed kinds ───────
 
   describe('exhaustiveness', () => {
     const inputs = [
@@ -345,13 +430,16 @@ describe('classifyChatLink', () => {
       '//evil.com',
       '',
       'not a url at all but plain prose text',
+      '/Users/dev/Desktop/chart.png',
     ];
 
     it.each(inputs)(
-      'always resolves to workspace-file, external-http, or blocked (%s)',
+      'always resolves to workspace-file, local-artifact, external-http, or blocked (%s)',
       (input) => {
         const result = classify(input);
-        expect(['workspace-file', 'external-http', 'blocked']).toContain(result.kind);
+        expect(['workspace-file', 'local-artifact', 'external-http', 'blocked']).toContain(
+          result.kind
+        );
       }
     );
   });

@@ -109,7 +109,9 @@ function fileEvent(node: ToolNode): FileEvent | null {
 
 function childrenOf(node: TranscriptItem | ToolNode): readonly ToolNode[] {
   if (node.kind === 'tool-group') return node.children;
-  if (node.kind === 'message' || node.kind === 'thinking') return [];
+  if (node.kind === 'message' || node.kind === 'thinking' || node.kind === 'resource-link') {
+    return [];
+  }
   return node.children ?? [];
 }
 
