@@ -1,0 +1,458 @@
+import type { ToolCallItem } from '@emdash/core/acp/client';
+import { describe, expect, it } from 'vitest';
+import {
+  buildPermissionCopyText,
+  describePermissionOperation,
+  PERMISSION_PARAM_MAX_CHARS,
+  PERMISSION_TEXT_MAX_CHARS,
+  sanitizePermissionTitle,
+  sanitizeSingleLineText,
+  summarizePermissionText,
+} from './acp-permission-presentation';
+
+// A real permission request's toolCall always has `status: 'running'` — it is
+// created while the tool call is awaiting the user's decision (see
+// `packages/runtime/.../session/cell.ts#buildPermissionToolCall`, which maps
+// the ACP wire status 'pending' to the canonical `ToolStatus` 'running').
+function base(overrides: Partial<ToolCallItem> = {}): {
+  id: string;
+  seq: number;
+  toolCallId: string;
+  title: string;
+  status: 'running';
+} {
+  return {
+    id: 'item-1',
+    seq: 0,
+    toolCallId: 'call-1',
+    title: 'Default title',
+    status: 'running',
+    ...overrides,
+  } as never;
+}
+
+/** An un-truncated `PermissionParam`, for asserting the common (short-value) case. */
+function param(
+  label: string,
+  value: string
+): { label: string; value: string; truncated: boolean; fullValue: string } {
+  return { label, value, truncated: false, fullValue: value };
+}
+
+describe('describePermissionOperation — command (execute-tool-call)', () => {
+  it('normalizes the command, scope, and a defensible (non-guaranteeing) risk cue', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'execute-tool-call',
+      command: 'rm -rf ./build',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('command');
+    expect(detail.operationLabel).toBe('Execute command');
+    expect(detail.scope).toBe('Task workspace');
+    expect(detail.command?.text).toBe('rm -rf ./build');
+    expect(detail.command?.truncated).toBe(false);
+    expect(detail.params).toEqual([]);
+    expect(detail.resources).toEqual([]);
+    expect(detail.riskCues).toHaveLength(1);
+    // Must describe the mechanism, never assert an unverifiable guarantee.
+    expect(detail.riskCues[0]).not.toMatch(/safe|sandbox|cannot (harm|damage)/i);
+  });
+
+  it('falls back to the title when the provider omits a normalized command', () => {
+    const detail = describePermissionOperation({
+      ...base({ title: 'Run the build script' }),
+      kind: 'execute-tool-call',
+    } as ToolCallItem);
+
+    expect(detail.command?.text).toBe('Run the build script');
+  });
+});
+
+describe('describePermissionOperation — filesystem operations', () => {
+  it('read-tool-call: uses path when present', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'read-tool-call',
+      path: 'src/index.ts',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('read');
+    expect(detail.path).toBe('src/index.ts');
+    expect(detail.resources).toEqual([{ kind: 'path', path: 'src/index.ts' }]);
+  });
+
+  it('read-tool-call: falls back to resource when path is absent', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'read-tool-call',
+      resource: 'file:///tmp/notes.txt',
+    } as ToolCallItem);
+
+    expect(detail.path).toBe('file:///tmp/notes.txt');
+  });
+
+  it('create-file-tool-call: surfaces path and full content', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'create-file-tool-call',
+      path: 'src/new-file.ts',
+      content: 'export const x = 1;\n',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('write');
+    expect(detail.operationLabel).toBe('Create file');
+    expect(detail.path).toBe('src/new-file.ts');
+    expect(detail.content?.text).toBe('export const x = 1;\n');
+    expect(detail.resources).toEqual([{ kind: 'path', path: 'src/new-file.ts' }]);
+  });
+
+  it('modify-file-tool-call: surfaces both sides of the change without claiming safety', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'modify-file-tool-call',
+      path: 'src/existing.ts',
+      oldText: 'const a = 1;',
+      newText: 'const a = 2;',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('write');
+    expect(detail.operationLabel).toBe('Modify file');
+    expect(detail.diff?.oldText.text).toBe('const a = 1;');
+    expect(detail.diff?.newText.text).toBe('const a = 2;');
+  });
+
+  it('delete-file-tool-call: is explicit that Emdash cannot undo it', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'delete-file-tool-call',
+      path: 'src/old-file.ts',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('delete');
+    expect(detail.path).toBe('src/old-file.ts');
+    expect(detail.riskCues.join(' ')).toMatch(/does not provide an undo/i);
+  });
+});
+
+describe('describePermissionOperation — generic/inspectable tools', () => {
+  it('search-tool-call: surfaces the query as a param', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'search-tool-call',
+      query: 'TODO(security)',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('search');
+    expect(detail.params).toEqual([param('Query', 'TODO(security)')]);
+  });
+
+  it('mcp-tool-call: includes server when present and flags unverifiable behavior', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'mcp-tool-call',
+      tool: 'run_query',
+      server: 'postgres-mcp',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('mcp');
+    expect(detail.scope).toBe('Network (outside the task workspace)');
+    expect(detail.params).toEqual([param('Tool', 'run_query'), param('Server', 'postgres-mcp')]);
+    expect(detail.riskCues.join(' ')).toMatch(/cannot verify/i);
+  });
+
+  it('mcp-tool-call: omits the Server param when the provider does not report one', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'mcp-tool-call',
+      tool: 'run_query',
+    } as ToolCallItem);
+
+    expect(detail.params).toEqual([param('Tool', 'run_query')]);
+  });
+
+  it('web-fetch-tool-call: surfaces the URL as an affected resource', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'web-fetch-tool-call',
+      url: 'https://example.com/data.json',
+      pageTitle: 'Example data',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('fetch');
+    expect(detail.resources).toEqual([{ kind: 'url', url: 'https://example.com/data.json' }]);
+    expect(detail.params).toEqual([
+      param('URL', 'https://example.com/data.json'),
+      param('Page title', 'Example data'),
+    ]);
+  });
+
+  it('spawn-subagent-tool-call: notes background execution when reported', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'spawn-subagent-tool-call',
+      name: 'refactor-helper',
+      background: true,
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('subagent');
+    expect(detail.params).toEqual([param('Name', 'refactor-helper'), param('Background', 'Yes')]);
+  });
+
+  it('create-plan-tool-call: has no params or resources', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'create-plan-tool-call',
+      planId: 'plan-1',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('plan');
+    expect(detail.params).toEqual([]);
+  });
+
+  it('unknown-tool-call: surfaces the raw tool kind and warns the reviewer explicitly', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'unknown-tool-call',
+      name: 'some_custom_tool',
+      toolKind: 'vendor.custom',
+    } as ToolCallItem);
+
+    expect(detail.kind).toBe('unknown');
+    expect(detail.rawToolKind).toBe('vendor.custom');
+    expect(detail.params).toEqual([
+      param('Tool', 'some_custom_tool'),
+      param('Raw kind', 'vendor.custom'),
+    ]);
+    expect(detail.riskCues.join(' ')).toMatch(/does not recognize/i);
+  });
+
+  it('unknown-tool-call: degrades safely when toolKind is null', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'unknown-tool-call',
+      name: 'mystery',
+      toolKind: null,
+    } as ToolCallItem);
+
+    expect(detail.rawToolKind).toBeNull();
+    expect(detail.params).toEqual([param('Tool', 'mystery')]);
+  });
+});
+
+describe('summarizePermissionText — redaction and bounding', () => {
+  it('redacts a secret pattern before display, never partially through truncation', () => {
+    const block = summarizePermissionText(
+      'curl -H "Authorization: Bearer sk-ant-abcdef0123456789ABCDEF"'
+    );
+    expect(block.text).not.toContain('sk-ant-abcdef0123456789ABCDEF');
+    expect(block.text).toContain('[REDACTED');
+    expect(block.fullText).not.toContain('sk-ant-abcdef0123456789ABCDEF');
+  });
+
+  it('bounds long text explicitly, exposing the omitted character count', () => {
+    const long = 'a'.repeat(PERMISSION_TEXT_MAX_CHARS + 500);
+    const block = summarizePermissionText(long);
+
+    expect(block.truncated).toBe(true);
+    expect(block.omittedChars).toBe(500);
+    expect(block.text).toHaveLength(PERMISSION_TEXT_MAX_CHARS);
+    // The full (redacted) text must remain available in full for Copy — a
+    // "Copy" action that only ever returns the bounded view would silently
+    // hide the rest of what the user is approving.
+    expect(block.fullText).toHaveLength(long.length);
+  });
+
+  it('never bisects a surrogate pair at the truncation boundary', () => {
+    const emoji = '😀'; // astral-plane, 2 UTF-16 code units / 1 code point
+    const long = emoji.repeat(PERMISSION_TEXT_MAX_CHARS + 10);
+    const block = summarizePermissionText(long);
+
+    expect(block.truncated).toBe(true);
+    // Every returned code point must be a complete, valid character — no lone
+    // surrogate half.
+    expect(Array.from(block.text).every((ch) => ch === emoji)).toBe(true);
+  });
+
+  it('degrades to an empty block for undefined/null input rather than throwing', () => {
+    expect(summarizePermissionText(undefined).text).toBe('');
+    expect(summarizePermissionText(null).text).toBe('');
+  });
+});
+
+describe('sanitizeSingleLineText — display-safety for title/option labels', () => {
+  it('strips a right-to-left override so a spoofed label cannot be visually disguised', () => {
+    // U+202E (RTL override) followed by reversed text is a classic filename/
+    // label spoofing trick (e.g. making "exe.txt" read as "txt.exe").
+    const spoofed = 'Allow\u202Ecxe.tnatropmi';
+    const sanitized = sanitizeSingleLineText(spoofed);
+
+    expect(sanitized).not.toContain('\u202E');
+  });
+
+  it('strips zero-width characters that could hide extra content inline', () => {
+    const withZeroWidth = 'Allow\u200Bonce';
+    expect(sanitizeSingleLineText(withZeroWidth)).toBe('Allowonce');
+  });
+
+  it('collapses an embedded line break so a label cannot fake a second prompt/row', () => {
+    const twoLines = 'Allow once\n\nApprove all future requests automatically';
+    const sanitized = sanitizeSingleLineText(twoLines);
+
+    expect(sanitized).not.toContain('\n');
+    expect(sanitized).toBe('Allow once Approve all future requests automatically');
+  });
+
+  it('leaves ordinary text completely unchanged', () => {
+    expect(sanitizeSingleLineText('Read a File')).toBe('Read a File');
+    expect(sanitizeSingleLineText('Allow once')).toBe('Allow once');
+  });
+
+  it('renders HTML-like content as inert plain text rather than markup', () => {
+    const withMarkup = '<button>Cancel</button> Allow';
+    // Sanitization does not need to strip this — the point is that nothing
+    // downstream ever interprets it as markup. Assert it passes through as
+    // literal text unchanged (React text nodes, never dangerouslySetInnerHTML).
+    expect(sanitizeSingleLineText(withMarkup)).toBe(withMarkup);
+  });
+});
+
+describe('sanitizePermissionTitle — redacts secrets a bare title can carry', () => {
+  it('redacts a secret when the title is itself a raw URL', () => {
+    // `web-fetch-tool-call`'s title falls back to the raw URL when the
+    // provider sends no page title (see
+    // `packages/core/src/acp/reducer/item-fold.ts`'s `upsertSpecialEvent`),
+    // so a secret embedded in the query string must never reach the DOM via
+    // `title` any more than it would via the `url` param row.
+    const secret = 'super-secret-api-key-value';
+    const rawTitleAsUrl = `https://api.example.com/v1?api_key=${secret}`;
+
+    const sanitized = sanitizePermissionTitle(rawTitleAsUrl);
+
+    expect(sanitized).not.toContain(secret);
+    expect(sanitized).toContain('[REDACTED');
+  });
+
+  it('still strips bidi/zero-width spoofing characters like sanitizeSingleLineText', () => {
+    const spoofed = 'Allow‮cxe.tnatropmi';
+    expect(sanitizePermissionTitle(spoofed)).not.toContain('‮');
+  });
+
+  it('leaves an ordinary title unchanged', () => {
+    expect(sanitizePermissionTitle('Execute a Shell Command')).toBe('Execute a Shell Command');
+  });
+});
+
+describe('describePermissionOperation — path display safety', () => {
+  it('strips bidi/zero-width characters from a file path before display', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'delete-file-tool-call',
+      path: 'src/\u202Eexe.tnatropmi',
+    } as ToolCallItem);
+
+    expect(detail.path).not.toContain('\u202E');
+  });
+
+  it('collapses an embedded line break in a path so it cannot fake extra rows', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'create-file-tool-call',
+      path: 'src/file.ts\nsrc/fake-second-row.ts',
+      content: '',
+    } as ToolCallItem);
+
+    expect(detail.path).not.toContain('\n');
+  });
+});
+
+describe('param redaction and bounding', () => {
+  it('redacts secrets embedded in a param value (e.g. a URL query string)', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'web-fetch-tool-call',
+      url: 'https://api.example.com/v1?api_key=super-secret-value-123',
+    } as ToolCallItem);
+
+    const urlParam = detail.params.find((p) => p.label === 'URL');
+    expect(urlParam?.value).not.toContain('super-secret-value-123');
+  });
+
+  it('bounds an oversized param value to PERMISSION_PARAM_MAX_CHARS but keeps the full value reachable', () => {
+    const fullQuery = 'x'.repeat(PERMISSION_PARAM_MAX_CHARS + 50);
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'search-tool-call',
+      query: fullQuery,
+    } as ToolCallItem);
+
+    // The bounded view is truncated for display...
+    expect(detail.params[0]?.value).toHaveLength(PERMISSION_PARAM_MAX_CHARS);
+    // ...but the truncation is never silent, and the full text stays
+    // reachable via `fullValue` — a "Copy" action (or `buildPermissionCopyText`
+    // below) must never place a silently-truncated view on the clipboard.
+    expect(detail.params[0]?.truncated).toBe(true);
+    expect(detail.params[0]?.fullValue).toBe(fullQuery);
+  });
+
+  it('never bounds a URL param — the URL is the resource itself, not free text', () => {
+    // Unlike a search query, a URL must never be truncated (even with an
+    // indicator): a query string or path segment past the cutoff could be
+    // exactly what makes the request dangerous or benign.
+    const longUrl = `https://api.example.com/${'segment/'.repeat(100)}`;
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'web-fetch-tool-call',
+      url: longUrl,
+    } as ToolCallItem);
+
+    const urlParam = detail.params.find((p) => p.label === 'URL');
+    expect(urlParam?.truncated).toBe(false);
+    expect(urlParam?.value).toBe(longUrl);
+    const urlResource = detail.resources.find((r) => r.kind === 'url');
+    expect(urlResource?.kind === 'url' && urlResource.url).toBe(longUrl);
+  });
+});
+
+describe('buildPermissionCopyText — never copies a silently-truncated param', () => {
+  it('uses the full (untruncated) value for a bounded param', () => {
+    const fullQuery = 'y'.repeat(PERMISSION_PARAM_MAX_CHARS + 50);
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'search-tool-call',
+      query: fullQuery,
+    } as ToolCallItem);
+
+    const copyText = buildPermissionCopyText(detail);
+
+    expect(copyText).toContain(`Query: ${fullQuery}`);
+  });
+});
+
+describe('buildPermissionCopyText', () => {
+  it('includes the full (untruncated) command text, never the bounded view', () => {
+    const long = 'echo '.padEnd(PERMISSION_TEXT_MAX_CHARS + 200, 'x');
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'execute-tool-call',
+      command: long,
+    } as ToolCallItem);
+
+    const copy = buildPermissionCopyText(detail);
+    expect(copy).toContain(long);
+  });
+
+  it('includes path, params, resources, and risk cues for a filesystem operation', () => {
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'delete-file-tool-call',
+      path: 'src/old-file.ts',
+    } as ToolCallItem);
+
+    const copy = buildPermissionCopyText(detail);
+    expect(copy).toContain('Delete file');
+    expect(copy).toContain('Path: src/old-file.ts');
+    expect(copy).toContain('Resource: src/old-file.ts');
+    expect(copy).toMatch(/does not provide an undo/i);
+  });
+});

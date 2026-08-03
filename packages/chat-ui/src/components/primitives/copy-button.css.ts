@@ -41,6 +41,15 @@ const buttonBase = style({
     '&:hover': { color: vars.fg },
     '&:focus-visible': { opacity: 1 },
   },
+  // Hover has no equivalent on touch, so a purely hover-revealed button is
+  // undiscoverable there. Keep it visible by default on devices that report
+  // no hover capability at all, instead of relying on a tap that may or may
+  // not simulate `:hover`.
+  '@media': {
+    '(hover: none)': {
+      opacity: 1,
+    },
+  },
 });
 
 export const copyButtonOverlay = style([
@@ -66,5 +75,19 @@ export const copyButtonInline = style([
     selectors: {
       [`${messageGroup}:hover &`]: { opacity: 1 },
     },
+  },
+]);
+
+/**
+ * Always-visible inline variant (no group-hover reveal). Used in toolbars
+ * where the action is a primary affordance rather than a hover-revealed
+ * extra — e.g. the diff card footer.
+ */
+export const copyButtonToolbar = style([
+  buttonBase,
+  {
+    gap: '4px',
+    fontSize: '0.75rem',
+    opacity: 1,
   },
 ]);

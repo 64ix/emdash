@@ -45,6 +45,22 @@ export type NormalizedEvent =
       text: string;
     }
   | {
+      /**
+       * A `resource_link` content block found inside a user/agent message
+       * chunk. Emitted as a standalone row (never a tool-call child). Fields
+       * mirror the ACP `ResourceLink` schema verbatim; no path resolution
+       * happens at this layer.
+       */
+      kind: 'resource_link';
+      messageId: string | null;
+      uri: string;
+      name: string;
+      title?: string;
+      description?: string;
+      mimeType?: string;
+      size?: number;
+    }
+  | {
       kind: 'tool_call';
       toolCallId: string;
       title: string;

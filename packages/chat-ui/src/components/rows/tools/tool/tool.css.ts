@@ -1,27 +1,8 @@
 import { style } from '@vanilla-extract/css';
-import { textShimmer } from '@styles/effects.css';
 import { sx } from '@styles/sprinkles.css';
 import { vars } from '@styles/theme.css';
-import { createVariableThemeContract } from '@styles/variable-theme-contract.css';
 
-// ── Runtime geometry contract ─────────────────────────────────────────────────
-
-export type ToolStyleVars = { rowH: number };
-
-export const toolVars = createVariableThemeContract<ToolStyleVars>({ rowH: null });
-
-export const toolRoot = style([
-  sx({ display: 'flex', alignItems: 'center', borderColor: 'border' }),
-  // overflow:hidden ensures content never escapes the reserved rowH.
-  { height: toolVars.rowH, overflow: 'hidden' },
-]);
-
-export const toolRow = style([
-  sx({ display: 'flex', alignItems: 'center', gap: '1.5', color: 'fgPassive', userSelect: 'none' }),
-  // min-width:0 lets flex children shrink below their intrinsic width so
-  // text-overflow ellipsis can take effect on the name and summary spans.
-  { minWidth: 0 },
-]);
+// ── Header content ────────────────────────────────────────────────────────────
 
 export const toolName = style({
   fontSize: vars.typeBodyFontSize,
@@ -34,6 +15,7 @@ export const toolName = style({
 
 export const toolSummary = style([
   {
+    marginLeft: '6px',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -42,24 +24,87 @@ export const toolSummary = style([
   toolName,
 ]);
 
-export const toolStatusIcon = style({
-  marginLeft: 'auto',
-  display: 'inline-flex',
-  flexShrink: 0,
+// ── Body ──────────────────────────────────────────────────────────────────────
+
+export const toolBody = style({
+  boxSizing: 'border-box',
 });
 
-export const toolPermissionIcon = style([
-  toolStatusIcon,
+export const toolSection = style({
+  display: 'flex',
+  flexDirection: 'column',
+});
+
+export const toolSectionLabel = style([
+  sx({ color: 'fgPassive', fontSize: '11', fontWeight: 'medium' }),
+  { textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '2px' },
+]);
+
+// ── Params ────────────────────────────────────────────────────────────────────
+
+export const toolParamRow = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+  minWidth: 0,
+});
+
+export const toolParamLabel = style([
+  sx({ color: 'fgMuted', fontSize: '12' }),
+  { flexShrink: 0, minWidth: '64px' },
+]);
+
+export const toolParamValue = style({
+  fontSize: vars.typeBodyFontSize,
+  color: vars.fg,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+});
+
+// ── Result / error detail ─────────────────────────────────────────────────────
+
+export const toolDetailBlock = style({
+  boxSizing: 'border-box',
+  fontSize: vars.typeCodeFontSize,
+  fontWeight: vars.typeCodeFontWeight,
+  fontFamily: vars.typeCodeFontFamily,
+  color: vars.fg,
+});
+
+export const toolDetailLine = style({
+  whiteSpace: 'pre',
+});
+
+export const toolMutedLine = sx({ color: 'fgMuted', fontSize: '12' });
+
+// ── Resources ─────────────────────────────────────────────────────────────────
+
+export const toolResourceLink = style([
+  sx({ color: 'link', fontSize: '13' }),
   {
-    color: '#eab308',
+    display: 'flex',
+    alignItems: 'center',
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    textAlign: 'left',
+    cursor: 'pointer',
+    textDecoration: 'none',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    width: '100%',
+    selectors: {
+      '&:hover': { textDecoration: 'underline' },
+    },
   },
 ]);
 
-export const toolErrorIcon = style([
-  toolStatusIcon,
-  {
-    color: vars.fgError,
-  },
-]);
+// ── Actions ───────────────────────────────────────────────────────────────────
 
-export { textShimmer };
+export const toolActionsRow = style({
+  display: 'flex',
+  alignItems: 'center',
+});

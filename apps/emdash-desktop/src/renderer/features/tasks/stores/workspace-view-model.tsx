@@ -1,5 +1,6 @@
 import type { ILifecycle } from '@emdash/shared';
 import { computed, makeAutoObservable, observable, reaction, runInAction } from 'mobx';
+import { ChangesRailViewStore } from '@renderer/features/conversations/acp/changes/changes-rail-store';
 import { DefaultConversationSeeder } from '@renderer/features/conversations/default-conversation-seeder';
 import type { TaskTabContext } from '@renderer/features/tabs/core/task-tab-context';
 import { getDiffTabManager } from '@renderer/features/tasks/diff-view/stores/diff-tab-manager';
@@ -47,6 +48,7 @@ export class WorkspaceViewModel implements ILifecycle {
   readonly paneLayout: ReturnType<typeof taskTabView.createPaneLayoutStore>;
   readonly terminalTabs: TerminalTabViewStore;
   readonly editorView: EditorViewStore;
+  readonly changesRail: ChangesRailViewStore;
 
   /**
    * Returns the focused pane's PaneStore.
@@ -118,11 +120,13 @@ export class WorkspaceViewModel implements ILifecycle {
     this._seeder = new DefaultConversationSeeder(this.taskId, this.paneLayout);
     this.terminalTabs = new TerminalTabViewStore(() => terminalRegistry.get(this.taskId) ?? null);
     this.editorView = new EditorViewStore(this.paneLayout, taskData.projectId, workspaceId);
+    this.changesRail = new ChangesRailViewStore();
 
     makeAutoObservable(this, {
       paneLayout: false,
       terminalTabs: false,
       editorView: false,
+      changesRail: false,
       diffView: observable.ref,
       activeRenderer: computed,
     });
@@ -174,6 +178,7 @@ export class WorkspaceViewModel implements ILifecycle {
       terminals: this.terminalTabs.snapshot,
       editor: this.editorView.snapshot,
       diffView: this.diffView?.snapshot ?? this._savedDiffViewSnapshot,
+      changesRail: this.changesRail.snapshot,
     };
   }
 
@@ -204,6 +209,9 @@ export class WorkspaceViewModel implements ILifecycle {
     }
     if (savedSnapshot.diffView) {
       this._savedDiffViewSnapshot = savedSnapshot.diffView;
+    }
+    if (savedSnapshot.changesRail) {
+      this.changesRail.restoreSnapshot(savedSnapshot.changesRail);
     }
   }
 

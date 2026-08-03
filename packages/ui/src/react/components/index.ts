@@ -27,7 +27,14 @@ export type {
   PermissionBandProps,
   ComposerPermissionRequest,
   ComposerPermissionOption,
+  PermissionResolutionView,
 } from './chat-composer/permission-band';
+export type {
+  ComposerPermissionOperation,
+  ComposerPermissionParam,
+  ComposerPermissionResource,
+  ComposerPermissionTextBlock,
+} from './chat-composer/permission-operation-details';
 export { ConfirmationDialog, type ConfirmationDialogProps } from './confirmation-dialog';
 export { ImageViewerDialog, type ImageViewerDialogProps } from './image-viewer';
 export { MermaidViewerDialog, type MermaidViewerDialogProps } from './mermaid-viewer';

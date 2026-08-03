@@ -15,7 +15,7 @@
  * Font-face @imports stay in chat.module.css (to be renamed chat-fonts.css).
  */
 
-import { globalStyle } from '@vanilla-extract/css';
+import { globalStyle, style } from '@vanilla-extract/css';
 
 // Border-box sizing — prevents padding from bloating element dimensions.
 globalStyle('*, *::before, *::after', {
@@ -37,4 +37,35 @@ globalStyle('ul, ol', {
 globalStyle('table', {
   borderCollapse: 'separate',
   borderSpacing: 0,
+});
+
+/**
+ * resetButton — baseline reset for native <button> elements used as
+ * clickable transcript rows/headers (collapse headers, diff/file-op
+ * open-in-editor rows, resource-link rows). These previously rendered as
+ * `<div role="button">` with no native button chrome to fight; converting
+ * them to real buttons (ticket #26) needs the subset of Tailwind preflight's
+ * button reset this file otherwise deliberately skips — the desktop app
+ * happens to load Tailwind globally (which already resets these), but
+ * chat-ui's own Storybook/browser tests do not, so the reset belongs here.
+ *
+ * Compose as the FIRST entry in `style([resetButton, ...])` so a component's
+ * own declarations (color, cursor, gap, etc.) still win on any overlap.
+ * Intentionally does not touch `outline` — the browser's default
+ * `:focus-visible` ring (or a component's own explicit one) must keep
+ * showing focus.
+ */
+export const resetButton = style({
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  background: 'none',
+  border: 'none',
+  margin: 0,
+  padding: 0,
+  textAlign: 'left',
+  fontFamily: 'inherit',
+  fontWeight: 'inherit',
+  lineHeight: 'inherit',
+  letterSpacing: 'inherit',
+  color: 'inherit',
 });

@@ -11,11 +11,16 @@
 import { Show } from 'solid-js';
 import { IconCheck, IconCopy } from './icons';
 import { createClipboard } from './use-clipboard';
-import { copyButtonInline, copyButtonOverlay } from './copy-button.css';
+import { copyButtonInline, copyButtonOverlay, copyButtonToolbar } from './copy-button.css';
 
 export type CopyButtonProps = {
   text: string;
-  variant: 'inline' | 'overlay';
+  /**
+   * 'inline'  — message footer: hover-revealed text label + icon.
+   * 'overlay' — code blocks: hover-revealed, icon-only, absolute positioned.
+   * 'toolbar' — always-visible text label + icon (e.g. the diff card footer).
+   */
+  variant: 'inline' | 'overlay' | 'toolbar';
   /** aria-label prefix shown before 'Copy' / 'Copied'. Defaults to 'Copy'. */
   label?: string;
 };
@@ -40,17 +45,25 @@ export function CopyButton(props: CopyButtonProps) {
     );
   }
 
+  // 'toolbar' shows its own label text (e.g. "Copy diff"); 'inline' keeps the
+  // original fixed "Copy"/"Copied" wording (the aria-label already carries the
+  // context-specific label for assistive tech).
+  const visibleText = () => {
+    if (copied()) return 'Copied';
+    return props.variant === 'toolbar' ? label() : 'Copy';
+  };
+
   return (
     <button
       type="button"
-      class={copyButtonInline}
+      class={props.variant === 'toolbar' ? copyButtonToolbar : copyButtonInline}
       aria-label={ariaLabel()}
       onClick={() => copy(props.text)}
     >
       <Show when={copied()} fallback={<IconCopy />}>
         <IconCheck />
       </Show>
-      <span>{copied() ? 'Copied' : 'Copy'}</span>
+      <span>{visibleText()}</span>
     </button>
   );
 }

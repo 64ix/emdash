@@ -1,13 +1,32 @@
-import type { ChatContext, ChatImageAttachment, ChatState, ChatView } from '@emdash/chat-ui';
-import { connectSession, createChatState, pinTopMode } from '@emdash/chat-ui';
+import type {
+  ChatContext,
+  ChatImageAttachment,
+  ChatState,
+  ChatView,
+  OutlineEntry,
+  ReadWatermark,
+  ScrollMode,
+  ScrollToItemOptions,
+  TranscriptSearchResult,
+} from '@emdash/chat-ui';
+import {
+  advanceSearchResultIndex,
+  captureReadWatermark,
+  connectSession,
+  countNewTranscriptEvents,
+  createChatState,
+  deriveTranscriptOutline,
+  pinTopMode,
+  searchTranscript,
+} from '@emdash/chat-ui';
 import type {
   AttachmentMimeType,
   AttachmentRef,
-  PromptAttachment,
   PromptDraft,
   PromptInput,
   QueuedPrompt,
 } from '@emdash/core/acp/client';
+import { err, ok } from '@emdash/shared';
 import type {
   CommandItem,
   ComposerEffortOption,
@@ -16,7 +35,7 @@ import type {
   ComposerQueuedPrompt,
 } from '@emdash/ui/react/components';
 import type { BlobSource } from '@emdash/wire';
-import { action, computed, makeObservable, observable, runInAction, toJS } from 'mobx';
+import { action, computed, makeObservable, observable, reaction, runInAction, toJS } from 'mobx';
 // TODO(conversations-extraction): Inject task/workspace lookups instead of importing task stores.
 import { asProvisioned, getTaskStore } from '@renderer/features/tasks/stores/task-selectors';
 import { workspaceRegistry } from '@renderer/features/tasks/stores/workspace-registry';
@@ -31,7 +50,56 @@ import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { log } from '@renderer/utils/logger';
 import { conversationRegistry } from '../stores/conversation-registry';
+import {
+  buildAttentionQueue,
+  deriveErrorAttentionSources,
+  type AttentionItem,
+} from './acp-attention-queue';
+import { AcpChatSearchController } from './acp-chat-search-controller';
+import { createStopController, type StopController } from './acp-chat-stop-controller';
+import { AcpHistoryPagination } from './acp-history-pagination';
+import {
+  describePermissionOperation,
+  sanitizePermissionTitle,
+  sanitizeSingleLineText,
+  type PermissionOperationDetail,
+} from './acp-permission-presentation';
+import {
+  PermissionResolutionController,
+  type PermissionResolutionEntry,
+} from './acp-permission-resolution';
+import type {
+  AcpPromptAttachment,
+  AcpSubmissionSessionPort,
+  AcpSubmissionSnapshot,
+  FailedAcpSubmission,
+} from './acp-submission-recovery';
+import {
+  AcpSubmissionController,
+  failedSubmissionPreview,
+  resultError,
+} from './acp-submission-recovery';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
+import {
+  buildChangesFootprint,
+  EMPTY_CHANGES_FOOTPRINT,
+  type ChangesFootprint,
+} from './changes/acp-changes-footprint';
+
+export type {
+  AcpPromptAttachment,
+  AcpSubmissionKind,
+  AcpSubmissionSnapshot,
+  FailedAcpSubmission,
+} from './acp-submission-recovery';
+
+/**
+ * Page size for every ACP history fetch: the initial window, each
+ * reach-start-triggered older page, and the post-turn-commit refresh window.
+ * Kept as a single constant so all three requests stay consistent with the
+ * `AcpHistoryPagination` cursor bookkeeping.
+ */
+const HISTORY_PAGE_SIZE = 100;
 
 export interface AgentAffordances {
   isWorking: boolean;
@@ -41,16 +109,13 @@ export interface AgentAffordances {
   canCancel: boolean;
 }
 
-type StoredPromptAttachment = Extract<PromptAttachment, { type: 'attachment' }>;
-
-export type AcpPromptAttachment = {
-  ref: StoredPromptAttachment;
-  previewUrl?: string;
-};
-
 type PermissionQueueItem = {
   requestId: string;
   title: string;
+  /** Stable transcript item id for the originating tool call — see `scrollToTranscriptItem`. */
+  itemId: string;
+  /** Normalized command/path/params/scope/resources/risk-cues — see `describePermissionOperation`. */
+  operation: PermissionOperationDetail;
   options: Array<{ optionId: string; name: string; kind: string }>;
 };
 
@@ -67,6 +132,107 @@ export class AcpChatStore {
   loadError: AcpLoadError | null = null;
   messageCount = 0;
   draftText = '';
+  /**
+   * Task-scoped Changes footprint (edited/read files), reconciled from the
+   * canonical transcript (persisted + active turns) and the task's current
+   * Git status. Recomputed via `_syncChangesFootprint` — see that method for
+   * every place the transcript or Git status can change. Never persisted;
+   * see `ChangesRailViewStore` for the view preferences that are.
+   */
+  changesFootprint: ChangesFootprint = EMPTY_CHANGES_FOOTPRINT;
+  /**
+   * Count of transcript turns that have arrived since the user last left tail
+   * mode (see `setAtBottom` / `state/reading-position.ts`). Zero while
+   * following the tail. Recomputed via `_syncNewEventCount` at every point
+   * the transcript can grow — mirrors `changesFootprint`'s explicit-field
+   * pattern rather than a lazy `computed` getter, deliberately: this value's
+   * inputs (`chatState.transcript.state`) are Solid signals, not MobX
+   * observables, so a `computed` reading them directly would go stale once
+   * "hot" (observed) with no MobX-tracked dependency to invalidate it on.
+   */
+  newEventCount = 0;
+  /**
+   * Outstanding permission requests from the live session, normalized/
+   * sanitized for display — ticket #32. Recomputed via `_syncPermissionQueue`
+   * at every point `session.sessionState.current().pendingPermissions` can
+   * change (session (re)bind, every `sessionState.onChange` firing), for the
+   * same reason `outline`/`newEventCount`/`attentionQueue` are explicit
+   * fields rather than lazy `computed` getters: `session.sessionState.current()`
+   * is a plain replicated store, not itself MobX-tracked, so a `computed`
+   * reading it (the only tracked dependency being `session` itself) caches
+   * its first evaluation forever once continuously observed — exactly what
+   * the composer's permission band does in production. Shipped as a
+   * `computed` by #32; caught and fixed during #33's review (see
+   * `acp-chat-store.test.ts`'s "kept hot by an observer" regression test).
+   */
+  permissionQueue: PermissionQueueItem[] = [];
+  /**
+   * Transcript outline (one entry per prompt and per turn) — ticket #34.
+   * Recomputed via `_syncOutline` at every point the transcript can grow, for
+   * the same reason `newEventCount` is an explicit field rather than a lazy
+   * `computed`: its inputs (`chatState.transcript.state`,
+   * `chatState.session.state.pendingPrompt`) are Solid signals, not MobX
+   * observables. A `computed` reading only those has ZERO MobX-tracked
+   * dependencies, so MobX caches its first evaluation once observed and never
+   * invalidates it — the outline froze as soon as the panel had rendered once.
+   * Shipped as a `computed` by #34; caught during #37's review.
+   */
+  outline: readonly OutlineEntry[] = [];
+  /**
+   * One deterministically ordered queue combining outstanding permission
+   * requests, failed submissions, and actionable turn/tool errors from the
+   * latest activity (ticket #33, spec #18) — see `acp-attention-queue.ts` for
+   * the ordering/dedup rules and the scoping decision behind "actionable".
+   * Recomputed via `_syncAttentionQueue` at every point one of those three
+   * sources can change: bootstrap, history refresh/load-older, live
+   * active-turn updates, session-state updates (permissions), and every
+   * failed-submission transition. An explicitly-resynced `observable.ref`
+   * field rather than a `computed`, for the same reason as `outline` above —
+   * one of its inputs (`chatState.transcript.state`) is Solid-signal-backed,
+   * and another (`session.sessionState.current()`) is a plain replicated
+   * store with no MobX tracking of its own, so a `computed` reading either
+   * directly would go stale the moment something else keeps it "hot" (see
+   * this ticket's PR notes for the reproduction).
+   */
+  attentionQueue: readonly AttentionItem[] = [];
+  /**
+   * Stable id (see `AttentionItem.id`) of the attention item traversal
+   * currently focuses, or `null` before any traversal / once the previously
+   * focused item leaves the queue (resolved, cancelled, or superseded) — see
+   * `attentionFocusedItem`, which falls back to the queue's front (highest
+   * priority) item whenever this doesn't resolve to a live entry. Tracked by
+   * id, not index: the queue can reorder/shrink out from under an open
+   * traversal, and re-deriving "the same index" after that would silently
+   * refocus a different item than the one the user was looking at.
+   */
+  attentionFocusId: string | null = null;
+  /**
+   * True while a "return to reading position" jump (see `visitNewestEvent`)
+   * is available. Ticket #37: visiting the newest event must not lose the
+   * exact prior item + offset.
+   */
+  canReturnToReadingPosition = false;
+  /**
+   * Bumped on every `AcpChatSearchController` state change so `searchOpen`/
+   * `searchQuery`/`searchResults`/`searchCurrentIndex` (MobX computeds) have
+   * an observable dependency — mirrors `permissionResolutionVersion`: the
+   * controller itself is framework-free and holds no MobX-observable state
+   * of its own, so a computed that only ever read its plain fields directly
+   * would have zero MobX-tracked dependencies (the #34 staleness bug this
+   * file's other fields work around a different way — see `outline`'s doc).
+   * Public only because `makeObservable`'s annotations map requires a plain
+   * field; use the `search*` getters instead of reading this directly.
+   */
+  searchVersion = 0;
+  /**
+   * True while a Stop/cancel request for the active turn is in flight.
+   * Mirrored into `chatState.session.setStopPending` so the transcript's
+   * active-message Stop control can disable itself and communicate a busy
+   * state (see acp-chat-stop-controller.ts).
+   */
+  isCancelling = false;
+  /** True while an older-history page requested via `loadOlderHistory` is in flight. */
+  isLoadingOlderHistory = false;
 
   private _view: ChatView | null = null;
   private _bootstrapped = false;
@@ -74,6 +240,32 @@ export class AcpChatStore {
   private _draftRev = 0;
   private _pendingDraftRev: number | null = null;
   private _draftTimer: number | null = null;
+  private readonly _submissions: AcpSubmissionController;
+  private readonly _stopController: StopController;
+  private readonly _historyPagination = new AcpHistoryPagination();
+  /**
+   * Frozen "seen up to here" baseline captured when the user leaves tail
+   * mode; null while following the tail (or before it is first left). See
+   * `setAtBottom` and `state/reading-position.ts`.
+   */
+  private _readWatermark: ReadWatermark | null = null;
+  /**
+   * The exact scroll intent to restore when the user is done visiting the
+   * newest event — set by `visitNewestEvent`, consumed by
+   * `returnToReadingPosition`.
+   */
+  private _returnAnchor: ScrollMode | null = null;
+  private readonly _permissionResolution: PermissionResolutionController;
+  private readonly _search: AcpChatSearchController<TranscriptSearchResult>;
+  /**
+   * Bumped on every `PermissionResolutionController` state change so
+   * `permissionResolution` (a MobX computed) has an observable dependency —
+   * the controller itself is framework-free and holds no observable state.
+   * Public only because MobX's `makeObservable` annotations map requires a
+   * plain (non-private) data field; not meant for external reads — use
+   * `permissionResolution` instead.
+   */
+  permissionResolutionVersion = 0;
 
   constructor(
     readonly conversationId: string,
@@ -85,6 +277,57 @@ export class AcpChatStore {
     registerConversationCommands(conversationId, () =>
       this.commands.map((command) => command.name)
     );
+    this._submissions = new AcpSubmissionController(() => this._sessionPort(), {
+      onDirectStart: (snapshot) => this._showOptimisticPrompt(snapshot),
+      onFailure: (failure) => this._handleSubmissionFailure(failure),
+      onDiscard: (discarded) => this._releaseSubmissionAttachments(discarded),
+    });
+
+    this._stopController = createStopController(
+      () => this.session?.cancelTurn() ?? Promise.resolve(ok<void>()),
+      {
+        onBusyChange: (busy) => {
+          runInAction(() => {
+            this.isCancelling = busy;
+          });
+          this.chatState.session.setStopPending(busy);
+        },
+        onError: (error) => this._toastError('Failed to stop', error),
+      }
+    );
+
+    this._permissionResolution = new PermissionResolutionController(
+      (requestId, optionId) =>
+        this.session?.resolvePermission(requestId, optionId) ??
+        Promise.resolve(err(new Error('ACP session is not connected'))),
+      {
+        isPending: (requestId) => this.permissionQueue.some((item) => item.requestId === requestId),
+        onChange: () =>
+          runInAction(() => {
+            this.permissionResolutionVersion += 1;
+          }),
+      }
+    );
+
+    this._search = new AcpChatSearchController(
+      () => {
+        const transcript = this.chatState.transcript.state;
+        return {
+          committedTurns: transcript.committedTurns,
+          activeTurn: transcript.activeTurnSnapshot,
+          pendingPrompt: this.chatState.session.state.pendingPrompt,
+        };
+      },
+      searchTranscript,
+      advanceSearchResultIndex,
+      {
+        onChange: () =>
+          runInAction(() => {
+            this.searchVersion += 1;
+          }),
+        onJump: (itemId) => void this.scrollToTranscriptItem(itemId, { align: 'start' }),
+      }
+    );
 
     makeObservable(this, {
       session: observable.ref,
@@ -92,6 +335,16 @@ export class AcpChatStore {
       loadError: observable,
       messageCount: observable,
       draftText: observable,
+      isCancelling: observable,
+      isLoadingOlderHistory: observable,
+      changesFootprint: observable.ref,
+      newEventCount: observable,
+      permissionQueue: observable.ref,
+      attentionQueue: observable.ref,
+      attentionFocusId: observable,
+      canReturnToReadingPosition: observable,
+      permissionResolutionVersion: observable,
+      searchVersion: observable,
       model: computed,
       modelOptions: computed,
       permissionMode: computed,
@@ -99,18 +352,39 @@ export class AcpChatStore {
       effort: computed,
       effortOptions: computed,
       commands: computed,
-      permissionQueue: computed,
+      permissionResolution: computed,
       queuedPrompts: computed,
       usage: computed,
       affordances: computed,
       isEmpty: computed,
+      failedSubmissions: computed,
+      outline: observable.ref,
+      attentionFocusedItem: computed,
+      searchOpen: computed,
+      searchQuery: computed,
+      searchResults: computed,
+      searchCurrentIndex: computed,
+      searchCurrentResult: computed,
+      searchHistoryExhausted: computed,
       submitPrompt: action,
       queuePrompt: action,
+      retryFailedSubmission: action,
+      editFailedSubmission: action,
+      discardFailedSubmission: action,
+      focusNextAttentionItem: action,
+      focusPreviousAttentionItem: action,
       stop: action,
       setModel: action,
       setMode: action,
       setEffort: action,
       resolvePermission: action,
+      retryPermissionResolution: action,
+      openSearch: action,
+      closeSearch: action,
+      setSearchQuery: action,
+      searchNext: action,
+      searchPrevious: action,
+      selectSearchResult: action,
       editQueuedPrompt: action,
       deleteQueuedPrompt: action,
       reorderQueuedPrompts: action,
@@ -118,6 +392,11 @@ export class AcpChatStore {
       setDraftText: action,
       exportTranscript: action,
       retry: action,
+      loadOlderHistory: action,
+      scrollToTranscriptItem: action,
+      setAtBottom: action,
+      visitNewestEvent: action,
+      returnToReadingPosition: action,
     });
   }
 
@@ -175,16 +454,20 @@ export class AcpChatStore {
     }));
   }
 
-  get permissionQueue(): PermissionQueueItem[] {
-    return (this.session?.sessionState.current().pendingPermissions ?? []).map((request) => ({
-      requestId: request.requestId,
-      title: request.toolCall.title,
-      options: request.options.map((option) => ({
-        optionId: option.optionId,
-        name: option.name,
-        kind: option.kind,
-      })),
-    }));
+  /**
+   * Resolution state for the *current* (front of queue) permission request —
+   * `undefined`/`null` while idle, `resolving` while the decision is in
+   * flight, or `error` with a retryable message. Keyed internally by
+   * requestId (see `PermissionResolutionController`) so this always reflects
+   * the request actually on screen, never a stale one.
+   */
+  get permissionResolution(): PermissionResolutionEntry | null {
+    // Read to establish this computed's MobX dependency — the controller
+    // itself is framework-free and holds no observable state of its own.
+    const _permissionResolutionDependency = this.permissionResolutionVersion;
+    const request = this.permissionQueue[0];
+    if (!request) return null;
+    return this._permissionResolution.stateFor(request.requestId) ?? null;
   }
 
   get queuedPrompts(): ComposerQueuedPrompt[] {
@@ -217,6 +500,290 @@ export class AcpChatStore {
     return !this.historyLoading && this.messageCount === 0;
   }
 
+  /**
+   * Submissions (direct or queued) that were rejected or threw, in the order
+   * they failed. Each carries the immutable snapshot needed to retry, edit,
+   * or discard it — see `acp-submission-recovery.ts`.
+   */
+  get failedSubmissions(): readonly FailedAcpSubmission[] {
+    return this._submissions.failedSubmissions;
+  }
+
+  /**
+   * Compact outline of user prompts and assistant/agent turns — one stable
+   * entry per prompt and per turn, derived fresh from canonical transcript
+   * state on every read (see `deriveTranscriptOutline`). Reads the same
+   * three-way committed/active/pending-prompt split `ChatRoot` reconciles for
+   * rendering, so the outline always matches what is actually loaded —
+   * extending without duplicates or reordering as older history pages in.
+   */
+  private _syncOutline(): void {
+    const transcript = this.chatState.transcript.state;
+    this.outline = deriveTranscriptOutline(
+      transcript.committedTurns,
+      transcript.activeTurnSnapshot,
+      transcript.turnStatus,
+      this.chatState.session.state.pendingPrompt
+    );
+  }
+
+  /**
+   * The attention item traversal currently shows: whatever `attentionFocusId`
+   * still resolves to, or the queue's own front (highest-priority) entry
+   * otherwise — covers both "nothing has been focused yet" and "the
+   * previously-focused item just left the queue" without extra bookkeeping
+   * in `_syncAttentionQueue`. `null` when the queue is empty.
+   */
+  get attentionFocusedItem(): AttentionItem | null {
+    if (this.attentionQueue.length === 0) return null;
+    return (
+      this.attentionQueue.find((item) => item.id === this.attentionFocusId) ??
+      this.attentionQueue[0]
+    );
+  }
+
+  /**
+   * Move attention-queue traversal to the next/previous item, wrapping
+   * around at either end. Never removes, reorders, or resolves anything —
+   * see `attentionQueue`'s own doc for what actually does that — so cycling
+   * through several simultaneous items never hides the others.
+   */
+  focusNextAttentionItem(): void {
+    this._stepAttentionFocus(1);
+  }
+
+  focusPreviousAttentionItem(): void {
+    this._stepAttentionFocus(-1);
+  }
+
+  private _stepAttentionFocus(delta: 1 | -1): void {
+    const queue = this.attentionQueue;
+    if (queue.length === 0) {
+      this.attentionFocusId = null;
+      return;
+    }
+    const currentIndex = queue.findIndex((item) => item.id === this.attentionFocusId);
+    // Nothing explicitly focused yet (or the focused item just left the
+    // queue): `attentionFocusedItem` already falls back to the front entry
+    // in that state, so traversal steps relative to index 0 too — otherwise
+    // the first "next" press from the default view would appear to do
+    // nothing (still showing the front item) instead of advancing.
+    const effectiveIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex = (effectiveIndex + delta + queue.length) % queue.length;
+    this.attentionFocusId = queue[nextIndex].id;
+  }
+
+  /**
+   * Fresh (never cached) computation of the permission queue from the live
+   * session's `pendingPermissions` — the single source both `_syncPermissionQueue`
+   * (the public `permissionQueue` field) and `_syncAttentionQueue` recompute
+   * from, so neither can ever read a stale cached value.
+   */
+  private _computePermissionQueue(): PermissionQueueItem[] {
+    return (this.session?.sessionState.current().pendingPermissions ?? []).map((request) => ({
+      requestId: request.requestId,
+      // Sanitized (not routed through describePermissionOperation, which only
+      // covers the toolCall payload): a permission request is a security
+      // decision surface, so title/option labels can never be allowed to
+      // spoof via bidi overrides or an embedded line break — see
+      // `sanitizeSingleLineText`. `title` also gets `redactSecrets` (see
+      // `sanitizePermissionTitle`): unlike an option's `name`, `title` is a
+      // free-form summary that can be derived directly from a raw resource
+      // (e.g. a web-fetch title falling back to the raw URL), so it can carry
+      // a secret the same way `toolCall.url` can.
+      title: sanitizePermissionTitle(request.toolCall.title),
+      itemId: request.toolCall.id,
+      operation: describePermissionOperation(request.toolCall),
+      options: request.options.map((option) => ({
+        optionId: option.optionId,
+        name: sanitizeSingleLineText(option.name),
+        kind: option.kind,
+      })),
+    }));
+  }
+
+  /**
+   * Recompute the public `permissionQueue` field from the live session's
+   * `pendingPermissions` (see `permissionQueue`'s own doc for why this must
+   * be an explicit resync rather than a lazy `computed`). Called at every
+   * point `pendingPermissions` can change: session (re)bind (`_runBootstrap`)
+   * and every `session.sessionState.onChange` firing.
+   */
+  private _syncPermissionQueue(): void {
+    this.permissionQueue = this._computePermissionQueue();
+  }
+
+  /**
+   * Recompute `attentionQueue` (ticket #33) from its three live sources:
+   * outstanding permissions (`_computePermissionQueue`, read fresh — not the
+   * `permissionQueue` field's own last-synced snapshot, so this never lags
+   * one recomputation behind it), failed submissions
+   * (`failedSubmissions`, a genuinely MobX-reactive field so it is safe to
+   * read directly), and actionable turn/tool errors from the latest activity
+   * (`deriveErrorAttentionSources` over `chatState.transcript.state` — see
+   * `acp-attention-queue.ts` for the scoping rationale). Called at every
+   * point one of those three can change — bootstrap, history refresh/
+   * load-older, live active-turn updates, session-state updates, and every
+   * failed-submission transition — mirroring `_syncOutline`/
+   * `_syncChangesFootprint`'s call sites.
+   *
+   * Also reconciles `attentionFocusId`: if the previously-focused item no
+   * longer exists in the freshly-built queue (resolved, cancelled by the
+   * agent, or superseded), traversal focus resets to `null` so
+   * `attentionFocusedItem` falls back to the new front (highest-priority)
+   * item rather than silently pointing at nothing.
+   */
+  private _syncAttentionQueue(): void {
+    const state = this.chatState.transcript.state;
+    const lastCommittedTurn = state.committedTurns.at(-1) ?? null;
+    this.attentionQueue = buildAttentionQueue({
+      permissions: this._computePermissionQueue().map((item) => ({
+        requestId: item.requestId,
+        itemId: item.itemId,
+        summary: item.title,
+      })),
+      failedSubmissions: this.failedSubmissions.map((submission) => ({
+        localId: submission.localId,
+        summary: failedSubmissionPreview(submission),
+      })),
+      errors: deriveErrorAttentionSources(lastCommittedTurn, state.activeTurnSnapshot),
+    });
+    if (
+      this.attentionFocusId !== null &&
+      !this.attentionQueue.some((item) => item.id === this.attentionFocusId)
+    ) {
+      this.attentionFocusId = null;
+    }
+  }
+
+  // ── Transcript search (ticket #36) ───────────────────────────────────────
+  //
+  // Scope decision: search only ever covers the transcript already paged
+  // into `ChatState` (see `AcpChatSearchController`'s and
+  // `state/transcript-search.ts`'s own "Scope: loaded history only" docs) —
+  // it never silently walks all of persisted history on its own.
+  // `searchHistoryExhausted` tells the UI whether more exists, and
+  // `AcpChatPanel` offers an explicit "load older history" action (reusing
+  // `loadOlderHistory()` below, which already resyncs search after a page
+  // lands) rather than the panel claiming full coverage it cannot back up.
+  //
+  // Every getter below reads `searchVersion` purely to give MobX a tracked
+  // dependency before delegating to `_search` — see that field's doc for why
+  // (mirrors `permissionResolutionVersion`/`permissionResolution`).
+
+  get searchOpen(): boolean {
+    const _searchDependency = this.searchVersion;
+    return this._search.isOpen;
+  }
+
+  get searchQuery(): string {
+    const _searchDependency = this.searchVersion;
+    return this._search.query;
+  }
+
+  get searchResults(): readonly TranscriptSearchResult[] {
+    const _searchDependency = this.searchVersion;
+    return this._search.results;
+  }
+
+  get searchCurrentIndex(): number | null {
+    const _searchDependency = this.searchVersion;
+    return this._search.currentIndex;
+  }
+
+  get searchCurrentResult(): TranscriptSearchResult | null {
+    const _searchDependency = this.searchVersion;
+    return this._search.currentResult;
+  }
+
+  /**
+   * True once every persisted-history page has already been loaded — see
+   * `AcpHistoryPagination.exhausted`. Reads `searchVersion` for the same
+   * reason every other `search*` getter above does: `_historyPagination` is
+   * a plain (non-MobX-observable) class, so a `computed` that only reads its
+   * `exhausted` getter has zero MobX-tracked dependencies and, once observed
+   * by a reaction (e.g. `observer(AcpChatPanel)`), would cache its first
+   * evaluation forever — the exact #34/#37 staleness bug shape. `_syncSearch`
+   * bumps `searchVersion` unconditionally (not only when the controller's own
+   * `refresh()` finds work to do), so this stays live even while the search
+   * bar is open with a blank query and the user only clicks "Load older
+   * history".
+   */
+  get searchHistoryExhausted(): boolean {
+    const _searchDependency = this.searchVersion;
+    return this._historyPagination.exhausted;
+  }
+
+  openSearch(): void {
+    this._search.open();
+  }
+
+  /** Close search and cancel any indexing/debounce still pending for it. */
+  closeSearch(): void {
+    this._search.close();
+  }
+
+  /** Debounced: a fast typist's earlier, superseded queries are never searched. */
+  setSearchQuery(query: string): void {
+    this._search.setQuery(query);
+  }
+
+  searchNext(): void {
+    this._search.next();
+  }
+
+  searchPrevious(): void {
+    this._search.previous();
+  }
+
+  selectSearchResult(result: TranscriptSearchResult): void {
+    this._search.selectResult(result);
+  }
+
+  /**
+   * Re-run the active search query against the current transcript snapshot
+   * — see every `_syncOutline()` call site. Bumps `searchVersion`
+   * unconditionally, even when `_search.refresh()` itself no-ops (search
+   * closed, or open with a blank query): `searchHistoryExhausted` reads
+   * `searchVersion` too, and must stay live at these exact call sites
+   * (pagination completing) regardless of query state — see its own doc.
+   */
+  private _syncSearch(): void {
+    this._search.refresh();
+    this.searchVersion += 1;
+  }
+
+  /**
+   * Run one derived-state resync step defensively. Every `_syncX()` call site
+   * below runs several of these back to back against the same
+   * already-applied transcript/session snapshot — `_syncMessageCount`,
+   * `_syncChangesFootprint`, `_syncNewEventCount`, `_syncOutline`,
+   * `_syncPermissionQueue`, `_syncAttentionQueue`, `_syncSearch`, plus
+   * `_prunePermissionResolution`. Without this wrapper a bug in any ONE of
+   * them (this file's history: a session mock missing `sessionState` at
+   * merge time made `_syncAttentionQueue` throw) would, depending on where it
+   * sits in the sequence: abort every sync after it in the same batch,
+   * surface as an unrelated failure at the call site (e.g.
+   * `_loadOlderHistory` would report "Failed to load older messages" for a
+   * page that had already fetched and applied successfully), or — from
+   * `_runBootstrap` — flip an otherwise-successful load into `loadError`
+   * despite `session`/`transcript` already being fully set up. None of that
+   * is desirable: a resync step is best-effort derived state, never the
+   * surrounding operation's own success/failure signal. Logs and continues.
+   */
+  private _resync(label: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (error) {
+      log.error(`ACP chat resync step failed: ${label}`, {
+        conversationId: this.conversationId,
+        projectId: this.projectId,
+        taskId: this.taskId,
+        error,
+      });
+    }
+  }
+
   bootstrap(): void {
     if (this._bootstrapped) return;
     this._bootstrapped = true;
@@ -232,6 +799,129 @@ export class AcpChatStore {
 
   bindView(view: ChatView | null): void {
     this._view = view;
+  }
+
+  /**
+   * Load the next older page of transcript history, if one is available.
+   * Intended to be wired to `ChatTranscript`'s `onReachStart` (fired when the
+   * transcript is scrolled to its top). A no-op when history is still
+   * loading, a page is already in flight, or the start of history has
+   * already been reached — see `AcpHistoryPagination`.
+   *
+   * Returns the in-flight (or immediately-resolved) promise so callers that
+   * need to act *after* the page lands — e.g. `scrollToTranscriptItem` below —
+   * can await it. `onReachStart={() => store.loadOlderHistory()}` in
+   * acp-chat-panel.tsx ignores the return value, which is fine: `() => void`
+   * callback props accept a Promise-returning implementation.
+   */
+  loadOlderHistory(): Promise<void> {
+    const begin = this._historyPagination.beginLoadOlder();
+    if (!begin) return Promise.resolve();
+    return this._loadOlderPage(begin);
+  }
+
+  /**
+   * Scroll the bound transcript view to the row for `itemId`. If the item is
+   * part of the currently-loaded transcript, this jumps immediately through
+   * the existing virtualizer-aware `ChatView.scrollToItem` seam — correct
+   * even when the destination row is off-DOM, never a manual `scrollTop`
+   * write. Otherwise this pages in older history first (reusing
+   * `loadOlderHistory`, one page at a time) and retries, so a target from a
+   * not-yet-paginated-in page is never a silent no-op.
+   *
+   * Built for the outline (`scrollToOutlineEntry` below), but intentionally
+   * generic and typed for reuse by later transcript-navigation features
+   * (search, durable reading position — see spec #18 tickets #35-#37): any
+   * caller that has a stable canonical item id can resolve a jump through it.
+   */
+  async scrollToTranscriptItem(itemId: string, opts?: ScrollToItemOptions): Promise<void> {
+    if (this.chatState.transcript.findItemById(itemId)) {
+      this._view?.scrollToItem(itemId, opts);
+      return;
+    }
+    // Ask permission the same way `loadOlderHistory` does, rather than
+    // calling it directly: `beginLoadOlder()` returning null (bootstrap not
+    // done yet, a page is already in flight, or history is exhausted) means
+    // no *new* page is coming from this call, so recursing further would
+    // spin forever instead of resolving. The pagination cursor only ever
+    // moves toward exhaustion, so a successful `begin` bounds the recursion
+    // by the number of remaining pages.
+    const begin = this._historyPagination.beginLoadOlder();
+    if (!begin) return;
+    await this._loadOlderPage(begin);
+    await this.scrollToTranscriptItem(itemId, opts);
+  }
+
+  /** Jump the transcript to an outline entry's anchor item — see `outline`. */
+  scrollToOutlineEntry(entry: OutlineEntry): void {
+    void this.scrollToTranscriptItem(entry.itemId, { align: 'start' });
+  }
+
+  /**
+   * Report the bound view's "at bottom" state (see `onAtBottomChange` in
+   * `ChatRoot`/`ChatView`, which only fires on a genuine true/false
+   * transition — never redundantly). Leaving the tail freezes a new-events
+   * baseline; returning to the tail clears it, so the count only ever
+   * reflects turns that arrived while the user was actually reading history —
+   * ticket #37 (spec #18).
+   */
+  setAtBottom(atBottom: boolean): void {
+    if (atBottom) {
+      this._readWatermark = null;
+    } else if (!this._readWatermark) {
+      const state = this.chatState.transcript.state;
+      this._readWatermark = captureReadWatermark(state.committedTurns, state.activeTurnSnapshot);
+    }
+    this._syncNewEventCount();
+    this._syncOutline();
+  }
+
+  /**
+   * Jump to the newest transcript content without losing the current reading
+   * position: the exact scroll intent is saved so `returnToReadingPosition`
+   * can restore the same item and offset afterwards. Clears the new-event
+   * count immediately (the user is about to see everything up to now) rather
+   * than waiting for the async `setAtBottom(true)` callback that follows the
+   * scroll animation, so the badge never lingers stale mid-jump.
+   *
+   * Re-arms a fresh watermark at "now" rather than clearing to `null`: the
+   * scroll below is a *smooth* animation, and `ChatRoot` only reports
+   * `onAtBottomChange` on a genuine true/false transition. If the user
+   * interrupts the animation (scrolls away again) before it ever gets close
+   * enough to the tail to report `true`, no transition fires at all — a
+   * `null` watermark would then never be re-captured, permanently disabling
+   * new-event tracking for the rest of the session. Capturing "seen up to
+   * now" here instead keeps counting alive through that interruption. This
+   * only applies when actually leaving an anchored position — if the view
+   * was already at the tail (`current.kind === 'tail'`), there is nothing to
+   * re-arm; `_readWatermark` stays `null` as normal.
+   */
+  visitNewestEvent(): void {
+    const current = this.chatState.scroll.get();
+    if (current.kind === 'anchor') {
+      this._returnAnchor = current;
+      this.canReturnToReadingPosition = true;
+      const state = this.chatState.transcript.state;
+      this._readWatermark = captureReadWatermark(state.committedTurns, state.activeTurnSnapshot);
+    } else {
+      this._readWatermark = null;
+    }
+    this._syncNewEventCount();
+    this._syncOutline();
+    this._view?.scrollToBottom({ behavior: 'smooth' });
+  }
+
+  /**
+   * Restore the exact item + offset saved by `visitNewestEvent`. A no-op
+   * when nothing was saved (e.g. already consumed, or the view never left
+   * the tail in the first place).
+   */
+  returnToReadingPosition(): void {
+    const anchor = this._returnAnchor;
+    if (!anchor) return;
+    this._returnAnchor = null;
+    this.canReturnToReadingPosition = false;
+    this._view?.setScrollMode(anchor);
   }
 
   async uploadAttachment(input: {
@@ -268,49 +958,51 @@ export class AcpChatStore {
     }
   }
 
+  /**
+   * Direct send. Captures an immutable recovery snapshot before any state is
+   * cleared; on rejection/throw the snapshot lands in `failedSubmissions`
+   * instead of being lost — see `acp-submission-recovery.ts`.
+   */
   submitPrompt(
     text: string,
     attachments: AcpPromptAttachment[] = [],
     hiddenContext?: string
   ): void {
-    const promptAttachments = attachments.map((attachment) => attachment.ref);
-    if (!this.affordances.isWorking) {
-      const optimisticId = `optimistic:user:${Date.now()}`;
-      this.chatState.session.setPendingPrompt({
-        id: optimisticId,
-        text,
-        attachments: attachments.map(toPendingAttachment),
-      });
-      this._syncMessageCount();
-      const pinMode = pinTopMode(optimisticId);
-      this._view?.setScrollMode(pinMode);
-      this.chatState.scroll.set(pinMode);
-    }
-
-    void this.session
-      ?.sendPrompt({
-        text,
-        ...(hiddenContext ? { hiddenContext } : {}),
-        ...(promptAttachments.length > 0 ? { attachments: promptAttachments } : {}),
-      })
-      .then((result) => {
-        if (!result.success) this._toastError('Failed to send message', result.error);
-      })
-      .catch((error: unknown) => this._toastError('Failed to send message', error));
+    this._submissions.submit(text, attachments, hiddenContext);
   }
 
+  /** Queued send — same recovery guarantee as `submitPrompt`. */
   queuePrompt(text: string, attachments: AcpPromptAttachment[] = [], hiddenContext?: string): void {
-    const promptAttachments = attachments.map((attachment) => attachment.ref);
-    void this.session
-      ?.queuePrompt({
-        text,
-        ...(hiddenContext ? { hiddenContext } : {}),
-        ...(promptAttachments.length > 0 ? { attachments: promptAttachments } : {}),
-      })
-      .then((result) => {
-        if (!result.success) this._toastError('Failed to queue message', result.error);
-      })
-      .catch((error: unknown) => this._toastError('Failed to queue message', error));
+    this._submissions.queue(text, attachments, hiddenContext);
+  }
+
+  /**
+   * Resend a failed submission under its original local identity. The entry
+   * is removed before resending so it cannot be retried twice or duplicate
+   * the prompt/turn.
+   */
+  retryFailedSubmission(localId: string): void {
+    this._submissions.retry(localId);
+    this._syncAttentionQueue();
+  }
+
+  /**
+   * Remove a failed submission and hand its snapshot back to the caller so
+   * the composer can reload it as editable text/attachments.
+   */
+  editFailedSubmission(localId: string): AcpSubmissionSnapshot | null {
+    const snapshot = this._submissions.edit(localId);
+    this._syncAttentionQueue();
+    return snapshot;
+  }
+
+  /**
+   * Permanently drop a failed submission. Attachment release happens via the
+   * controller's `onDiscard` hook — see `_releaseSubmissionAttachments`.
+   */
+  discardFailedSubmission(localId: string): void {
+    this._submissions.discard(localId);
+    this._syncAttentionQueue();
   }
 
   setDraftText(text: string): void {
@@ -321,13 +1013,13 @@ export class AcpChatStore {
     this._scheduleDraftWrite(text, this._draftRev);
   }
 
+  /**
+   * Cancel the active turn. Shared by the composer's Stop button and the
+   * active-message Stop action in the transcript (see acp-chat-panel.tsx),
+   * so both surfaces are single-flight together and disable in lockstep.
+   */
   stop(): void {
-    void this.session
-      ?.cancelTurn()
-      .then((result) => {
-        if (!result.success) this._toastError('Failed to stop', result.error);
-      })
-      .catch((error: unknown) => this._toastError('Failed to stop', error));
+    this._stopController.stop();
   }
 
   setModel(model: string): void {
@@ -357,10 +1049,27 @@ export class AcpChatStore {
       .catch((error: unknown) => this._toastError('Failed to change effort', error));
   }
 
+  /**
+   * Resolve the current (front of queue) permission request with `optionId`.
+   * Routed through `PermissionResolutionController`, which single-flights per
+   * requestId — a duplicate click while the decision is still in flight is a
+   * no-op rather than a second request to the runtime.
+   */
   resolvePermission(optionId: string): void {
     const request = this.permissionQueue[0];
     if (!request) return;
-    void this.session?.resolvePermission(request.requestId, optionId);
+    this._permissionResolution.resolve(request.requestId, optionId);
+  }
+
+  /**
+   * Retry the last-attempted option for the current permission request after
+   * a failed resolution. No-op if the current request has no tracked error
+   * (e.g. it was superseded before retry was clicked).
+   */
+  retryPermissionResolution(): void {
+    const request = this.permissionQueue[0];
+    if (!request) return;
+    this._permissionResolution.retry(request.requestId);
   }
 
   editQueuedPrompt(id: string, text: string): void {
@@ -411,30 +1120,47 @@ export class AcpChatStore {
       window.clearTimeout(this._draftTimer);
       this._draftTimer = null;
     }
+    // Cancels any still-pending debounced search recompute — nothing fires
+    // against a disposed store's transcript after this.
+    this._search.close();
     this._unsubs.splice(0).forEach((unsub) => unsub());
     this.session?.dispose();
     this.chatState.dispose();
   }
 
   private async _runBootstrap(): Promise<void> {
+    // Fence off any older-page load already in flight from a prior attempt
+    // (retry after a load error) before this bootstrap seeds fresh state.
+    this._historyPagination.reset();
     let providerId: string | undefined;
     try {
       const input = this._startInput();
       providerId = input.providerId;
       const clientSession = await AcpLiveSession.create(this.conversationId, input);
 
-      const history = await clientSession.getHistory(undefined, 100);
+      const history = await clientSession.getHistory(undefined, HISTORY_PAGE_SIZE);
       if (!history.success) throw resultError(history.error);
 
       runInAction(() => {
         this.session?.dispose();
         this.session = clientSession;
         this.chatState.transcript.history.seed(history.data.turns);
+        this._historyPagination.seed(history.data);
         this._subscribeLiveSession(clientSession);
         this._applyDraftSnapshot(clientSession.draft.current());
         this.historyLoading = false;
         this.loadError = null;
-        this._syncMessageCount();
+        // A (re)seed starts a fresh transcript identity — any reading
+        // position saved from a prior session/attempt no longer applies, and
+        // any open search's results/query were computed against the old
+        // transcript and no longer mean anything against the new one.
+        this._resetReadingPosition();
+        this._search.close();
+        this._resync('messageCount', () => this._syncMessageCount());
+        this._resync('changesFootprint', () => this._syncChangesFootprint());
+        this._resync('outline', () => this._syncOutline());
+        this._resync('permissionQueue', () => this._syncPermissionQueue());
+        this._resync('attentionQueue', () => this._syncAttentionQueue());
       });
     } catch (error) {
       log.error('ACP chat bootstrap failed', {
@@ -503,6 +1229,57 @@ export class AcpChatStore {
 
   private _queuedPromptModels(): QueuedPrompt[] {
     return this.session?.sessionState.current().queuedPrompts ?? [];
+  }
+
+  /** Bridges `AcpSubmissionController` to the live ACP session, if connected. */
+  private _sessionPort(): AcpSubmissionSessionPort | null {
+    const session = this.session;
+    if (!session) return null;
+    return {
+      isWorking: () => this.affordances.isWorking,
+      queuedPromptCount: () => this._queuedPromptModels().length,
+      sendPrompt: (input) => session.sendPrompt(input),
+      queuePrompt: (input) => session.queuePrompt(input),
+    };
+  }
+
+  /** Show the optimistic user bubble for a direct send started while idle. */
+  private _showOptimisticPrompt(snapshot: AcpSubmissionSnapshot): void {
+    this.chatState.session.setPendingPrompt({
+      id: snapshot.localId,
+      text: snapshot.text,
+      attachments: snapshot.attachments.map(toPendingAttachment),
+    });
+    this._syncMessageCount();
+    const pinMode = pinTopMode(snapshot.localId);
+    this._view?.setScrollMode(pinMode);
+    this.chatState.scroll.set(pinMode);
+  }
+
+  /**
+   * A submission was rejected or threw. Clear any matching optimistic bubble
+   * (there is no turn behind it) and surface the failure — the snapshot
+   * itself is already preserved in `failedSubmissions` by the controller.
+   */
+  private _handleSubmissionFailure(failure: FailedAcpSubmission): void {
+    runInAction(() => {
+      if (this.chatState.session.state.pendingPrompt?.id === failure.localId) {
+        this.chatState.session.setPendingPrompt(null);
+        this._syncMessageCount();
+      }
+      this._syncAttentionQueue();
+    });
+    this._toastError(
+      failure.kind === 'queued' ? 'Failed to queue message' : 'Failed to send message',
+      new Error(failure.error)
+    );
+  }
+
+  /** A failed submission was discarded for good — release any uploaded attachments. */
+  private _releaseSubmissionAttachments(discarded: FailedAcpSubmission): void {
+    for (const attachment of discarded.attachments) {
+      void this.deleteAttachment(attachment.ref.id);
+    }
   }
 
   private async _sendQueuedPromptNow(id: string): Promise<void> {
@@ -574,14 +1351,41 @@ export class AcpChatStore {
       this._bindTerminalOutputs(session),
       session.sessionState.onChange(() =>
         runInAction(() => {
-          this._syncMessageCount();
+          this._resync('messageCount', () => this._syncMessageCount());
+          // Order matters: `permissionQueue` must be resynced before
+          // `_prunePermissionResolution` reads it, or pruning would act on
+          // the previous `pendingPermissions` snapshot.
+          this._resync('permissionQueue', () => this._syncPermissionQueue());
+          this._resync('prunePermissionResolution', () => this._prunePermissionResolution());
+          // Covers every exit a pending permission request can take —
+          // resolved, cancelled by the agent, or superseded by a new one —
+          // since all three change `pendingPermissions` and this fires on
+          // every such change.
+          this._resync('attentionQueue', () => this._syncAttentionQueue());
         })
       ),
-      session.activeTurn.onChange(() => runInAction(() => this._syncMessageCount())),
+      session.activeTurn.onChange(() =>
+        runInAction(() => {
+          this._resync('messageCount', () => this._syncMessageCount());
+          this._resync('changesFootprint', () => this._syncChangesFootprint());
+          this._resync('newEventCount', () => this._syncNewEventCount());
+          this._resync('outline', () => this._syncOutline());
+          this._resync('attentionQueue', () => this._syncAttentionQueue());
+          this._resync('search', () => this._syncSearch());
+        })
+      ),
       session.draft.onChange((draft) =>
         runInAction(() => {
           this._applyDraftSnapshot(draft);
         })
+      ),
+      // The Changes footprint reconciles transcript activity with the task's
+      // current Git status; resync whenever a fresh Git snapshot arrives
+      // (e.g. the working tree changed outside this conversation, or the
+      // watcher catches up with edits this conversation just made).
+      reaction(
+        () => this._resolveWorkspace()?.gitWorktree.fileChanges,
+        () => runInAction(() => this._syncChangesFootprint())
       )
     );
   }
@@ -635,14 +1439,90 @@ export class AcpChatStore {
     );
   }
 
+  /**
+   * Re-fetch the most recent history window after a turn commits (the
+   * runtime only exposes a just-finished turn's content through the
+   * canonical history, not through `activeTurn`). Appends only turns not
+   * already known — via `AcpHistoryPagination.reconcileRefresh` — so this
+   * never discards older pages already prepended by `loadOlderHistory`.
+   */
   private async _refreshHistory(): Promise<void> {
-    const history = await this.session?.getHistory(undefined, 100);
+    const history = await this.session?.getHistory(undefined, HISTORY_PAGE_SIZE);
     if (!history?.success) return;
+    const fresh = this._historyPagination.reconcileRefresh(history.data.turns);
     runInAction(() => {
       this.chatState.session.setPendingPrompt(null);
-      this.chatState.transcript.history.seed(history.data.turns);
-      this._syncMessageCount();
+      this.chatState.transcript.history.append([...fresh]);
+      this._resync('messageCount', () => this._syncMessageCount());
+      this._resync('changesFootprint', () => this._syncChangesFootprint());
+      this._resync('newEventCount', () => this._syncNewEventCount());
+      this._resync('outline', () => this._syncOutline());
+      this._resync('attentionQueue', () => this._syncAttentionQueue());
+      this._resync('search', () => this._syncSearch());
     });
+  }
+
+  /**
+   * Shared `isLoadingOlderHistory` bookkeeping around `_loadOlderHistory`,
+   * used by both the scroll-driven `loadOlderHistory()` and the itemId-driven
+   * `scrollToTranscriptItem()` retry loop.
+   */
+  private _loadOlderPage(begin: { epoch: number; before: number }): Promise<void> {
+    this.isLoadingOlderHistory = true;
+    return this._loadOlderHistory(begin.epoch, begin.before).finally(() => {
+      runInAction(() => {
+        this.isLoadingOlderHistory = false;
+      });
+    });
+  }
+
+  /**
+   * Fetch and prepend one older-history page. Reach-start can only fire while
+   * this conversation's view is bound, but the fetch is async — the panel may
+   * have switched to another conversation (unbinding `_view`) by the time it
+   * resolves. When still bound, go through `ChatView.loadOlder` (chat-ui's
+   * `doLoadOlder`) to also capture/restore the visible reading position; when
+   * backgrounded, prepend directly into `chatState` so the page is never
+   * silently dropped — it renders correctly once the view rebinds.
+   */
+  private async _loadOlderHistory(epoch: number, before: number): Promise<void> {
+    try {
+      const result = await this.session?.getHistory(before, HISTORY_PAGE_SIZE);
+      if (!result) {
+        this._historyPagination.abortLoadOlder(epoch);
+        return;
+      }
+      if (!result.success) {
+        this._historyPagination.abortLoadOlder(epoch);
+        this._toastError('Failed to load older messages', result.error);
+        return;
+      }
+      const fresh = this._historyPagination.completeLoadOlder(epoch, result.data);
+      if (!fresh || fresh.length === 0) return;
+      runInAction(() => {
+        if (this._view) {
+          this._view.loadOlder([...fresh]);
+        } else {
+          this.chatState.transcript.history.prepend([...fresh]);
+        }
+        // Every resync below runs through `_resync` (not a bare call): the
+        // page has already fetched and applied by this point, so a bug in
+        // one derived-state sync must never be reported as "Failed to load
+        // older messages" (this function's own `catch` below is for the
+        // *fetch*, not for these), and must never silently skip the syncs
+        // after it — see `_resync`'s own doc for the exact incident this
+        // guards against.
+        this._resync('messageCount', () => this._syncMessageCount());
+        this._resync('changesFootprint', () => this._syncChangesFootprint());
+        this._resync('newEventCount', () => this._syncNewEventCount());
+        this._resync('outline', () => this._syncOutline());
+        this._resync('attentionQueue', () => this._syncAttentionQueue());
+        this._resync('search', () => this._syncSearch());
+      });
+    } catch (error) {
+      this._historyPagination.abortLoadOlder(epoch);
+      this._toastError('Failed to load older messages', error);
+    }
   }
 
   private _syncMessageCount(): void {
@@ -654,6 +1534,82 @@ export class AcpChatStore {
     const activeCount = state.activeTurnSnapshot?.items.length ?? 0;
     const pendingPromptCount = this.chatState.session.state.pendingPrompt ? 1 : 0;
     this.messageCount = committedCount + activeCount + pendingPromptCount;
+  }
+
+  /**
+   * Drop any tracked in-flight/error resolution state for a permission
+   * request no longer in `permissionQueue` — the turn ended, the agent
+   * cancelled it, or it settled through `resolvePermission` itself. Called on
+   * every `sessionState` change (see `_subscribeLiveSession`) so a stale
+   * entry never lingers for a request the UI can no longer show.
+   */
+  private _prunePermissionResolution(): void {
+    this._permissionResolution.prune(new Set(this.permissionQueue.map((item) => item.requestId)));
+  }
+
+  /**
+   * Resolves this store's task workspace, if the task is currently
+   * provisioned. Used for the Changes footprint's Git-status input and path
+   * normalization — see `_syncChangesFootprint`. Returns null (rather than
+   * throwing, unlike `_startInput`) so the footprint degrades to
+   * transcript-only when the workspace is not resolvable.
+   */
+  private _resolveWorkspace() {
+    const task = asProvisioned(getTaskStore(this.projectId, this.taskId));
+    if (!task?.workspaceId) return null;
+    return workspaceRegistry.get(this.projectId, task.workspaceId) ?? null;
+  }
+
+  /**
+   * Recompute the task-scoped Changes footprint. Called wherever the
+   * transcript (committed history or the active turn) or the task's current
+   * Git status can change — bootstrap, history refresh/load-older, live
+   * active-turn updates, and the Git reaction registered in
+   * `_subscribeLiveSession`.
+   */
+  private _syncChangesFootprint(): void {
+    const workspace = this._resolveWorkspace();
+    const state = this.chatState.transcript.state;
+    this.changesFootprint = buildChangesFootprint({
+      committedTurns: state.committedTurns,
+      activeTurn: state.activeTurnSnapshot,
+      gitChanges: workspace?.gitWorktree.fileChanges ?? [],
+      workspacePath: workspace?.path ?? null,
+    });
+  }
+
+  /**
+   * Recompute `newEventCount` against the frozen `_readWatermark` baseline
+   * (see `setAtBottom`). A no-op value of 0 while following the tail (no
+   * watermark set). Called at every point the transcript can grow: live
+   * active-turn updates (streaming + turn commit), the post-commit history
+   * refresh, and history load-older — mirrors `_syncChangesFootprint`'s call
+   * sites. Ticket #37 (spec #18).
+   */
+  private _syncNewEventCount(): void {
+    if (!this._readWatermark) {
+      this.newEventCount = 0;
+      return;
+    }
+    const state = this.chatState.transcript.state;
+    this.newEventCount = countNewTranscriptEvents(
+      this._readWatermark,
+      state.committedTurns,
+      state.activeTurnSnapshot
+    );
+  }
+
+  /**
+   * Clear any saved reading position/watermark/return-anchor. Called when a
+   * (re)seed starts a fresh transcript identity (initial bootstrap or
+   * `retry()` after a load error) — a position saved against the prior
+   * transcript no longer applies.
+   */
+  private _resetReadingPosition(): void {
+    this._readWatermark = null;
+    this._returnAnchor = null;
+    this.canReturnToReadingPosition = false;
+    this.newEventCount = 0;
   }
 
   private _toastError(title: string, error: unknown): void {
@@ -671,16 +1627,6 @@ function toPendingAttachment(attachment: AcpPromptAttachment): ChatImageAttachme
     name: attachment.ref.name ?? 'image',
     dataUrl: attachment.previewUrl,
   };
-}
-
-function resultError(error: unknown): Error {
-  if (error instanceof Error) return error;
-  if (typeof error === 'object' && error !== null) {
-    const message = (error as { message?: unknown }).message;
-    const type = (error as { type?: unknown }).type;
-    return new Error(typeof message === 'string' ? message : String(type ?? 'Unknown error'));
-  }
-  return new Error(String(error));
 }
 
 function toLoadError(error: unknown): AcpLoadError {

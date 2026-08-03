@@ -65,6 +65,21 @@ export type DiffViewSnapshot = {
   prTab?: 'files' | 'commits' | 'checks';
 };
 
+export type ChangesRailFilter = 'all' | 'edited' | 'read';
+
+/**
+ * Persisted view preferences for the ACP chat's task-scoped Changes rail.
+ * Only UI preferences are persisted here — the rail's contents are a
+ * projection recomputed from transcript + Git state, never stored (see
+ * `acp-changes-footprint.ts`).
+ */
+export type ChangesRailSnapshot = {
+  isOpen?: boolean;
+  width?: number;
+  filter?: ChangesRailFilter;
+  selectedPath?: string | null;
+};
+
 export type TerminalDrawerActiveItem =
   | { kind: 'terminal'; id: string }
   | { kind: 'script'; id: string };
@@ -111,6 +126,7 @@ export type TaskViewSnapshot = {
   terminals?: TabViewSnapshot;
   editor?: EditorViewSnapshot;
   diffView?: DiffViewSnapshot;
+  changesRail?: ChangesRailSnapshot;
 };
 
 export type ProjectTaskSortBy = 'created-at' | 'updated-at' | 'pr-status' | 'unread';

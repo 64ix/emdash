@@ -3,7 +3,7 @@
  */
 
 import type { Meta, StoryObj } from 'storybook-solidjs-vite';
-import { ChatHost, ScriptedChat } from '@/stories/_harness/chat-host';
+import { ChatHost, ChatHostExpanded, ScriptedChat } from '@/stories/_harness/chat-host';
 import { ToolStateMatrix } from '@/stories/_harness/state-matrix';
 import { scenario, seedStep, streamDiff } from '@/stories/_harness/streaming/scenario';
 
@@ -130,6 +130,119 @@ export const MultiFile: Story = {
         },
       ]}
       height={300}
+    />
+  ),
+};
+
+/** A diff large enough to exceed the collapsed window (30 lines, one changed line). */
+function largeLines(prefix: string, changedLine?: { at: number; text: string }): string {
+  return Array.from({ length: 30 }, (_, i) =>
+    changedLine && i === changedLine.at ? changedLine.text : `${prefix}${i}`
+  ).join('\n');
+}
+
+const LARGE_OLD = largeLines('line-');
+const LARGE_NEW = largeLines('line-', { at: 15, text: 'const CHANGED = true;' });
+
+/**
+ * Truncated — collapsed by default. Shows the hidden-line-count banner and
+ * the "Show more" toggle; most of the 30-line file is not rendered.
+ */
+export const Truncated: Story = {
+  render: () => (
+    <ChatHost
+      items={[
+        {
+          kind: 'diff',
+          id: 'tc-large:src/large-file.ts',
+          path: 'src/large-file.ts',
+          oldText: LARGE_OLD,
+          newText: LARGE_NEW,
+          status: 'done',
+        },
+      ]}
+      height={260}
+    />
+  ),
+};
+
+/**
+ * Same 30-line diff, pre-expanded — reads top-to-bottom (not anchored on the
+ * first change) with an internal scroll once content exceeds the visible cap.
+ */
+export const Expanded: Story = {
+  render: () => (
+    <ChatHostExpanded
+      expandId="tc-large-expanded:src/large-file.ts"
+      items={[
+        {
+          kind: 'diff',
+          id: 'tc-large-expanded:src/large-file.ts',
+          path: 'src/large-file.ts',
+          oldText: LARGE_OLD,
+          newText: LARGE_NEW,
+          status: 'done',
+        },
+      ]}
+      height={400}
+    />
+  ),
+};
+
+/** No line-level changes (identical content, mode-only/rename-style edit) — distinct empty message, not a blank box. */
+export const NoChanges: Story = {
+  render: () => (
+    <ChatHost
+      items={[
+        {
+          kind: 'diff',
+          id: 'tc-empty:src/unchanged.ts',
+          path: 'src/unchanged.ts',
+          oldText: 'export const unchanged = true;\n',
+          newText: 'export const unchanged = true;\n',
+          status: 'done',
+        },
+      ]}
+      height={120}
+    />
+  ),
+};
+
+/** Binary/unsupported content (NUL byte in the new text) — distinct message instead of a line diff. */
+export const Binary: Story = {
+  render: () => (
+    <ChatHost
+      items={[
+        {
+          kind: 'diff',
+          id: 'tc-binary:src/image.png',
+          path: 'src/image.png',
+          oldText: null,
+          newText: `\x89PNG${String.fromCharCode(0)}\x00\x00\x00IHDR`,
+          status: 'done',
+        },
+      ]}
+      height={120}
+    />
+  ),
+};
+
+/** Narrow chat panel (480px) — the truncated diff stays reviewable with no page-level horizontal overflow. */
+export const Narrow: Story = {
+  render: () => (
+    <ChatHost
+      items={[
+        {
+          kind: 'diff',
+          id: 'tc-narrow:src/large-file.ts',
+          path: 'src/large-file.ts',
+          oldText: LARGE_OLD,
+          newText: LARGE_NEW,
+          status: 'done',
+        },
+      ]}
+      width={480}
+      height={260}
     />
   ),
 };

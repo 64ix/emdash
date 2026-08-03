@@ -33,6 +33,7 @@ export function UserMessageCard(props: { data: ChatMessage; ctx: RenderCtx; vars
 
   const isCurrent = () => turn.currentMessageId() === props.data.id;
   const showStop = () => isCurrent() && turn.turnStatus() === 'generating';
+  const isStopPending = () => turn.isStopPending();
 
   const styleVars = () => ({
     userCardPadX: props.vars.userCardPadX,
@@ -118,10 +119,20 @@ export function UserMessageCard(props: { data: ChatMessage; ctx: RenderCtx; vars
       <Show when={showStop()}>
         <button
           type="button"
-          class={stopButtonOverlay}
-          aria-label="Stop generating"
+          class={stopButtonOverlay({ pending: isStopPending() })}
+          aria-label={isStopPending() ? 'Stopping…' : 'Stop generating'}
+          aria-busy={isStopPending()}
+          // aria-disabled (not the native `disabled` attribute) while a
+          // cancellation is in flight: `disabled` removes the button from
+          // the tab order and the accessibility tree the instant it is
+          // activated, which can strand keyboard focus on the document
+          // body mid-interaction. aria-disabled keeps it focusable and
+          // announced as disabled; the click guard below still makes the
+          // request single-flight.
+          aria-disabled={isStopPending() ? 'true' : undefined}
           onClick={(e) => {
             e.stopPropagation();
+            if (isStopPending()) return;
             commands().onStop?.({ itemId: props.data.id });
           }}
         >

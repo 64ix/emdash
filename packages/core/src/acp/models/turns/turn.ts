@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import { stopReasonSchema } from '../session';
 import { transcriptMessageSchema } from './messages';
+import { transcriptResourceLinkSchema } from './resource-link';
 import { transcriptThinkingSchema } from './thinking';
 import { toolNodeSchema } from './tool-calls';
 
 export const transcriptItemSchema = z.union([
   transcriptMessageSchema,
   transcriptThinkingSchema,
+  transcriptResourceLinkSchema,
   toolNodeSchema,
 ]);
 export type TranscriptItem = z.infer<typeof transcriptItemSchema>;

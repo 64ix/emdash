@@ -57,6 +57,62 @@ export type ChatMessage = {
   attachments?: ChatImageAttachment[];
 };
 
+/**
+ * Presentation-level status for the generic tool inspector — richer than the
+ * raw ACP `ToolStatus`. Derived (never stored) by `deriveToolPresentationStatus`
+ * in `tool-presentation.ts` from the raw status, permission/turn context, and
+ * whether the call produced a meaningful result.
+ */
+export type ToolPresentationStatus =
+  | 'running'
+  | 'permission-pending'
+  | 'success'
+  | 'empty'
+  | 'cancelled'
+  | 'error';
+
+/** One normalized, bounded, redacted input parameter shown in the inspector. */
+export type ToolParam = { label: string; value: string };
+
+/** A bounded, redacted text payload (result preview or error detail). */
+export type ToolTextBlock = {
+  text: string;
+  /** True when `text` is a truncated prefix of a larger payload. */
+  truncated: boolean;
+  /** Number of characters omitted from the original payload. */
+  omittedChars: number;
+};
+
+/** An affected resource the tool call touched, surfaced for inspection/open. */
+export type ToolResource =
+  | { kind: 'workspace-file'; path: string; label: string }
+  | { kind: 'url'; url: string; label: string };
+
+/**
+ * A bounded, redacted node in a structured (JSON-shaped) tool result tree —
+ * built by `buildStructuredResult` in `tool-structured.ts` for any generic
+ * tool call whose `outputText` parses as a JSON object or array (typically
+ * MCP tool results). Never built directly from `JSON.stringify`: every
+ * container caps its entries/items, every string is bounded and redacted,
+ * and `circular`/`truncated`/`unrepresentable` cover inputs that cannot be
+ * represented safely (cyclic references, values past the depth/size budget,
+ * or non-JSON-safe JS types encountered when building directly from an
+ * already-parsed value).
+ */
+export type ToolStructuredValue =
+  | { kind: 'object'; entries: ToolStructuredEntry[]; omittedEntries: number }
+  | { kind: 'array'; items: ToolStructuredValue[]; omittedItems: number }
+  | { kind: 'string'; value: string; truncated: boolean }
+  | { kind: 'number'; value: string }
+  | { kind: 'boolean'; value: boolean }
+  | { kind: 'null' }
+  | { kind: 'circular' }
+  | { kind: 'truncated'; reason: 'max-depth' | 'budget' }
+  | { kind: 'unrepresentable' };
+
+/** One bounded, redacted `key`/`value` pair inside a structured object node. */
+export type ToolStructuredEntry = { key: string; value: ToolStructuredValue };
+
 export type ChatToolCall = {
   kind: 'tool';
   id: string;
@@ -69,6 +125,41 @@ export type ChatToolCall = {
   inputSummary?: string;
   /** Id of the parent tool call (for hierarchical rendering). */
   parentId?: string;
+  /**
+   * Raw provider-reported tool kind/name (e.g. ACP `toolKind`, or the raw MCP
+   * tool identifier), retained as a secondary diagnostic. Never used as the
+   * display name — `name` already carries the safe, provider-agnostic label.
+   */
+  rawToolKind?: string | null;
+  /** Normalized, bounded, redacted input parameters (search query, URL, ...). */
+  params?: ToolParam[];
+  /** Bounded, redacted preview of the call's successful result output. */
+  result?: ToolTextBlock;
+  /** Bounded, redacted error detail (present only when `status === 'error'`). */
+  errorDetail?: ToolTextBlock;
+  /**
+   * Approximate wall-clock duration in ms, when the underlying data provides
+   * timing. Absent today for generic (search/fetch/mcp/unknown) tool calls —
+   * the ACP protocol carries no duration signal for them yet.
+   */
+  durationMs?: number;
+  /** Affected resources (paths/URLs) surfaced as inspectable/openable targets. */
+  resources?: ToolResource[];
+  /**
+   * Fully derived inspector status (see `deriveToolPresentationStatus`).
+   * Optional — only the generic inspector kinds (search/fetch/mcp/unknown)
+   * populate it; other `ChatToolCall` producers keep relying on raw `status`.
+   */
+  presentationStatus?: ToolPresentationStatus;
+  /**
+   * Bounded, redacted structured view of `result`/`errorDetail` when the raw
+   * output text parses as a JSON object or array (see `buildStructuredResult`
+   * in `tool-structured.ts`) — set for MCP tool calls today, but derived
+   * generically so any other generic-inspector kind with JSON-shaped output
+   * gets the same treatment. Absent for plain-text output, bare JSON scalars,
+   * and malformed/oversized payloads — those fall back to `result`/`errorDetail`.
+   */
+  structuredResult?: ToolStructuredValue;
 };
 
 export type SubagentPhase = 'spawning' | 'running' | 'completed' | 'failed';
@@ -172,8 +263,13 @@ export type ChatExecute = {
 /**
  * A diff preview row — produced by ACP `kind: 'edit'` tool calls.
  *
- * Renders a compact, non-scrollable preview of the first changed region
- * (capped at 12 lines with ±1 context), with syntax + diff highlighting.
+ * Renders a progressive review surface with syntax + diff highlighting:
+ * collapsed shows a bounded window anchored on the first change (with an
+ * explicit hidden-line count), expanded shows the diff from the top up to a
+ * hard row cap with internal scrolling, and loading/streaming/binary/empty
+ * states are visually and semantically distinct. See `diff-lines.ts`
+ * (`resolveDiffGeometry`) for the exact state machine and window math, and
+ * `diff.def.tsx`'s `DIFF_VARS` for the current collapsed/expanded bounds.
  * One `ChatDiff` is created per changed file within a single tool call.
  *
  * `oldText` is the replaced region (old_string). `null` means a new file —
@@ -201,11 +297,18 @@ export type ChatDiff = {
  *
  * `workspace-file` — the URI resolves to a file inside the current workspace;
  *   `path` is the workspace-relative or absolute path, ready for the editor.
+ * `local-file` — a local filesystem path outside the current workspace (e.g.
+ *   an absolute path the agent referenced directly). `path` is the resolved
+ *   absolute path; clicking it goes through the same local-artifact preview
+ *   policy as any other chat link (trusted-root check, size/type caps, and
+ *   an explicit confirmation step when the path is outside every trusted
+ *   root) — never a raw open.
  * `external` — an http(s) URL or other browser-openable resource.
  * `opaque` — a custom MCP server scheme the client cannot resolve locally.
  */
 export type ResourceTarget =
   | { kind: 'workspace-file'; path: string }
+  | { kind: 'local-file'; path: string }
   | { kind: 'external'; url: string }
   | { kind: 'opaque' };
 
@@ -280,11 +383,103 @@ export type WorkingItem = {
   id: string;
 };
 
+/** Coarse status for a settled turn's footer — 'interrupted' outcomes fold into 'error'. */
+export type TurnFooterStatus = 'completed' | 'cancelled' | 'error';
+
+/**
+ * Session-scoped context-window usage, when a producer can attribute it to
+ * this specific turn. Mirrors `SessionUsage` (see
+ * `packages/core/src/acp/models/config.ts`), which is cumulative across the
+ * whole session — no current producer narrows it to one turn (see
+ * `state/turn-footer.ts`'s module doc).
+ */
+export type TurnFooterContext = {
+  contextUsed: number;
+  contextSize: number;
+};
+
+/** Provider-reported cost, when a producer can attribute it to this specific turn. */
+export type TurnFooterCost = {
+  amount: number;
+  currency: string;
+};
+
+/**
+ * Compact metadata footer for one completed turn (ticket #38, spec #18).
+ * See `state/turn-footer.ts#deriveTurnFooter` for the derivation and an
+ * explanation of why `durationMs`/`context`/`cost` are never populated today.
+ */
+export type TurnFooterData = {
+  status: TurnFooterStatus;
+  /** Full human-readable status line, e.g. "Turn cancelled (user_requested)". */
+  statusLabel: string;
+  /** Best-effort duration in ms; absent unless a genuine per-turn timing producer exists. */
+  durationMs?: number;
+  /** Context-window usage attributable to this turn; absent today (see module doc). */
+  context?: TurnFooterContext;
+  /** Cost attributable to this turn; absent today (see module doc). */
+  cost?: TurnFooterCost;
+  /** Plain-text payload for the footer's Copy action, scoped to this turn. */
+  copyText: string;
+};
+
 export type TurnOutcomeItem = {
   kind: 'turn-outcome';
   id: string;
   outcome: TranscriptTurnOutcome;
+  footer: TurnFooterData;
 };
+
+/**
+ * Canonical recovery-card vocabulary (ticket #39, spec #18) — the full set of
+ * failure categories a recovery card can ever be labeled with, shared by
+ * `state/turn-recovery.ts` (turn/tool-outcome cards, this package) and the
+ * desktop app's submission/session-load cards (`acp-recovery-card.ts`,
+ * imported there with `import type` only — see that module's doc for why a
+ * *runtime* import from this package is unsafe in the app's `node` test
+ * project, and why the category vocabulary is still shared as a type).
+ *
+ * Two members are honest placeholders, not currently-reachable outputs of any
+ * classifier in this codebase:
+ *   - 'rate-limit': no ACP error tag, stop reason, or provider-plugin surface
+ *     anywhere in this repo distinguishes "the provider rate-limited this
+ *     request" from any other provider/runtime failure — see
+ *     `errorTurnReasonSchema` in `packages/core/.../models/turns/turn.ts` and
+ *     `AcpRuntimeError` in `packages/core/.../acp/errors.ts`. Only a raw
+ *     `SerializedError.message` string could carry that distinction today,
+ *     and message-string guessing is exactly what this ticket forbids.
+ *   - 'authentication': reachable only from a *session-start* failure
+ *     (`AcpStartError.errorType === 'auth_required'`), never from a settled
+ *     `TranscriptTurnOutcome` — no turn/tool-level classifier in this package
+ *     ever produces it (see `categorizeTurnOutcome`'s doc).
+ * Both remain part of the union so a future, genuinely-typed producer has
+ * somewhere to plug in without a renderer change — mirroring ticket #33's
+ * unwired `'question'` attention-queue extension point.
+ */
+export type RecoveryCategory =
+  | 'authentication'
+  | 'rate-limit'
+  | 'context'
+  | 'provider'
+  | 'interruption'
+  | 'cancellation'
+  | 'unknown';
+
+/**
+ * Actions a recovery card may offer. A card's `actions` list is never a
+ * fixed per-category table — see each producer's own gating (e.g.
+ * `RECOVERY_ACTIONS_FOR_TURN` in `state/turn-recovery.ts`,
+ * `recoveryActionsForSubmission`/`recoveryActionsForLoadError` in the app's
+ * `acp-recovery-card.ts`) for the real, executable precondition behind each
+ * action instance.
+ */
+export type RecoveryAction =
+  | 'retry'
+  | 'edit'
+  | 'discard'
+  | 'sign-in'
+  | 'change-model'
+  | 'copy-diagnostic';
 
 export type SyntheticItem = WorkingItem | TurnOutcomeItem;
 

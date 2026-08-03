@@ -81,6 +81,46 @@ export type {
 
 export type { TurnStatus, TranscriptApi, ChatHistory } from './state/transcript';
 
+// ── Transcript outline (ticket #34) ──────────────────────────────────────────
+
+export { deriveTranscriptOutline } from './state/outline';
+export type { OutlineEntry, OutlineEntryRole, OutlineEntryStatus } from './state/outline';
+
+// ── Transcript search (ticket #36) ───────────────────────────────────────────
+
+export {
+  advanceSearchResultIndex,
+  searchTranscript,
+  splitSnippetAtMatch,
+} from './state/transcript-search';
+export type {
+  TranscriptSearchOptions,
+  TranscriptSearchResult,
+  TranscriptSearchResultKind,
+} from './state/transcript-search';
+
+// ── Reading position (ticket #37) ────────────────────────────────────────────
+
+export { captureReadWatermark, countNewTranscriptEvents } from './state/reading-position';
+export type { ReadWatermark } from './state/reading-position';
+
+// ── Turn footer (ticket #38) ─────────────────────────────────────────────────
+
+export { deriveTurnFooter } from './state/turn-footer';
+export type { TurnFooterCost, TurnFooterContext, TurnFooterData, TurnFooterStatus } from './model';
+
+// ── Recovery cards (ticket #39) ───────────────────────────────────────────────
+
+export {
+  buildTurnRecoveryDiagnostic,
+  categorizeTurnOutcome,
+  isTurnRecoveryAttentionWorthy,
+  RECOVERY_ACTIONS_FOR_TURN,
+} from './state/turn-recovery';
+// Type-only — see `RecoveryCategory`'s doc in `./model` for why the desktop
+// app imports this with `import type` only, never a runtime value.
+export type { RecoveryAction, RecoveryCategory } from './model';
+
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
 export type {

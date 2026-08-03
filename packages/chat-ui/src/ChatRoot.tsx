@@ -56,6 +56,7 @@ import type { ChatCaches } from './core/caches';
 import type { ThemeVarKey } from './core/config';
 import type { MeasureCtx } from './core/define';
 import { genericEstimate } from './core/layout/generic-estimate';
+import { computeLaneWidth, resolveLane, type Lane } from './core/layout/lane';
 import { STICK_THRESHOLD_PX } from './core/stick-to-bottom';
 import { unitReservedHeight } from './core/units';
 import { Virtualizer } from './core/virtualizer';
@@ -65,6 +66,7 @@ import { flattenTier, makeUnitsView, collectUserTurnUnits } from './state/flatte
 import type { UnitsView } from './state/flatten';
 import type { LayoutSnapshot, PinSnapshot } from './state/geometry';
 import { samePin, sameRange } from './state/geometry';
+import { captureLoadOlderAnchor, resolveLoadOlderAnchor } from './state/load-older-anchor';
 import {
   canvas,
   composerSlotAnimatingClass,
@@ -359,6 +361,11 @@ export function ChatRoot(props: ChatRootProps) {
   const [scrollVelocity, setScrollVelocity] = createSignal(0);
   const [viewHeight, setViewHeight] = createSignal(600);
   const [containerWidth, setContainerWidth] = createSignal(0);
+  // Total width (px) available inside the scroll container, BEFORE the prose
+  // column's max-width cap is applied — i.e. containerWidth's un-capped
+  // sibling. This is the upper bound the artifact lane may grow into without
+  // causing page-level horizontal overflow (see core/layout/lane.ts).
+  const [availableWidth, setAvailableWidth] = createSignal(0);
   const [contentColumnLeft, setContentColumnLeft] = createSignal(0);
 
   const updateContentColumnGeometry = () => {
@@ -368,6 +375,26 @@ export function ChatRoot(props: ChatRootProps) {
     if (probeRect.width <= 0) return;
     setContainerWidth(probeRect.width);
     setContentColumnLeft(probeRect.left - outerRect.left);
+  };
+
+  /**
+   * Resolve a unit kind's declared lane + effective row width (px).
+   *
+   * The lane declaration lives on the UnitDef (`core/units.ts#UnitDef.lane`);
+   * this is the ONLY place ChatRoot turns that declaration into a width,
+   * via the pure `resolveLane` / `computeLaneWidth` functions — no inline
+   * `unit.kind === 'diff'` branching. `rowWidth` (fed to UnitRow.measure and
+   * to the row wrapper's CSS) and the wrapper's geometry below always agree
+   * because both read from this single function.
+   */
+  const rowLaneGeometry = (kind: string): { lane: Lane; width: number } => {
+    const def = UNIT_REGISTRY[kind];
+    const lane = resolveLane(def);
+    const width = computeLaneWidth(lane, {
+      proseWidth: containerWidth(),
+      availableWidth: availableWidth(),
+    });
+    return { lane, width };
   };
 
   const updateSlotPadBottom = () => {
@@ -1213,6 +1240,7 @@ export function ChatRoot(props: ChatRootProps) {
     padBottom();
     viewHeight();
     containerWidth();
+    availableWidth();
     measureEpoch();
     expandedUserId();
     scheduler.request();
@@ -1252,7 +1280,8 @@ export function ChatRoot(props: ChatRootProps) {
       prefetchEnd = ahead;
     }
 
-    const w = containerWidth();
+    const proseW = containerWidth();
+    const availW = availableWidth();
     const t = theme();
 
     let measured = 0;
@@ -1264,9 +1293,14 @@ export function ChatRoot(props: ChatRootProps) {
       if (!unitDef) return;
       const c = u.chrome;
       const unitInsetX = c?.insetX ?? 0;
+      // Match the exact row width UnitRow will use once this unit becomes
+      // visible (see rowLaneGeometry) so the precise measure() reserved here
+      // never has to self-correct on scroll-in.
+      const lane = resolveLane(unitDef);
+      const laneW = computeLaneWidth(lane, { proseWidth: proseW, availableWidth: availW });
       const ctx: MeasureCtx = {
         theme: t,
-        width: Math.max(0, w - 2 * unitInsetX),
+        width: Math.max(0, laneW - 2 * unitInsetX),
         isCollapsed: (id: string) => viewState().isCollapsed(id),
         expanded: (id: string) => viewState().isCollapsed(id),
         caches: caches(),
@@ -1406,9 +1440,9 @@ export function ChatRoot(props: ChatRootProps) {
     const t = theme();
     const prependedUnits = flattenTier(turns, segmentCtx(false), SEGMENTERS, UNIT_REGISTRY);
 
-    const anchorUnitIdx = virt.findIndex(Math.max(0, el.scrollTop - padTop()));
-    const anchorId = units().at(anchorUnitIdx)?.itemId;
-    const anchorOffset = el.scrollTop - (virt.top(anchorUnitIdx) + padTop());
+    // Capture which unit + sub-row offset is visible *before* the prepend
+    // shifts every existing unit to a higher index. See state/load-older-anchor.ts.
+    const anchor = captureLoadOlderAnchor(el.scrollTop, padTop(), units(), virt);
 
     const loadEstimateCtx: MeasureCtx = {
       theme: t,
@@ -1431,19 +1465,9 @@ export function ChatRoot(props: ChatRootProps) {
     state().transcript.history.prepend(turns);
     refreshTotal();
 
-    if (anchorId !== undefined) {
-      const newUs = units();
-      let newUnitIdx = -1;
-      for (let i = 0; i < newUs.length; i++) {
-        if (newUs.at(i)?.itemId === anchorId) {
-          newUnitIdx = i;
-          break;
-        }
-      }
-      if (newUnitIdx >= 0) {
-        const newTop = virt.top(newUnitIdx) + padTop() + anchorOffset;
-        writeScrollTop(newTop);
-      }
+    if (anchor) {
+      const newTop = resolveLoadOlderAnchor(anchor, padTop(), units(), virt);
+      if (newTop !== undefined) writeScrollTop(newTop);
     }
   };
 
@@ -1522,8 +1546,12 @@ export function ChatRoot(props: ChatRootProps) {
     onCleanup(() => snapshotInto(state()));
 
     const roHeight = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height;
-      if (h && h > 0) setViewHeight(h);
+      const rect = entries[0]?.contentRect;
+      if (!rect) return;
+      if (rect.height > 0) setViewHeight(rect.height);
+      // contentRect excludes scrollContainer's own padding (CONTENT_GUTTER),
+      // matching the un-capped flow width canvas/widthProbe would occupy.
+      if (rect.width > 0) setAvailableWidth(rect.width);
     });
     roHeight.observe(el);
     onCleanup(() => roHeight.disconnect());
@@ -1551,6 +1579,30 @@ export function ChatRoot(props: ChatRootProps) {
       onCleanup(() => roSlot.disconnect());
     }
 
+    // Shared by `onClick` and `onKeyDown` below so mouse and (real or
+    // synthetic) keyboard activation of a [data-collapse-id] row
+    // (CollapseHeader, CardHeader, Diff header, FileOperation, Subagent) both
+    // toggle through the exact same anchor-pinning logic (#38). Ticket #26
+    // later made every `[data-collapse-id]` producer a native `<button>`,
+    // which on a real, trusted keypress would ALSO fire its own default-action
+    // `click` reaching `onClick` below — seemingly a double-toggle risk once
+    // both tickets' code coexisted. It is not one in practice:
+    // `onKeyDown`'s own `preventDefault()` call (see its doc just below)
+    // suppresses that native default action, so only one toggle ever
+    // happens, on every keyboard/pointer input path this file supports.
+    const toggleCollapseTarget = (id: string) => {
+      // Pin the toggled row at its current viewport position before the height
+      // change. With readPhase no longer reclassifying intent on idle frames,
+      // this anchor is now guaranteed to survive the tween — fixing the scroll
+      // jump on expand/collapse in short reserve-active transcripts.
+      const idx = unitIndexOf(id);
+      if (idx >= 0 && scrollEl) {
+        const offset = scrollEl.scrollTop - (virt.top(idx) + padTop());
+        setAnchor({ kind: 'anchor', itemId: id, edge: 'top', offset });
+      }
+      viewState().toggleCollapsed(id);
+    };
+
     const onClick = (e: Event) => {
       const t = e.target as HTMLElement;
 
@@ -1565,17 +1617,7 @@ export function ChatRoot(props: ChatRootProps) {
 
       const collapseTarget = t.closest('[data-collapse-id]') as HTMLElement | null;
       if (collapseTarget?.dataset.collapseId) {
-        const id = collapseTarget.dataset.collapseId;
-        // Pin the toggled row at its current viewport position before the height
-        // change. With readPhase no longer reclassifying intent on idle frames,
-        // this anchor is now guaranteed to survive the tween — fixing the scroll
-        // jump on expand/collapse in short reserve-active transcripts.
-        const idx = unitIndexOf(id);
-        if (idx >= 0 && scrollEl) {
-          const offset = scrollEl.scrollTop - (virt.top(idx) + padTop());
-          setAnchor({ kind: 'anchor', itemId: id, edge: 'top', offset });
-        }
-        viewState().toggleCollapsed(id);
+        toggleCollapseTarget(collapseTarget.dataset.collapseId);
         return;
       }
 
@@ -1583,9 +1625,45 @@ export function ChatRoot(props: ChatRootProps) {
         setExpandedUserId(null);
       }
     };
+
+    /**
+     * Keyboard equivalent for [data-collapse-id] rows: Enter/Space toggles
+     * the same way a click does. Scoped to collapse targets only — the
+     * outside-click "collapse the expanded user card" branch above is
+     * mouse-specific and has no keyboard analogue to preserve (#38).
+     */
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.repeat) return; // ignore key auto-repeat while held down
+      const t = e.target as HTMLElement;
+      const collapseTarget = t.closest('[data-collapse-id]') as HTMLElement | null;
+      if (!collapseTarget?.dataset.collapseId) return;
+      // `preventDefault` here is what keeps this safe to run *alongside*
+      // ticket #26's native `<button data-collapse-id>` elements: on a real,
+      // trusted keydown a native button would otherwise also fire its own
+      // default-action `click` on Enter/Space, which would reach `onClick`
+      // above and toggle the row a second time. Calling `preventDefault` in
+      // this bubble-phase listener runs before the browser applies that
+      // default action, so it suppresses the native click and only this
+      // handler's own `toggleCollapseTarget` call fires — see
+      // `a11y-transcript-controls.contract.test.tsx`'s real (trusted, CDP-
+      // driven) keyboard-activation tests, which pass through this exact
+      // interaction and assert a single toggle, not a double one. This also
+      // remains the ONLY path for a synthetic (non-trusted, scripted)
+      // keydown — e.g. `turn-outcome.contract.test.tsx`'s
+      // `dispatchEvent(new KeyboardEvent(...))` — since browsers do not run
+      // a native element's default action for untrusted events at all.
+      e.preventDefault();
+      toggleCollapseTarget(collapseTarget.dataset.collapseId);
+    };
+
     const clickTarget = outerEl ?? el;
     clickTarget.addEventListener('click', onClick);
-    onCleanup(() => clickTarget.removeEventListener('click', onClick));
+    clickTarget.addEventListener('keydown', onKeyDown);
+    onCleanup(() => {
+      clickTarget.removeEventListener('click', onClick);
+      clickTarget.removeEventListener('keydown', onKeyDown);
+    });
 
     // Visibility watchdog: self-heal any missed wakes when pane becomes visible.
     if (typeof document !== 'undefined') {
@@ -1650,6 +1728,7 @@ export function ChatRoot(props: ChatRootProps) {
   });
 
   const turnStatus = () => state().transcript.state.turnStatus;
+  const isStopPending = () => state().session.state.stopPending;
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -1657,7 +1736,7 @@ export function ChatRoot(props: ChatRootProps) {
       <ThemeContext.Provider value={theme}>
         <CachesContext.Provider value={caches()}>
           <CommandsContext.Provider value={commands}>
-            <TurnStateContext.Provider value={{ currentMessageId, turnStatus }}>
+            <TurnStateContext.Provider value={{ currentMessageId, turnStatus, isStopPending }}>
               <div
                 ref={(el) => {
                   outerEl = el;
@@ -1698,11 +1777,31 @@ export function ChatRoot(props: ChatRootProps) {
                           const unit = u();
                           return unit ? activeTurnItemIds().has(unit.itemId) : false;
                         };
+                        // Single seam turning the unit's declared lane into an
+                        // exact width (core/layout/lane.ts). Feeds BOTH the
+                        // wrapper's rendered geometry (below) and UnitRow's
+                        // rowWidth so measurement and paint never disagree.
+                        const geometry = () => rowLaneGeometry(u()?.kind ?? '');
+                        // Prose rows keep the existing CSS-class geometry
+                        // (left:0, width:100% of the centered content column)
+                        // untouched. Artifact rows override with an explicit
+                        // px width, centered on the SAME axis by "breaking
+                        // out" of the (still 672px-capped) canvas column —
+                        // canvas itself is horizontally centered, so `left:
+                        // calc(50% - width/2)` relative to canvas's own box
+                        // lands at the true panel midpoint regardless of
+                        // canvas's own width.
+                        const rowStyle = () => {
+                          const g = geometry();
+                          if (g.lane === 'prose') return undefined;
+                          return { width: `${g.width}px`, left: `calc(50% - ${g.width / 2}px)` };
+                        };
 
                         return (
                           <Show when={u()}>
                             <div
                               class={unitRowWrapper}
+                              style={rowStyle()}
                               ref={(el) => {
                                 rowEls.set(unitIndex, el);
                                 // Seed initial transform; commit() reconciles on each frame.
@@ -1713,11 +1812,13 @@ export function ChatRoot(props: ChatRootProps) {
                                 });
                               }}
                               data-index={String(unitIndex)}
+                              data-unit-kind={u()?.kind}
+                              data-lane={geometry().lane}
                             >
                               <UnitRow
                                 unit={u()!}
                                 index={unitIndex}
-                                rowWidth={containerWidth()}
+                                rowWidth={geometry().width}
                                 theme={theme()}
                                 viewState={viewState()}
                                 virt={virt}

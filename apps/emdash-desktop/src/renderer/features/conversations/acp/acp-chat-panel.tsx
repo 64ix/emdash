@@ -1,3 +1,4 @@
+import type { OutlineEntry } from '@emdash/chat-ui';
 import type { AttachmentMimeType, AttachmentRef } from '@emdash/core/acp/client';
 import { ChatComposer, ImageViewerDialog, MermaidViewerDialog } from '@emdash/ui/react/components';
 import type {
@@ -9,7 +10,7 @@ import type {
   MentionItem,
   PromptEditorRef,
 } from '@emdash/ui/react/components';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, ListTree, PanelRight, Search, Undo2 } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -25,6 +26,7 @@ import {
 import { usePaneContext } from '@renderer/features/tabs/pane-context';
 // TODO(conversations-extraction): Inject task editor/file-opening behavior into ACP chat.
 import {
+  openDiffInReviewSurface,
   openFileInAdjacentPane,
   openFileInTaskEditor,
 } from '@renderer/features/tasks/stores/open-file-in-file-editor';
@@ -33,6 +35,7 @@ import {
   asProvisioned,
   getRegisteredTaskData,
   getTaskStore,
+  getTaskView,
 } from '@renderer/features/tasks/stores/task-selectors';
 import {
   issueMentionToken,
@@ -46,6 +49,7 @@ import { rpc } from '@renderer/lib/ipc';
 import { showModal } from '@renderer/lib/modal/modal-provider';
 import { isHeicLikeFile, isUnstableDropPath } from '@renderer/lib/pty/terminal-image-paths';
 import { useAgents } from '@renderer/lib/stores/use-agents';
+import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
 import { log } from '@renderer/utils/logger';
 import {
@@ -53,10 +57,41 @@ import {
   mostAdvancedLinkedIssue,
   type LinkedIssue,
 } from '@shared/core/linked-issue';
+import { AttentionBanner } from './acp-attention-banner';
+import type { AttentionItem } from './acp-attention-queue';
 import type { AcpChatStore, AcpPromptAttachment } from './acp-chat-store';
 import type { AcpChatTabResource } from './acp-chat-tab-resource';
-import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
+import {
+  chatViewCommandForShortcut,
+  executeChatViewCommand,
+  isOpenSearchShortcut,
+} from './acp-chat-view-commands';
+import {
+  buildSubmissionRecoveryDiagnostic,
+  categorizeSubmissionFailure,
+} from './acp-recovery-card';
+import { failedSubmissionPreview, type FailedAcpSubmission } from './acp-submission-recovery';
+import type {
+  ChangesFootprintEntry,
+  EditedChangesFootprintEntry,
+} from './changes/acp-changes-footprint';
+import { ChangesDrawer } from './changes/changes-drawer';
+import { changesProvenanceJumpTarget } from './changes/changes-provenance';
+import { ChangesRail } from './changes/changes-rail';
+import {
+  openChangesFootprintDiff,
+  openChangesFootprintEntry,
+  openChangesFootprintFile,
+} from './changes/changes-rail-actions';
+import { isChangesRailNarrow } from './changes/changes-rail-layout';
+import { activateChatLink } from './chat-link-activation';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
+import {
+  OUTLINE_NARROW_BREAKPOINT_PX,
+  TranscriptOutlineDrawer,
+  TranscriptOutlineRail,
+} from './transcript-outline-panel';
+import { TranscriptSearchBar } from './transcript-search-panel';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -106,6 +141,8 @@ function toComposerPermission(
   return {
     requestId: req.requestId,
     title: req.title,
+    itemId: req.itemId,
+    operation: req.operation,
     options: req.options.map((o) => ({
       optionId: o.optionId,
       name: o.name,
@@ -220,6 +257,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Inverse of `buildPromptAttachments` — restores a failed submission's
+ *  attachments into the composer's editable attachment state. */
+function toComposerAttachment(attachment: AcpPromptAttachment): ComposerAttachment {
+  return {
+    id: attachment.ref.id,
+    name: attachment.ref.name ?? 'image',
+    kind: 'image',
+    previewUrl: attachment.previewUrl,
+    mimeType: attachment.ref.mimeType,
+  };
+}
+
 // ── Composer for a single store ────────────────────────────────────────────────
 //
 // Keyed by conversationId in the parent so that drafts, focus, and editor state
@@ -229,10 +278,13 @@ const ComposerForStore = observer(function ComposerForStore({
   store,
   composerSlot,
   onViewerOpen,
+  atBottom,
 }: {
   store: AcpChatStore;
   composerSlot: HTMLElement;
   onViewerOpen: (src?: string, alt?: string) => void;
+  /** Whether the transcript is currently at the tail — see AttentionBanner's offscreen check (ticket #33). */
+  atBottom: boolean;
 }) {
   const editorApiRef = useRef<PromptEditorRef | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -312,6 +364,51 @@ const ComposerForStore = observer(function ComposerForStore({
     [store, buildPromptAttachments, buildHiddenIssueContext]
   );
 
+  const handleRetryFailedSubmission = useCallback(
+    (localId: string) => {
+      store.retryFailedSubmission(localId);
+    },
+    [store]
+  );
+
+  const handleEditFailedSubmission = useCallback(
+    (localId: string) => {
+      const snapshot = store.editFailedSubmission(localId);
+      if (!snapshot) return;
+      editorApiRef.current?.setText(snapshot.text);
+      setAttachments(snapshot.attachments.map(toComposerAttachment));
+      editorApiRef.current?.focus();
+    },
+    [store]
+  );
+
+  const handleDiscardFailedSubmission = useCallback(
+    (localId: string) => {
+      store.discardFailedSubmission(localId);
+    },
+    [store]
+  );
+
+  // Copy diagnostic (ticket #39) — bounded/redacted via
+  // `buildSubmissionRecoveryDiagnostic`, never the raw `.error` string.
+  const handleCopyFailedSubmissionDiagnostic = useCallback(
+    async (submission: FailedAcpSubmission) => {
+      const category = categorizeSubmissionFailure(submission.errorKind);
+      const diagnostic = buildSubmissionRecoveryDiagnostic(submission, category);
+      try {
+        await navigator.clipboard.writeText(diagnostic);
+        toast({ title: 'Diagnostic copied' });
+      } catch {
+        toast({
+          title: 'Copy failed',
+          description: 'The diagnostic could not be copied to the clipboard.',
+          variant: 'destructive',
+        });
+      }
+    },
+    []
+  );
+
   const handleStop = useCallback(() => {
     store.stop();
   }, [store]);
@@ -320,6 +417,35 @@ const ComposerForStore = observer(function ComposerForStore({
     (optionId: string | null) => {
       if (!optionId) return;
       store.resolvePermission(optionId);
+    },
+    [store]
+  );
+
+  const handleRetryPermissionResolution = useCallback(() => {
+    store.retryPermissionResolution();
+  }, [store]);
+
+  const handleJumpToPermissionOrigin = useCallback(
+    (itemId: string) => {
+      void store.scrollToTranscriptItem(itemId, { align: 'start' });
+    },
+    [store]
+  );
+
+  // Activation for the sticky attention indicator (ticket #33). A transcript
+  // target goes through the same off-DOM/pagination-aware seam
+  // `handleJumpToPermissionOrigin`/`handleSelectChangesEntry` already use. A
+  // composer target (failed submission) has nothing to scroll to — the
+  // composer is a fixed dock, never virtualized away — so activation instead
+  // moves keyboard focus into it, next to the existing Retry/Edit/Discard
+  // banner.
+  const handleActivateAttentionItem = useCallback(
+    (item: AttentionItem) => {
+      if (item.target.kind === 'transcript') {
+        void store.scrollToTranscriptItem(item.target.itemId, { align: 'start' });
+        return;
+      }
+      editorApiRef.current?.focus();
     },
     [store]
   );
@@ -587,6 +713,68 @@ const ComposerForStore = observer(function ComposerForStore({
   return createPortal(
     <>
       <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileInputChange} />
+      <AttentionBanner
+        queue={store.attentionQueue}
+        focusedItem={store.attentionFocusedItem}
+        atBottom={atBottom}
+        onNext={() => store.focusNextAttentionItem()}
+        onPrevious={() => store.focusPreviousAttentionItem()}
+        onActivate={handleActivateAttentionItem}
+      />
+      {store.failedSubmissions.length > 0 && (
+        <div
+          role="list"
+          aria-label="Messages that failed to send"
+          className="mb-2 flex flex-col gap-1.5"
+        >
+          {store.failedSubmissions.map((submission) => (
+            <div
+              key={submission.localId}
+              role="listitem"
+              className="flex items-center justify-between gap-2 rounded-md border border-border-destructive bg-background-destructive px-3 py-1.5 text-sm text-foreground-destructive"
+            >
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate">{failedSubmissionPreview(submission)}</span>
+                <span className="truncate text-xs opacity-80">{submission.error}</span>
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Retry sending this message"
+                  onClick={() => handleRetryFailedSubmission(submission.localId)}
+                >
+                  Retry
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Edit this message"
+                  onClick={() => handleEditFailedSubmission(submission.localId)}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Discard this message"
+                  onClick={() => handleDiscardFailedSubmission(submission.localId)}
+                >
+                  Discard
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Copy diagnostic"
+                  onClick={() => void handleCopyFailedSubmissionDiagnostic(submission)}
+                >
+                  Copy diagnostic
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <ChatComposer
         isWorking={a.isWorking}
         canSubmit={a.canSubmit}
@@ -597,6 +785,9 @@ const ComposerForStore = observer(function ComposerForStore({
         permissionRequest={permissionRequest}
         permissionQueueCount={store.permissionQueue.length}
         onResolvePermission={handleResolvePermission}
+        permissionResolution={store.permissionResolution}
+        onRetryPermissionResolution={handleRetryPermissionResolution}
+        onJumpToPermissionOrigin={handleJumpToPermissionOrigin}
         queuedPrompts={store.queuedPrompts}
         onEditQueuedPrompt={(id, text) => store.editQueuedPrompt(id, text)}
         onDeleteQueuedPrompt={(id) => store.deleteQueuedPrompt(id)}
@@ -668,6 +859,17 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
   // True while the scroll viewport is at the tail. Defaults to true so the
   // button does not flash on mount before the first frame fires.
   const [atBottom, setAtBottom] = useState(true);
+
+  // ── Transcript outline (ticket #34) ────────────────────────────────────────
+  const outlineToggleRef = useRef<HTMLButtonElement | null>(null);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineSelectedItemId, setOutlineSelectedItemId] = useState<string | null>(null);
+  // Measured against this panel's own width (not the window's) — a split
+  // pane can be narrow even in a wide window. Drives rail-vs-drawer layout.
+  const [panelWidth, setPanelWidth] = useState(0);
+
+  // ── Transcript search (ticket #36) ─────────────────────────────────────────
+  const searchToggleRef = useRef<HTMLButtonElement | null>(null);
 
   const handleReady = useCallback((view: ChatView) => {
     viewRef.current = view;
@@ -742,6 +944,16 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
       const root = rootRef.current;
       if (!root || !eventComposedPathContains(event, root)) return;
 
+      if (isOpenSearchShortcut(event)) {
+        // Idempotent: if search is already open this only keeps it open —
+        // see `AcpChatSearchController.open()`. `preventDefault` still runs
+        // so Mod+F never falls through to the browser's own find-in-page.
+        store.openSearch();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       const commandId = chatViewCommandForShortcut(event);
       if (!commandId) return;
       if (!executeChatViewCommand(viewRef.current, commandId)) return;
@@ -755,6 +967,34 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
     };
   }, [store]);
+
+  // Measure the panel's own width so the outline can pick rail vs. drawer
+  // layout independent of the overall window size (a split pane can be
+  // narrow even in a wide window) — see OUTLINE_NARROW_BREAKPOINT_PX.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width !== undefined) setPanelWidth(width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // The selected-entry highlight is conversation-scoped; a stale selection
+  // from a previous conversation is meaningless once the active tab changes.
+  useEffect(() => {
+    setOutlineSelectedItemId(null);
+  }, [activeConversationId]);
+
+  const handleSelectOutlineEntry = useCallback(
+    (entry: OutlineEntry) => {
+      store?.scrollToOutlineEntry(entry);
+      setOutlineSelectedItemId(entry.itemId);
+    },
+    [store]
+  );
 
   const handleViewerOpen = useCallback((src?: string, alt?: string) => {
     setViewer({ src, alt });
@@ -773,6 +1013,11 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
       },
       resolveAttachment: (attachment) =>
         store ? resolveAttachmentDataUrl(store, attachment.id) : Promise.resolve(null),
+      onStop: () => {
+        // Same ACP cancellation path as the composer's Stop button — see
+        // handleStop above and AcpChatStore.stop().
+        store?.stop();
+      },
       onViewMermaid: (arg) => {
         setMermaidViewer({
           svg: store?.chatContext.sharedCaches.renderMermaid(arg.chart) ?? null,
@@ -782,6 +1027,13 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
         if (!store) return;
         const open = arg.source === 'diff' ? openFileInAdjacentPane : openFileInTaskEditor;
         void open(store.projectId, store.taskId, arg.path);
+      },
+      onActivateLink: (arg) => {
+        activateChatLink(arg, store ? { projectId: store.projectId, taskId: store.taskId } : null);
+      },
+      onOpenDiff: (arg) => {
+        if (!store) return;
+        void openDiffInReviewSurface(store.projectId, store.taskId, arg.path);
       },
       onClickMention: (arg: Parameters<NonNullable<ChatCommands['onClickMention']>>[0]) => {
         if (!store) return;
@@ -812,114 +1064,281 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
 
   const showComposer = !store.historyLoading && store.loadError === null;
   const showHero = showComposer && store.isEmpty;
+  const changesRail = getTaskView(store.projectId, store.taskId)?.changesRail ?? null;
+  const isChangesRailNarrowLayout = isChangesRailNarrow(pane.dimensions?.width ?? null);
+  // Primary action for a Changes entry (ticket #35): jump to its transcript
+  // provenance when it has one — reusing the same off-DOM-aware, pagination-
+  // aware seam the outline uses (see AcpChatStore.scrollToTranscriptItem) —
+  // or fall back to the previous default open behavior when there is nothing
+  // to jump to (a Git-only change, e.g. a rename never touched by the agent).
+  // "Open file"/"Open diff" stay reachable as separate explicit actions below
+  // regardless of which branch this takes.
+  const handleSelectChangesEntry = (entry: ChangesFootprintEntry) => {
+    const target = changesProvenanceJumpTarget(entry);
+    if (target) {
+      void store.scrollToTranscriptItem(target.itemId, { align: 'start' });
+      return;
+    }
+    openChangesFootprintEntry(store.projectId, store.taskId, entry);
+  };
+  const handleOpenChangesEntryFile = (entry: ChangesFootprintEntry) => {
+    openChangesFootprintFile(store.projectId, store.taskId, entry.path);
+  };
+  const handleOpenChangesEntryDiff = (entry: EditedChangesFootprintEntry) => {
+    openChangesFootprintDiff(store.projectId, store.taskId, entry);
+  };
+
+  const outlineWide = panelWidth >= OUTLINE_NARROW_BREAKPOINT_PX;
 
   return (
-    <div ref={rootRef} className="relative h-full overflow-hidden bg-background-secondary-1">
-      <ChatTranscript
-        context={store.chatContext}
-        state={store.chatState}
-        composer="slot"
-        composerPlacement={store.isEmpty ? 'center' : 'bottom'}
-        contentOverlay
-        stickToBottom
-        pinUserMessages
-        onReady={handleReady}
-        commands={transcriptCommands}
-        onAtBottomChange={setAtBottom}
-        style={{ position: 'absolute', inset: 0 }}
-      />
+    <div ref={rootRef} className="relative flex h-full overflow-hidden bg-background-secondary-1">
+      <div className="relative h-full min-w-0 flex-1 overflow-hidden">
+        <ChatTranscript
+          context={store.chatContext}
+          state={store.chatState}
+          composer="slot"
+          composerPlacement={store.isEmpty ? 'center' : 'bottom'}
+          contentOverlay
+          stickToBottom
+          pinUserMessages
+          onReady={handleReady}
+          commands={transcriptCommands}
+          onAtBottomChange={(value) => {
+            setAtBottom(value);
+            store.setAtBottom(value);
+          }}
+          onReachStart={() => store.loadOlderHistory()}
+          style={{ position: 'absolute', inset: 0 }}
+        />
 
-      {/* Loading / error overlay portaled into the library-owned slot.
+        {/* Loading / error overlay portaled into the library-owned slot.
           The slot sits at z-index 15 (above pinned, below composer at 20).
           Hide the composer in error state so the overlay owns the whole content area.
           Precedence: error > loading. */}
-      {overlaySlot &&
-        (store.loadError !== null || store.historyLoading) &&
-        createPortal(
-          <div
-            // The library-owned overlay slot is pointer-events: none by design;
-            // opt back in so the Sign in / Retry buttons are clickable.
-            className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
-              store.loadError !== null || store.historyLoading ? 'bg-background-secondary-1' : ''
-            }`}
-            aria-live="polite"
-          >
-            {store.loadError !== null ? (
-              store.loadError.kind === 'auth_required' ? (
-                <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">
-                    {agent?.name ?? 'This agent'} needs you to sign in.
-                  </span>
-                  <span className="text-xs text-foreground-muted">
-                    {cliAuthMethod?.description ?? store.loadError.message}
-                  </span>
-                  <div className="mt-1 flex gap-2">
-                    {cliAuthMethod && (
-                      <Button variant="default" size="sm" onClick={openSignInModal}>
-                        Sign in
+        {overlaySlot &&
+          (store.loadError !== null || store.historyLoading) &&
+          createPortal(
+            <div
+              // The library-owned overlay slot is pointer-events: none by design;
+              // opt back in so the Sign in / Retry buttons are clickable.
+              className={`pointer-events-auto absolute inset-0 flex items-center justify-center text-sm text-foreground-muted ${
+                store.loadError !== null || store.historyLoading ? 'bg-background-secondary-1' : ''
+              }`}
+              aria-live="polite"
+            >
+              {store.loadError !== null ? (
+                store.loadError.kind === 'auth_required' ? (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">
+                      {agent?.name ?? 'This agent'} needs you to sign in.
+                    </span>
+                    <span className="text-xs text-foreground-muted">
+                      {cliAuthMethod?.description ?? store.loadError.message}
+                    </span>
+                    <div className="mt-1 flex gap-2">
+                      {cliAuthMethod && (
+                        <Button variant="default" size="sm" onClick={openSignInModal}>
+                          Sign in
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" onClick={() => store.retry()}>
+                        Retry
                       </Button>
-                    )}
-                    <Button variant="outline" size="sm" onClick={() => store.retry()}>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
+                    <span className="text-foreground">Failed to load chat.</span>
+                    <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1"
+                      onClick={() => store.retry()}
+                    >
                       Retry
                     </Button>
                   </div>
-                </div>
+                )
               ) : (
-                <div className="flex max-w-md flex-col items-center gap-2 px-6 text-center">
-                  <span className="text-foreground">Failed to load chat.</span>
-                  <span className="text-xs text-foreground-muted">{store.loadError.message}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-1"
-                    onClick={() => store.retry()}
-                  >
-                    Retry
-                  </Button>
-                </div>
-              )
-            ) : (
-              'Loading chat...'
-            )}
-          </div>,
-          overlaySlot
+                'Loading chat...'
+              )}
+            </div>,
+            overlaySlot
+          )}
+
+        {showHero &&
+          heroSlot &&
+          createPortal(
+            <div className="px-4 text-center">
+              <h1 className="text-2xl tracking-tight text-foreground">
+                What are we building today?
+              </h1>
+            </div>,
+            heroSlot
+          )}
+
+        {showComposer && composerSlot && (
+          <ComposerForStore
+            key={store.conversationId}
+            store={store}
+            composerSlot={composerSlot}
+            onViewerOpen={handleViewerOpen}
+            atBottom={atBottom}
+          />
         )}
 
-      {showHero &&
-        heroSlot &&
-        createPortal(
-          <div className="px-4 text-center">
-            <h1 className="text-2xl tracking-tight text-foreground">What are we building today?</h1>
-          </div>,
-          heroSlot
-        )}
+        {/* Reading position (ticket #37): jumping to the newest event saves
+          the exact reading position so "Return to reading position" below
+          can restore it precisely — see AcpChatStore.visitNewestEvent. */}
+        {showComposer &&
+          composerSlot &&
+          !atBottom &&
+          createPortal(
+            <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
+              <Button
+                variant="secondary"
+                size={store.newEventCount > 0 ? 'sm' : 'icon-md'}
+                aria-label={
+                  store.newEventCount > 0
+                    ? `${store.newEventCount} new — jump to newest`
+                    : 'Scroll to bottom'
+                }
+                onClick={() => store.visitNewestEvent()}
+                className="pointer-events-auto rounded-full shadow-md"
+              >
+                <ArrowDown />
+                {store.newEventCount > 0 && (
+                  <Badge variant="default" aria-hidden="true">
+                    {store.newEventCount}
+                  </Badge>
+                )}
+              </Button>
+            </div>,
+            composerSlot
+          )}
 
-      {showComposer && composerSlot && (
-        <ComposerForStore
-          key={store.conversationId}
-          store={store}
-          composerSlot={composerSlot}
-          onViewerOpen={handleViewerOpen}
+        {showComposer &&
+          composerSlot &&
+          atBottom &&
+          store.canReturnToReadingPosition &&
+          createPortal(
+            <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
+              <Button
+                variant="secondary"
+                size="sm"
+                aria-label="Return to reading position"
+                onClick={() => store.returnToReadingPosition()}
+                className="pointer-events-auto rounded-full shadow-md"
+              >
+                <Undo2 className="size-4" />
+                Return to reading position
+              </Button>
+            </div>,
+            composerSlot
+          )}
+
+        {/* Transcript-overlay toggles. #34 (outline) and #29 (Changes) each
+          introduced a control at top-3/right-3 independently, so they are
+          grouped into one row here rather than stacked on top of each other.
+          Each keeps its own visibility condition. */}
+        <div className="pointer-events-none absolute top-3 right-3 z-20 flex items-center gap-1.5">
+          {showComposer && (
+            <Button
+              ref={searchToggleRef}
+              variant="secondary"
+              size="icon-md"
+              aria-label={store.searchOpen ? 'Hide search' : 'Search transcript'}
+              aria-pressed={store.searchOpen}
+              onClick={() => (store.searchOpen ? store.closeSearch() : store.openSearch())}
+              className="pointer-events-auto rounded-full shadow-md"
+            >
+              <Search />
+            </Button>
+          )}
+          {showComposer && (
+            <Button
+              ref={outlineToggleRef}
+              variant="secondary"
+              size="icon-md"
+              aria-label={outlineOpen ? 'Hide outline' : 'Show outline'}
+              aria-pressed={outlineOpen}
+              onClick={() => setOutlineOpen((open) => !open)}
+              className="pointer-events-auto rounded-full shadow-md"
+            >
+              <ListTree />
+            </Button>
+          )}
+          {changesRail && (
+            <Button
+              variant="secondary"
+              size="icon-sm"
+              aria-label={changesRail.isOpen ? 'Hide Changes' : 'Show Changes'}
+              aria-pressed={changesRail.isOpen}
+              onClick={() => changesRail.toggleOpen()}
+              className="pointer-events-auto shadow-sm"
+            >
+              <PanelRight className="size-4" />
+            </Button>
+          )}
+        </div>
+
+        {store.searchOpen && (
+          <TranscriptSearchBar
+            query={store.searchQuery}
+            onQueryChange={(query) => store.setSearchQuery(query)}
+            results={store.searchResults}
+            currentIndex={store.searchCurrentIndex}
+            onNext={() => store.searchNext()}
+            onPrevious={() => store.searchPrevious()}
+            onSelectResult={(result) => store.selectSearchResult(result)}
+            onClose={() => store.closeSearch()}
+            historyExhausted={store.searchHistoryExhausted}
+            isLoadingOlderHistory={store.isLoadingOlderHistory}
+            onLoadOlderHistory={() => store.loadOlderHistory()}
+            returnFocusRef={searchToggleRef}
+          />
+        )}
+      </div>
+
+      {outlineWide ? (
+        outlineOpen && (
+          <TranscriptOutlineRail
+            entries={store.outline}
+            selectedItemId={outlineSelectedItemId}
+            onSelect={handleSelectOutlineEntry}
+            onClose={() => setOutlineOpen(false)}
+            returnFocusRef={outlineToggleRef}
+          />
+        )
+      ) : (
+        <TranscriptOutlineDrawer
+          open={outlineOpen}
+          onOpenChange={setOutlineOpen}
+          entries={store.outline}
+          selectedItemId={outlineSelectedItemId}
+          onSelect={handleSelectOutlineEntry}
         />
       )}
 
-      {showComposer &&
-        composerSlot &&
-        !atBottom &&
-        createPortal(
-          <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center">
-            <Button
-              variant="secondary"
-              size="icon-md"
-              aria-label="Scroll to bottom"
-              onClick={() => viewRef.current?.scrollToBottom({ behavior: 'smooth' })}
-              className="pointer-events-auto rounded-full shadow-md"
-            >
-              <ArrowDown />
-            </Button>
-          </div>,
-          composerSlot
-        )}
+      {changesRail && !isChangesRailNarrowLayout && (
+        <ChangesRail
+          store={changesRail}
+          footprint={store.changesFootprint}
+          onSelectEntry={handleSelectChangesEntry}
+          onOpenFile={handleOpenChangesEntryFile}
+          onOpenDiff={handleOpenChangesEntryDiff}
+        />
+      )}
+      {changesRail && isChangesRailNarrowLayout && (
+        <ChangesDrawer
+          store={changesRail}
+          footprint={store.changesFootprint}
+          onSelectEntry={handleSelectChangesEntry}
+          onOpenFile={handleOpenChangesEntryFile}
+          onOpenDiff={handleOpenChangesEntryDiff}
+        />
+      )}
 
       <ImageViewerDialog
         open={!!viewer}

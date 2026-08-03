@@ -42,6 +42,7 @@ import { resolveSeamGap } from '@core/spacing';
 import type { ItemSegmenter, Margin, RenderUnit, SegmentCtx } from '@core/units';
 import { stampGroupRoles } from '@core/units';
 import type { ChatItem, ChatMessage, SyntheticItem, TranscriptTurn } from '@/model';
+import { deriveTurnFooter } from './turn-footer';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -83,10 +84,10 @@ export function flattenTier(
   // Track the kind of the last emitted unit for seam resolution.
   let lastKind = prevKind;
 
-  const processItem = (item: ChatItem | SyntheticItem): void => {
+  const processItem = (item: ChatItem | SyntheticItem, itemCtx: SegmentCtx): void => {
     const seg = segmenters[item.kind];
     if (!seg) return;
-    const group = seg.segment(item, ctx);
+    const group = seg.segment(item, itemCtx);
     const chrome = seg.chrome;
 
     stampGroupRoles(group);
@@ -113,16 +114,28 @@ export function flattenTier(
 
   for (const turn of turns) {
     const items = turn.items as readonly ChatItem[];
+    // Scope turnOutcome to this turn only — a tool row must never see the
+    // outcome of a different (e.g. previously cancelled) turn.
+    const turnCtx: SegmentCtx = { ...ctx, turnOutcome: () => turn.outcome };
     for (const item of items) {
-      processItem(item);
+      processItem(item, turnCtx);
     }
 
     if (ctx.active && shouldShowWorking(items)) {
-      processItem({ kind: 'working', id: `${turn.id}:working` });
+      processItem({ kind: 'working', id: `${turn.id}:working` }, turnCtx);
     }
 
-    if (!ctx.active && turn.outcome && turn.outcome.kind !== 'done') {
-      processItem({ kind: 'turn-outcome', id: `${turn.id}:outcome`, outcome: turn.outcome });
+    // Every settled turn (any outcome kind, including 'done') gets exactly one
+    // compact metadata footer (ticket #38) — never the active tier, which
+    // still owns the "Working…"/streaming presentation above.
+    if (!ctx.active && turn.outcome) {
+      const footer = deriveTurnFooter(turn);
+      if (footer) {
+        processItem(
+          { kind: 'turn-outcome', id: `${turn.id}:outcome`, outcome: turn.outcome, footer },
+          turnCtx
+        );
+      }
     }
   }
 

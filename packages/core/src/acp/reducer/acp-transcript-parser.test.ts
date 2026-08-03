@@ -425,6 +425,38 @@ describe('AcpTranscriptParser', () => {
     });
   });
 
+  it('tool_call_update content materializes outputText for search, mcp, fetch, and unknown tool calls', () => {
+    const p = new AcpTranscriptParser(deps());
+    p.push(userChunk('u1', 'use tools'));
+    p.push(toolCallUpdate('search-1', "Search for 'symbols'", 'search'));
+    p.push(toolCallUpdate('mcp-1', 'linear.searchIssues', 'mcp-tool'));
+    p.push(toolCallUpdate('fetch-1', 'https://example.test', 'web-fetch'));
+    p.push(toolCallUpdate('vendor-1', 'vendor_tool', 'vendor-specific'));
+
+    p.push(toolUpdateWithTextOutput('search-1', '3 matches found'));
+    p.push(toolUpdateWithTextOutput('mcp-1', '{"issues": []}'));
+    p.push(toolUpdateWithTextOutput('fetch-1', '<html>fetched body</html>'));
+    p.push(toolUpdateWithTextOutput('vendor-1', 'raw vendor output'));
+
+    const items = p.activeTurn?.items ?? [];
+    expect(items.find((i) => i.kind === 'search-tool-call')).toMatchObject({
+      outputText: '3 matches found',
+      status: 'done',
+    });
+    expect(items.find((i) => i.kind === 'mcp-tool-call')).toMatchObject({
+      outputText: '{"issues": []}',
+      status: 'done',
+    });
+    expect(items.find((i) => i.kind === 'web-fetch-tool-call')).toMatchObject({
+      outputText: '<html>fetched body</html>',
+      status: 'done',
+    });
+    expect(items.find((i) => i.kind === 'unknown-tool-call')).toMatchObject({
+      outputText: 'raw vendor output',
+      status: 'done',
+    });
+  });
+
   it('pushEvent can materialize enriched special tool events', () => {
     const p = new AcpTranscriptParser(deps());
     p.push(userChunk('u1', 'search'));
