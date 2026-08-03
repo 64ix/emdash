@@ -10,7 +10,7 @@ import type {
   MentionItem,
   PromptEditorRef,
 } from '@emdash/ui/react/components';
-import { ArrowDown, ListTree } from 'lucide-react';
+import { ArrowDown, ListTree, PanelRight } from 'lucide-react';
 import { observer, useObserver } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -35,6 +35,7 @@ import {
   asProvisioned,
   getRegisteredTaskData,
   getTaskStore,
+  getTaskView,
 } from '@renderer/features/tasks/stores/task-selectors';
 import {
   issueMentionToken,
@@ -60,6 +61,11 @@ import type { AcpChatTabResource } from './acp-chat-tab-resource';
 import { chatViewCommandForShortcut, executeChatViewCommand } from './acp-chat-view-commands';
 import { failedSubmissionPreview } from './acp-submission-recovery';
 import { activateChatLink } from './chat-link-activation';
+import type { ChangesFootprintEntry } from './changes/acp-changes-footprint';
+import { ChangesDrawer } from './changes/changes-drawer';
+import { ChangesRail } from './changes/changes-rail';
+import { openChangesFootprintEntry } from './changes/changes-rail-actions';
+import { isChangesRailNarrow } from './changes/changes-rail-layout';
 import { buildIssueMentionHiddenContext } from './issue-mention-context';
 import { OUTLINE_NARROW_BREAKPOINT_PX, TranscriptOutlinePanel } from './transcript-outline-panel';
 
@@ -948,6 +954,11 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
 
   const showComposer = !store.historyLoading && store.loadError === null;
   const showHero = showComposer && store.isEmpty;
+  const changesRail = getTaskView(store.projectId, store.taskId)?.changesRail ?? null;
+  const isChangesRailNarrowLayout = isChangesRailNarrow(pane.dimensions?.width ?? null);
+  const handleSelectChangesEntry = (entry: ChangesFootprintEntry) => {
+    openChangesFootprintEntry(store.projectId, store.taskId, entry);
+  };
 
   const outlineWide = panelWidth >= OUTLINE_NARROW_BREAKPOINT_PX;
 
@@ -1063,19 +1074,37 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
             composerSlot
           )}
 
-        {showComposer && (
-          <Button
-            ref={outlineToggleRef}
-            variant="secondary"
-            size="icon-md"
-            aria-label={outlineOpen ? 'Hide outline' : 'Show outline'}
-            aria-pressed={outlineOpen}
-            onClick={() => setOutlineOpen((open) => !open)}
-            className="absolute top-3 right-3 z-10 rounded-full shadow-md"
-          >
-            <ListTree />
-          </Button>
-        )}
+        {/* Transcript-overlay toggles. #34 (outline) and #29 (Changes) each
+          introduced a control at top-3/right-3 independently, so they are
+          grouped into one row here rather than stacked on top of each other.
+          Each keeps its own visibility condition. */}
+        <div className="pointer-events-none absolute top-3 right-3 z-20 flex items-center gap-1.5">
+          {showComposer && (
+            <Button
+              ref={outlineToggleRef}
+              variant="secondary"
+              size="icon-md"
+              aria-label={outlineOpen ? 'Hide outline' : 'Show outline'}
+              aria-pressed={outlineOpen}
+              onClick={() => setOutlineOpen((open) => !open)}
+              className="pointer-events-auto rounded-full shadow-md"
+            >
+              <ListTree />
+            </Button>
+          )}
+          {changesRail && (
+            <Button
+              variant="secondary"
+              size="icon-sm"
+              aria-label={changesRail.isOpen ? 'Hide Changes' : 'Show Changes'}
+              aria-pressed={changesRail.isOpen}
+              onClick={() => changesRail.toggleOpen()}
+              className="pointer-events-auto shadow-sm"
+            >
+              <PanelRight className="size-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {outlineOpen && (
@@ -1086,6 +1115,21 @@ export const AcpChatPanel = observer(function AcpChatPanel() {
           onSelect={handleSelectOutlineEntry}
           onClose={() => setOutlineOpen(false)}
           returnFocusRef={outlineToggleRef}
+        />
+      )}
+
+      {changesRail && !isChangesRailNarrowLayout && (
+        <ChangesRail
+          store={changesRail}
+          footprint={store.changesFootprint}
+          onSelectEntry={handleSelectChangesEntry}
+        />
+      )}
+      {changesRail && isChangesRailNarrowLayout && (
+        <ChangesDrawer
+          store={changesRail}
+          footprint={store.changesFootprint}
+          onSelectEntry={handleSelectChangesEntry}
         />
       )}
 
