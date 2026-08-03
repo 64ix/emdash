@@ -7,7 +7,11 @@ import {
   taskAgentStatus,
 } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
-import { useNavigate, useParams, useWorkspaceSlots } from '@renderer/lib/layout/navigation-provider';
+import {
+  useNavigate,
+  useParams,
+  useWorkspaceSlots,
+} from '@renderer/lib/layout/navigation-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
