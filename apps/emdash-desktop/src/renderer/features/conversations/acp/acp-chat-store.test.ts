@@ -1,6 +1,6 @@
 import type { TranscriptItem, TranscriptTurn } from '@emdash/core/acp/client';
 import { autorun } from 'mobx';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AcpChatStore } from './acp-chat-store';
 import type { AcpHistoryPagination } from './acp-history-pagination';
 import { bindSessionTerminalOutputs } from './acp-terminal-output-binding';
@@ -72,6 +72,72 @@ vi.mock('@emdash/chat-ui', () => ({
     }
     const hasNewActiveTurn = activeTurn !== null && activeTurn.id !== watermark.activeTurnId;
     return newCommittedCount + (hasNewActiveTurn ? 1 : 0);
+  },
+  // Real (simplified) semantics, not a passthrough echo: the search wiring
+  // tests below assert actual result content across setSearchQuery/loadOlder/
+  // activeTurn transitions. Full matching semantics (redaction, snippet
+  // windowing, field priority, grapheme safety) are unit-tested in chat-ui's
+  // own `state/transcript-search.test.ts` — this only needs to behave like a
+  // real substring search over each item's `text` field.
+  searchTranscript: (
+    committedTurns: TranscriptTurn[],
+    activeTurn: TranscriptTurn | null,
+    pendingPrompt: { id: string; text: string } | null,
+    query: string
+  ) => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return [];
+    type FakeResult = {
+      id: string;
+      itemId: string;
+      turnId: string;
+      kind: string;
+      snippet: string;
+      matchStart: number;
+      matchLength: number;
+    };
+    const results: FakeResult[] = [];
+    const visit = (turn: TranscriptTurn) => {
+      for (const item of turn.items) {
+        const text = 'text' in item ? item.text : undefined;
+        if (typeof text !== 'string') continue;
+        const matchStart = text.toLowerCase().indexOf(needle);
+        if (matchStart === -1) continue;
+        results.push({
+          id: item.id,
+          itemId: item.id,
+          turnId: turn.id,
+          kind: 'response',
+          snippet: text,
+          matchStart,
+          matchLength: needle.length,
+        });
+      }
+    };
+    for (const turn of committedTurns) visit(turn);
+    if (activeTurn) {
+      visit(activeTurn);
+    } else if (pendingPrompt && pendingPrompt.text.toLowerCase().includes(needle)) {
+      results.push({
+        id: pendingPrompt.id,
+        itemId: pendingPrompt.id,
+        turnId: `pending:${pendingPrompt.id}:turn`,
+        kind: 'prompt',
+        snippet: pendingPrompt.text,
+        matchStart: pendingPrompt.text.toLowerCase().indexOf(needle),
+        matchLength: needle.length,
+      });
+    }
+    return results;
+  },
+  advanceSearchResultIndex: (
+    resultCount: number,
+    currentIndex: number | null,
+    direction: 1 | -1
+  ) => {
+    if (resultCount === 0) return null;
+    if (currentIndex === null) return direction === 1 ? 0 : resultCount - 1;
+    return (currentIndex + direction + resultCount) % resultCount;
   },
 }));
 vi.mock('@renderer/lib/chat/shared-chat-context', () => ({
@@ -933,6 +999,142 @@ describe('AcpChatStore reading position', () => {
     // (new) transcript looks like now, not the old one.
     store.setAtBottom(false);
     expect(store.newEventCount).toBe(0);
+  });
+});
+
+// ── AcpChatStore search (ticket #36) ──────────────────────────────────────────
+//
+// Matching semantics are the mocked (simplified-real) `searchTranscript`
+// above; chat-ui's own `state/transcript-search.test.ts` covers the real
+// matcher exhaustively. This file only asserts the store's wiring: debounced
+// recompute, jump-through-`scrollToTranscriptItem`, immediate (non-debounced)
+// recompute on transcript growth/older-page loads, and — per this ticket's
+// explicit staleness guardrail — that `searchResults` keeps updating once
+// observed instead of freezing at its first evaluation (the #34 bug shape).
+describe('AcpChatStore.search', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('starts closed with a blank query and no results', () => {
+    const { store } = setUpStore([makeTurn(1)], null);
+    expect(store.searchOpen).toBe(false);
+    expect(store.searchQuery).toBe('');
+    expect(store.searchResults).toEqual([]);
+    expect(store.searchCurrentIndex).toBeNull();
+  });
+
+  it('debounces setSearchQuery: results only populate after the debounce window', () => {
+    const { store } = setUpStore([makeMessageTurn(1, 'msg-1')], null);
+    store.openSearch();
+
+    store.setSearchQuery('text for');
+    expect(store.searchResults).toEqual([]);
+
+    vi.advanceTimersByTime(200);
+    expect(store.searchResults).toHaveLength(1);
+    expect(store.searchResults[0]).toMatchObject({ itemId: 'msg-1' });
+  });
+
+  it('cancels a stale in-flight query when a newer keystroke supersedes it', () => {
+    const { store } = setUpStore([makeMessageTurn(1, 'msg-1')], null);
+    store.openSearch();
+
+    store.setSearchQuery('text');
+    vi.advanceTimersByTime(50);
+    store.setSearchQuery('text for msg-1');
+    vi.advanceTimersByTime(200);
+
+    expect(store.searchResults).toHaveLength(1);
+    expect(store.searchResults[0].itemId).toBe('msg-1');
+  });
+
+  it('closeSearch clears query/results and cancels any pending debounce', () => {
+    const { store } = setUpStore([makeMessageTurn(1, 'msg-1')], null);
+    store.openSearch();
+    store.setSearchQuery('text');
+
+    store.closeSearch();
+    vi.advanceTimersByTime(500);
+
+    expect(store.searchOpen).toBe(false);
+    expect(store.searchQuery).toBe('');
+    expect(store.searchResults).toEqual([]);
+  });
+
+  it('searchNext jumps through scrollToTranscriptItem — the same off-DOM-aware seam the outline uses', () => {
+    const { store } = setUpStore([makeMessageTurn(1, 'msg-1')], null);
+    const scrollToItem = vi.fn();
+    store.bindView({ scrollToItem } as never);
+    store.openSearch();
+    store.setSearchQuery('text for');
+    vi.advanceTimersByTime(200);
+
+    store.searchNext();
+
+    expect(store.searchCurrentIndex).toBe(0);
+    expect(scrollToItem).toHaveBeenCalledExactlyOnceWith('msg-1', { align: 'start' });
+  });
+
+  it('searchHistoryExhausted reflects the pagination cursor', () => {
+    const { store: exhausted } = setUpStore([makeTurn(1)], null);
+    expect(exhausted.searchHistoryExhausted).toBe(true);
+
+    const { store: notExhausted } = setUpStore([makeTurn(1)], 1);
+    expect(notExhausted.searchHistoryExhausted).toBe(false);
+  });
+
+  it('an older-history page load recomputes results immediately, without waiting on the debounce window', async () => {
+    const { store, fakeChatState } = setUpStore([makeTurn(10)], 10);
+    store.session = {
+      getHistory: vi.fn(async () => ({
+        success: true,
+        data: { turns: [makeMessageTurn(8, 'msg-8')], nextCursor: null },
+      })),
+    } as never;
+    store.bindView(null);
+    store.openSearch();
+    store.setSearchQuery('text for msg-8');
+    vi.advanceTimersByTime(200);
+    expect(store.searchResults).toEqual([]);
+
+    void store.loadOlderHistory();
+    await flushMicrotasks();
+
+    expect(fakeChatState.transcript.history.get().some((turn) => turn.id === 'turn-8')).toBe(true);
+    expect(store.searchResults).toHaveLength(1);
+    expect(store.searchResults[0].itemId).toBe('msg-8');
+  });
+
+  it('keeps updating once observed, instead of caching its first evaluation (the #34 staleness bug shape)', () => {
+    // Regression guard, mirroring the "AcpChatStore.outline" describe block's
+    // own version of this test: `searchResults` is a `computed` whose only
+    // *direct* reads are `_search`'s plain (non-MobX) fields, so it depends
+    // on `searchVersion` purely to stay reactive — see that field's doc.
+    const { store, fakeChatState } = setUpStore([makeMessageTurn(1, 'msg-1')], null);
+    store.openSearch();
+    store.setSearchQuery('text for');
+    vi.advanceTimersByTime(200);
+    expect(store.searchResults).toHaveLength(1);
+
+    const seen: number[] = [];
+    const stop = autorun(() => {
+      seen.push(store.searchResults.length);
+    });
+    expect(seen).toEqual([1]);
+
+    // Simulate the transcript growing while search stays open with the same
+    // query — the same `session.activeTurn.onChange` path that calls
+    // `_syncSearch()` alongside `_syncOutline()`.
+    fakeChatState.transcript.history.append([makeMessageTurn(2, 'msg-2')]);
+    (store as unknown as { _syncSearch: () => void })._syncSearch();
+
+    expect(seen.at(-1)).toBe(2);
+    stop();
   });
 });
 
