@@ -571,6 +571,13 @@ export class GitWorktree implements IGitWorktree {
       const code = `${entry.x}${entry.y}`;
       const filePath = entry.rename ?? entry.path;
       const status = mapGitChangeStatus(code);
+      // `entry.path` is the pre-rename path and `entry.rename` the post-rename
+      // path (see `StatusParser.parseRename`). Only surface it when the two
+      // differ, so a same-path rename degrades exactly like an absent oldPath.
+      const oldPath =
+        status === 'renamed' && entry.rename && entry.rename !== entry.path
+          ? this.toAbsolutePath(entry.path)
+          : undefined;
 
       if (entry.x !== ' ' && entry.x !== '?') {
         const stat = stagedNumstat.get(filePath);
@@ -580,6 +587,7 @@ export class GitWorktree implements IGitWorktree {
           additions: stat?.additions ?? 0,
           deletions: stat?.deletions ?? 0,
           indexOid: entry.indexOid,
+          oldPath,
         });
       }
 
@@ -598,7 +606,13 @@ export class GitWorktree implements IGitWorktree {
         } catch {}
       }
 
-      unstaged.push({ path: this.toAbsolutePath(filePath), status, additions, deletions });
+      unstaged.push({
+        path: this.toAbsolutePath(filePath),
+        status,
+        additions,
+        deletions,
+        oldPath,
+      });
     }
 
     const stagedAdded = staged.reduce((sum, change) => sum + change.additions, 0);

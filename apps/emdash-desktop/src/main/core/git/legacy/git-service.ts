@@ -258,6 +258,10 @@ export class GitService implements IDisposable {
       const code = `${e.x}${e.y}`;
       const filePath = e.rename ?? e.path;
       const status = mapStatus(code);
+      // `e.path` is the pre-rename path and `e.rename` the post-rename path
+      // (see `StatusParser.parseRename`). Only surface it when the two
+      // differ, so a same-path rename degrades exactly like an absent oldPath.
+      const oldPath = status === 'renamed' && e.rename && e.rename !== e.path ? e.path : undefined;
 
       if (e.x !== ' ' && e.x !== '?') {
         const ns = stagedNumstat.get(filePath);
@@ -267,6 +271,7 @@ export class GitService implements IDisposable {
           additions: ns?.additions ?? 0,
           deletions: ns?.deletions ?? 0,
           indexOid: e.indexOid,
+          oldPath,
         });
       }
 
@@ -295,6 +300,7 @@ export class GitService implements IDisposable {
         status,
         additions,
         deletions,
+        oldPath,
       });
     }
 

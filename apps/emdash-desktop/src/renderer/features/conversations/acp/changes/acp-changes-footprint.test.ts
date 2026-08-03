@@ -68,8 +68,14 @@ function turn(id: string, seq: number, items: TranscriptItem[]): TranscriptTurn 
   return { id, seq, initiator: 'agent', items, outcome: { kind: 'done' } };
 }
 
-function gitChange(path: string, status: GitChangeStatus, additions = 0, deletions = 0): GitChange {
-  return { path, status, additions, deletions };
+function gitChange(
+  path: string,
+  status: GitChangeStatus,
+  additions = 0,
+  deletions = 0,
+  oldPath?: string
+): GitChange {
+  return { path, status, additions, deletions, ...(oldPath !== undefined ? { oldPath } : {}) };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -294,6 +300,193 @@ describe('buildChangesFootprint', () => {
         additions: 0,
         deletions: 0,
         source: null,
+      },
+    ]);
+  });
+
+  it('carries transcript provenance forward when a tracked-edited file is renamed via Git with no further activity on the new path', () => {
+    const t = turn('t1', 1, [modifyCall('c1', 1, 'src/old.ts')]);
+    const changes = [gitChange('src/new.ts', 'renamed', 0, 0, 'src/old.ts')];
+
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
+
+    // Exactly one entry: the stale old-path entry must not survive, and the
+    // new path must carry the old path's transcript provenance forward.
+    expect(footprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/new.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 't1', itemId: 'c1' },
+      },
+    ]);
+    expect(footprint.read).toEqual([]);
+  });
+
+  it('carries transcript provenance forward when a tracked-read (never edited) file is renamed via Git', () => {
+    const t = turn('t1', 1, [readCall('c1', 1, 'src/old.ts')]);
+    const changes = [gitChange('src/new.ts', 'renamed', 0, 0, 'src/old.ts')];
+
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
+
+    expect(footprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/new.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 't1', itemId: 'c1' },
+      },
+    ]);
+    expect(footprint.read).toEqual([]);
+  });
+
+  it('prefers edit provenance over read provenance when the renamed old path had both', () => {
+    const t = turn('t1', 1, [readCall('c1', 1, 'src/old.ts'), modifyCall('c2', 2, 'src/old.ts')]);
+    const changes = [gitChange('src/new.ts', 'renamed', 0, 0, 'src/old.ts')];
+
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
+
+    expect(footprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/new.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 't1', itemId: 'c2' },
+      },
+    ]);
+  });
+
+  it('does not overwrite provenance the new path already earned from its own tracked activity', () => {
+    const t = turn('t1', 1, [
+      modifyCall('c1', 1, 'src/old.ts'),
+      modifyCall('c2', 2, 'src/new.ts'),
+    ]);
+    const changes = [gitChange('src/new.ts', 'renamed', 0, 0, 'src/old.ts')];
+
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
+
+    expect(footprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/new.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        // The new path's own tracked edit wins over the forwarded old-path
+        // provenance.
+        source: { turnId: 't1', itemId: 'c2' },
+      },
+    ]);
+  });
+
+  it('resolves a rename chain (A->B, B->C) within one snapshot to the nearest tracked ancestor', () => {
+    const t = turn('t1', 1, [modifyCall('c1', 1, 'src/a.ts')]);
+    const changes = [
+      gitChange('src/b.ts', 'renamed', 0, 0, 'src/a.ts'),
+      gitChange('src/c.ts', 'renamed', 0, 0, 'src/b.ts'),
+    ];
+
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
+
+    // Both surviving rows (the staged A->B hop and the unstaged B->C hop)
+    // inherit A's provenance; only A itself never appears.
+    expect(footprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/b.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 't1', itemId: 'c1' },
+      },
+      {
+        kind: 'edited',
+        path: 'src/c.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 't1', itemId: 'c1' },
+      },
+    ]);
+  });
+
+  it('degrades to today\'s behavior for a rename with no oldPath (older producers, SSH)', () => {
+    const t = turn('t1', 1, [modifyCall('c1', 1, 'src/old.ts')]);
+    const changes = [gitChange('src/new.ts', 'renamed')];
+
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
+
+    // No oldPath means no reconciliation is possible: the old path's edit
+    // survives as its own (stale) entry, and the new path has no provenance
+    // — exactly today's (buggy but unchanged) behavior.
+    expect(footprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/new.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        source: null,
+      },
+      {
+        kind: 'edited',
+        path: 'src/old.ts',
+        status: 'modified',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 't1', itemId: 'c1' },
+      },
+    ]);
+  });
+
+  it('behaves exactly as today for a rename whose old and new path are equal', () => {
+    const t = turn('t1', 1, [modifyCall('c1', 1, 'src/a.ts')]);
+    const changes = [gitChange('src/a.ts', 'renamed', 0, 0, 'src/a.ts')];
+
+    const footprint = buildChangesFootprint({
+      committedTurns: [t],
+      activeTurn: null,
+      gitChanges: changes,
+    });
+
+    expect(footprint.edited).toEqual([
+      {
+        kind: 'edited',
+        path: 'src/a.ts',
+        status: 'renamed',
+        additions: 0,
+        deletions: 0,
+        source: { turnId: 't1', itemId: 'c1' },
       },
     ]);
   });

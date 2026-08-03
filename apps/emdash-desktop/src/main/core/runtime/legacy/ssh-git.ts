@@ -645,7 +645,15 @@ class LegacySshGitWorktree implements IGitWorktree {
   }
 
   private toAbsChange(change: GitChange): GitChange {
-    return { ...change, path: this.toAbsPath(change.path) };
+    return {
+      ...change,
+      path: this.toAbsPath(change.path),
+      // `git-service.ts` reports `oldPath` as a worktree-relative path (like
+      // `path` before this remaps it); keep both fields on the same footing
+      // so downstream consumers can compare them without knowing which host
+      // produced the status.
+      oldPath: change.oldPath ? this.toAbsPath(change.oldPath) : undefined,
+    };
   }
 
   private toAbsPath(filePath: string): string {
