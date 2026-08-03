@@ -1,7 +1,12 @@
 import { useMemo } from 'react';
 import { parseCsv } from '@renderer/lib/editor/csv-parser';
 import type { BaseModalProps } from '@renderer/lib/modal/modal-provider';
-import { DialogContentArea, DialogFooter, DialogHeader, DialogTitle } from '@renderer/lib/ui/dialog';
+import {
+  DialogContentArea,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@renderer/lib/ui/dialog';
 
 /**
  * Rendered artifact content for `ArtifactPreviewDialog` — already fetched and
@@ -36,7 +41,7 @@ function CsvTable({ content }: { content: string }) {
   const parsed = useMemo(() => parseCsv(content), [content]);
   const [header, ...bodyRows] = parsed.rows;
   if (parsed.rows.length === 0) {
-    return <p className="text-foreground-muted text-sm">This CSV file is empty.</p>;
+    return <p className="text-sm text-foreground-muted">This CSV file is empty.</p>;
   }
   return (
     <div className="max-h-[65vh] overflow-auto rounded-md border border-border">
@@ -55,9 +60,15 @@ function CsvTable({ content }: { content: string }) {
         </thead>
         <tbody>
           {bodyRows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="odd:bg-background-secondary-1 even:bg-background-secondary-2">
+            <tr
+              key={rowIndex}
+              className="odd:bg-background-secondary-1 even:bg-background-secondary-2"
+            >
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="border-r border-b border-border px-3 py-1.5 last:border-r-0">
+                <td
+                  key={cellIndex}
+                  className="border-r border-b border-border px-3 py-1.5 last:border-r-0"
+                >
                   <span className="block max-w-80 truncate">{cell}</span>
                 </td>
               ))}
@@ -87,13 +98,13 @@ export function ArtifactPreviewDialog({ name, path, artifact }: Props) {
         ) : artifact.contentType === 'csv' ? (
           <CsvTable content={artifact.content} />
         ) : (
-          <pre className="max-h-[65vh] overflow-auto rounded-md border border-border bg-background-secondary-1 p-3 text-xs whitespace-pre-wrap break-words">
+          <pre className="max-h-[65vh] overflow-auto rounded-md border border-border bg-background-secondary-1 p-3 text-xs break-words whitespace-pre-wrap">
             {artifact.content}
           </pre>
         )}
       </DialogContentArea>
       <DialogFooter className="justify-start! sm:justify-start!">
-        <span className="text-foreground-muted truncate text-xs" title={path}>
+        <span className="truncate text-xs text-foreground-muted" title={path}>
           {path}
         </span>
       </DialogFooter>

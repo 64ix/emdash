@@ -21,8 +21,8 @@ import { GenericFileIcon, IconError } from '@components/primitives/icons';
 import { resolveFileIconClass } from '@lib/file-icons';
 import { Show } from 'solid-js';
 import type { ChatResourceLink } from '@/model';
-import { iconWrap, pathText, rowClickable, sizeText, titleText } from './resource-link.css';
 import { secondaryLabel } from './secondary-label';
+import { iconWrap, pathText, rowClickable, sizeText, titleText } from './resource-link.css';
 import { vars } from '@styles/theme.css';
 
 // ── Size formatting ─────────────────────────────────────────────────────────

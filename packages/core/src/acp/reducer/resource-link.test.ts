@@ -115,12 +115,8 @@ describe('AcpTranscriptParser — resource_link materialization', () => {
 
   it('assigns distinct ids to multiple resource links in the same turn', () => {
     const parser = new AcpTranscriptParser({ conversationId: CID });
-    parser.push(
-      resourceLinkChunk('agent_message_chunk', 'msg-1', { uri: 'a.png', name: 'a.png' })
-    );
-    parser.push(
-      resourceLinkChunk('agent_message_chunk', 'msg-2', { uri: 'b.png', name: 'b.png' })
-    );
+    parser.push(resourceLinkChunk('agent_message_chunk', 'msg-1', { uri: 'a.png', name: 'a.png' }));
+    parser.push(resourceLinkChunk('agent_message_chunk', 'msg-2', { uri: 'b.png', name: 'b.png' }));
     parser.endTurn();
 
     const items = parser.history[0].items;

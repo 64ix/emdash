@@ -292,26 +292,29 @@ describe('activateChatLink', () => {
       'oversized',
       'type-mismatch',
       'unsupported-content',
-    ] as const)('reports a %s denial with the resolved target and a copy action', async (reason) => {
-      mocks.previewArtifact.mockResolvedValue({
-        success: true,
-        data: { status: 'denied', reason, resolvedPath: IMAGE_PATH },
-      });
+    ] as const)(
+      'reports a %s denial with the resolved target and a copy action',
+      async (reason) => {
+        mocks.previewArtifact.mockResolvedValue({
+          success: true,
+          data: { status: 'denied', reason, resolvedPath: IMAGE_PATH },
+        });
 
-      activateChatLink({ href: IMAGE_PATH, itemId: 'i1', source: 'resource-link' }, CONTEXT);
-      await flush();
+        activateChatLink({ href: IMAGE_PATH, itemId: 'i1', source: 'resource-link' }, CONTEXT);
+        await flush();
 
-      expect(mocks.showModal).not.toHaveBeenCalled();
-      expect(mocks.toast).toHaveBeenCalledTimes(1);
-      const call = mocks.toast.mock.calls[0][0];
-      expect(call.title).toBe(artifactPreviewDenialTitle(reason));
-      expect(call.description).toBe(IMAGE_PATH);
-      expect(call.variant).toBe('destructive');
-      expect(call.action.label).toBe('Copy');
+        expect(mocks.showModal).not.toHaveBeenCalled();
+        expect(mocks.toast).toHaveBeenCalledTimes(1);
+        const call = mocks.toast.mock.calls[0][0];
+        expect(call.title).toBe(artifactPreviewDenialTitle(reason));
+        expect(call.description).toBe(IMAGE_PATH);
+        expect(call.variant).toBe('destructive');
+        expect(call.action.label).toBe('Copy');
 
-      call.action.onClick();
-      expect(mocks.clipboardWriteText).toHaveBeenCalledWith(IMAGE_PATH);
-    });
+        call.action.onClick();
+        expect(mocks.clipboardWriteText).toHaveBeenCalledWith(IMAGE_PATH);
+      }
+    );
 
     it('falls back to the requested path when a denial has no resolved path', async () => {
       mocks.previewArtifact.mockResolvedValue({

@@ -17,7 +17,10 @@ import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { showModal } from '@renderer/lib/modal/modal-provider';
 import { confirmOpenExternalLink } from '@renderer/lib/open-external-link';
-import type { ArtifactPreviewDenialReason, ArtifactPreviewResult } from '@shared/core/fs/artifact-preview';
+import type {
+  ArtifactPreviewDenialReason,
+  ArtifactPreviewResult,
+} from '@shared/core/fs/artifact-preview';
 import { classifyChatLink, type ChatLinkBlockReason } from './chat-link-classification';
 
 export type ChatLinkActivationSource = 'prose-link' | 'resource-link';
@@ -162,7 +165,9 @@ function confirmArtifactPreview(resolvedPath: string, workspace: ArtifactPreview
   });
 }
 
-function showArtifactPreviewDialog(preview: Extract<ArtifactPreviewResult, { status: 'ok' }>): void {
+function showArtifactPreviewDialog(
+  preview: Extract<ArtifactPreviewResult, { status: 'ok' }>
+): void {
   const artifact: ArtifactPreviewArtifact =
     preview.kind === 'image'
       ? { kind: 'image', dataUrl: preview.dataUrl, mimeType: preview.mimeType }

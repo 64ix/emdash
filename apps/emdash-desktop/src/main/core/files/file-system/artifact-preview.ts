@@ -24,15 +24,14 @@
  * renderer can never bypass this policy by pre-resolving a hostile path.
  */
 
-import { app } from 'electron';
 import { FileSystem, type IFileSystem } from '@emdash/core/files';
+import { app } from 'electron';
 import { DROPPED_BLOB_FILENAME_PREFIX } from '@main/core/pty/persist-dropped-blob';
 import {
   classifyArtifactExtension,
   maxArtifactBytesForKind,
   type ArtifactPreviewResult,
 } from '@shared/core/fs/artifact-preview';
-import { decideArtifactContent } from './artifact-preview-policy';
 import {
   basenameMachinePath,
   containsMachinePath,
@@ -41,6 +40,7 @@ import {
   joinMachinePath,
 } from '../path-utils';
 import { isRealPathContained } from '../realpath-containment';
+import { decideArtifactContent } from './artifact-preview-policy';
 
 const machinePathOperations = {
   basename: basenameMachinePath,

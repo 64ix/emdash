@@ -104,7 +104,11 @@ describe('decideArtifactContent', () => {
 
   it('denies a .png file whose bytes are not a real image (extension spoofing)', () => {
     const html = textEncode('<html><script>alert(document.cookie)</script></html>');
-    const decision = decideArtifactContent({ path: '/tmp/evil.png', bytes: html, totalSize: html.byteLength });
+    const decision = decideArtifactContent({
+      path: '/tmp/evil.png',
+      bytes: html,
+      totalSize: html.byteLength,
+    });
     expect(decision).toEqual({ ok: false, reason: 'type-mismatch' });
   });
 

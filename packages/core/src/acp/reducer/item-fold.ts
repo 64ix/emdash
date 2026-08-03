@@ -675,8 +675,9 @@ export function foldItem(
       // resource links sharing that bucket.
       const messageKey = event.messageId ?? 'auto';
       const prefix = `${turnId}:resource-link:${messageKey}:`;
-      const index = base.filter((it) => it.kind === 'resource-link' && it.id.startsWith(prefix))
-        .length;
+      const index = base.filter(
+        (it) => it.kind === 'resource-link' && it.id.startsWith(prefix)
+      ).length;
       const newLink: TranscriptResourceLink = {
         kind: 'resource-link',
         id: makeResourceLinkId(turnId, messageKey, index),

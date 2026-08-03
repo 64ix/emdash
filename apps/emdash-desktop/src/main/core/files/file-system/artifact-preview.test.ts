@@ -68,7 +68,12 @@ describe('previewLocalArtifact — trusted workspace root', () => {
       confirmed: false,
     });
 
-    expect(result).toMatchObject({ status: 'ok', kind: 'text', contentType: 'markdown', content: '# hello' });
+    expect(result).toMatchObject({
+      status: 'ok',
+      kind: 'text',
+      contentType: 'markdown',
+      content: '# hello',
+    });
   });
 
   it('denies a missing file with an explicit reason', async () => {
