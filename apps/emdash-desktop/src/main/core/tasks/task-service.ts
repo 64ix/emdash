@@ -27,6 +27,7 @@ import type {
   RenameTaskError,
   RenameTaskSuccess,
   Task,
+  TaskStageAuthority,
 } from '@shared/core/tasks/tasks';
 import { boardSyncService } from './board-sync-service';
 import { archiveTask } from './operations/archiveTask';
@@ -245,6 +246,11 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
   /** Feature Board open trigger: an immediate PR-facts derivation pass for the project. */
   async syncBoardStages(projectId: string): Promise<void> {
     await boardSyncService.syncProject(projectId);
+  }
+
+  /** Task Detail Panel (ticket #41): the read-only Workflow Stage authority fact. */
+  async getTaskStageAuthority(taskId: string): Promise<TaskStageAuthority> {
+    return boardSyncService.getStageAuthority(taskId);
   }
 
   // Operations with no hook — thin pass-throughs

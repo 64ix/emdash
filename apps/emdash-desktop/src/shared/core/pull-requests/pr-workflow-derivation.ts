@@ -1,3 +1,4 @@
+import type { WorkflowStage } from '../tasks/tasks';
 import type { PullRequestStatus } from './pull-requests';
 
 /**
@@ -83,4 +84,64 @@ export function isShippedFaded(
   const mergedTime = new Date(mergedAt).getTime();
   if (Number.isNaN(mergedTime)) return false;
   return now - mergedTime > SHIPPED_FADE_WINDOW_MS;
+}
+
+/** The result of {@link deriveTaskStageAuthorityFact}: the PR (if any) that proves
+ * a task's stage, and whether it currently governs the task's *persisted* stage. */
+export type TaskStageAuthorityFact<T extends PrWorkflowFact> = {
+  /** The single Spec-matching PR proving `derivePrStage`'s result — same
+   * open-beats-merged-beats-closed precedence, so its `status` always matches
+   * the stage it would derive. `null` when the task has no Spec link, or no PR
+   * references it at all. */
+  holdingPr: T | null;
+  /**
+   * `true` when `holdingPr` currently governs the task's Workflow Stage — i.e.
+   * the next `BoardSyncService.syncProject` pass will (re)write it, so a caller
+   * must treat the stage as GitHub-proven and never offer a conflicting manual
+   * write. Always `false` while `currentStage` is `triage`: the periodic pass
+   * never re-derives a triaged task (see `syncProject`), so nothing contests a
+   * manual move out of it, even when `holdingPr` is the very fact that put it
+   * there.
+   */
+  isCurrentStageGithubProven: boolean;
+};
+
+/**
+ * Derives the Workflow Stage authority fact for a task's Spec link: which PR (if
+ * any) proves its stage, and whether that fact currently governs the *persisted*
+ * stage. See CONTEXT.md ("Workflow Stage") and docs/adr/0003 for the authority
+ * model, and `BoardSyncService.syncProject` for the periodic pass this fact
+ * predicts. Scope: this only covers the PR-provable half of ADR 0003 (`review`,
+ * `shipped`, PR-triggered `triage`) — the issue-provable half (`exploring`,
+ * `spec` from a live Map/Spec issue state) needs a live GitHub call the inbound
+ * issues sync alone performs, not data already at hand, so it is intentionally
+ * left alone here.
+ */
+export function deriveTaskStageAuthorityFact<T extends PrWorkflowFact>(input: {
+  currentStage: WorkflowStage | null;
+  specIssueNumber: number | null;
+  taskBranch?: string | null;
+  prFacts: readonly T[];
+}): TaskStageAuthorityFact<T> {
+  if (input.specIssueNumber == null) {
+    return { holdingPr: null, isCurrentStageGithubProven: false };
+  }
+
+  const matches = findSpecMatchingPrs(input.prFacts, {
+    specIssueNumber: input.specIssueNumber,
+    taskBranch: input.taskBranch,
+  });
+  const derivedStage = derivePrStage(matches);
+  if (!derivedStage) {
+    return { holdingPr: null, isCurrentStageGithubProven: false };
+  }
+
+  const holdingStatus: PullRequestStatus =
+    derivedStage === 'review' ? 'open' : derivedStage === 'shipped' ? 'merged' : 'closed';
+  const holdingPr = matches.find((pr) => pr.status === holdingStatus) ?? null;
+
+  return {
+    holdingPr,
+    isCurrentStageGithubProven: input.currentStage !== 'triage',
+  };
 }

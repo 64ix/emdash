@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   derivePrStage,
+  deriveTaskStageAuthorityFact,
   findSpecMatchingPrs,
   isShippedFaded,
   parseIssueNumberFromIdentifier,
@@ -118,5 +119,89 @@ describe('isShippedFaded', () => {
 
   it('treats an unparseable mergedAt as not faded', () => {
     expect(isShippedFaded('not-a-date', now)).toBe(false);
+  });
+});
+
+describe('deriveTaskStageAuthorityFact', () => {
+  it('is declarative with no holding PR when the task has no Spec link', () => {
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'idea',
+        specIssueNumber: null,
+        taskBranch: 'task/branch',
+        prFacts: [pr({ headRefName: 'task/branch', status: 'open' })],
+      })
+    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
+  });
+
+  it('is declarative with no holding PR when no PR references the Spec at all', () => {
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'idea',
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [pr({ headRefName: 'unrelated', description: 'Closes #99' })],
+      })
+    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
+  });
+
+  it('is github-proven with the open PR when an open PR references the Spec', () => {
+    const open = pr({ headRefName: 'feature/1', status: 'open', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [open],
+      })
+    ).toEqual({ holdingPr: open, isCurrentStageGithubProven: true });
+  });
+
+  it('is github-proven with the merged PR when the Spec-referencing PR merged', () => {
+    const merged = pr({ headRefName: 'feature/1', status: 'merged', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'review',
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [merged],
+      })
+    ).toEqual({ holdingPr: merged, isCurrentStageGithubProven: true });
+  });
+
+  it('is github-proven with the closed PR when the Spec-referencing PR closed unmerged', () => {
+    const closed = pr({ headRefName: 'feature/1', status: 'closed', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'idea',
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [closed],
+      })
+    ).toEqual({ holdingPr: closed, isCurrentStageGithubProven: true });
+  });
+
+  it('picks the PR whose status matches the derived stage when several match', () => {
+    const open = pr({ headRefName: 'feature/1', status: 'open', description: 'Closes #42' });
+    const closedOther = pr({ headRefName: 'feature/2', status: 'closed', description: 'Re #42' });
+    const { holdingPr } = deriveTaskStageAuthorityFact({
+      currentStage: 'idea',
+      specIssueNumber: 42,
+      taskBranch: null,
+      prFacts: [closedOther, open],
+    });
+    expect(holdingPr).toBe(open);
+  });
+
+  it('is never github-proven while the task currently sits in triage, even with a holding PR', () => {
+    const closed = pr({ headRefName: 'feature/1', status: 'closed', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'triage',
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [closed],
+      })
+    ).toEqual({ holdingPr: closed, isCurrentStageGithubProven: false });
   });
 });

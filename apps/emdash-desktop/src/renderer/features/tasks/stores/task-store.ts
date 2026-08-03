@@ -220,10 +220,14 @@ export class TaskStore {
   }
 
   /**
-   * Persists a Feature Board drop: the new Workflow Stage (`null` clears it —
-   * an Unstaged drop) and Board Rank, written together in a single RPC call.
+   * Persists a Feature Board position change: the new Workflow Stage (`null`
+   * clears it — an Unstaged drop) and Board Rank, written together in a single
+   * RPC call. `rank: null` leaves the task unranked in its new column — used by
+   * the Task Detail Panel's stage selector (CONTEXT.md "Task Detail Panel"),
+   * a non-drag gesture with no drop position to derive a rank from; Board Rank
+   * is only ever set by an explicit drop (CONTEXT.md "Board Rank").
    */
-  async updateBoardPosition(stage: WorkflowStage | null, rank: string): Promise<void> {
+  async updateBoardPosition(stage: WorkflowStage | null, rank: string | null): Promise<void> {
     if (this.state === 'unregistered') return;
     const task = registeredTaskData(this);
     if (!task) return;
@@ -231,7 +235,7 @@ export class TaskStore {
     const previousRank = task.boardRank;
     runInAction(() => {
       task.workflowStage = stage ?? undefined;
-      task.boardRank = rank;
+      task.boardRank = rank ?? undefined;
     });
     try {
       await rpc.tasks.updateTaskBoardPosition(task.id, stage, rank);
