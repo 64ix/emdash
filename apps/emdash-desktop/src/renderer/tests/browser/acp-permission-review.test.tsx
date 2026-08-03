@@ -265,6 +265,47 @@ describe('PermissionBand — full-context permission review', () => {
     expect(host.textContent).not.toContain(secret);
   });
 
+  it('never truncates a URL param — the whole address stays visible, not just a prefix', async () => {
+    // A URL is the resource itself, not free text: silently shortening it
+    // (even with an indicator) could hide the very path segment or query
+    // param that makes the destination dangerous or benign.
+    const longUrl = `https://api.example.com/${'segment/'.repeat(80)}end-of-path`;
+    const request = requestFor({ kind: 'web-fetch-tool-call', url: longUrl });
+    await renderBand({ request });
+
+    expect(host.textContent).toContain(longUrl);
+    expect(host.textContent).not.toContain('truncated');
+  });
+
+  it('shows an explicit truncation indicator and a reachable full value for an oversized param', async () => {
+    // A search query has no natural length cap; unlike a command/content
+    // block it renders inline in the params list, but truncating it must
+    // never be silent — the exact same rule `fullText`/Copy enforces for
+    // command/content/diff blocks.
+    const fullQuery = 'find every occurrence of '.repeat(30);
+    const request = requestFor({ kind: 'search-tool-call', query: fullQuery });
+    await renderBand({ request });
+
+    expect(host.textContent).toContain('(truncated)');
+    const copyButton = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy full query"]'
+    );
+    expect(copyButton).not.toBeNull();
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    await act(async () => copyButton!.click());
+
+    // `sanitizeSingleLineText` trims the value the same way it does for a
+    // command/content block — the copied text is the full *sanitized*
+    // value, not a re-truncated one.
+    expect(writeText).toHaveBeenCalledWith(fullQuery.trim());
+  });
+
   // ── Failed resolution ─────────────────────────────────────────────────────────
 
   it('disables the decision while resolving and shows a resolving indicator', async () => {
@@ -336,6 +377,34 @@ describe('PermissionBand — full-context permission review', () => {
     expect(primaryFace).not.toBeNull();
     expect(host.querySelector('button[title="Do something unclear"]')).toBeNull();
     expect(onResolve).not.toHaveBeenCalled();
+  });
+
+  it('never primes the prominent face with accept styling when no option kind is recognized at all', async () => {
+    // No allow_* and no reject_* kind anywhere in this batch — the provider
+    // is using an entirely unclassified option vocabulary. There is no safe
+    // choice to prefer, so the primary face must at least never carry the
+    // "accept" tone (kindToTone only assigns 'accept' for an `allow_`-prefixed
+    // kind), which would visually read as an endorsed default.
+    const request = requestFor(
+      { kind: 'execute-tool-call', command: 'ls' },
+      {
+        options: [
+          { optionId: 'custom-a', name: 'Option A', kind: 'vendor_custom_a' },
+          { optionId: 'custom-b', name: 'Option B', kind: 'vendor_custom_b' },
+        ],
+      }
+    );
+    const { onResolve } = await renderBand({ request });
+
+    // Mounting alone must never fire a decision, whichever option ends up
+    // shown on the primary face.
+    expect(onResolve).not.toHaveBeenCalled();
+    // The primary face shows one of the two unclassified options verbatim —
+    // neither is an "Allow"-style label the user could mistake for an
+    // endorsed default.
+    const primaryFace = host.querySelector('button[title="Option A"], button[title="Option B"]');
+    expect(primaryFace).not.toBeNull();
+    expect(primaryFace?.getAttribute('title')).not.toMatch(/allow/i);
   });
 
   // ── Security: content is never markup, never fakes UI chrome ────────────────

@@ -78,6 +78,24 @@ export function sanitizeSingleLineText(value: string): string {
 }
 
 /**
+ * Sanitize + redact a permission request's `title` for safe display.
+ *
+ * Unlike an option's `name` (a short provider-decided label that must be
+ * "preserved exactly" per ticket #32's acceptance criteria), `title` is a
+ * free-form summary the reducer sometimes derives directly from a raw
+ * resource — e.g. `web-fetch-tool-call`'s title falls back to the raw,
+ * unredacted URL when the provider sends no page title (see
+ * `packages/core/src/acp/reducer/item-fold.ts`'s `upsertSpecialEvent`). That
+ * URL can carry a secret in its query string the same way `toolCall.url`
+ * itself can, so `title` must go through the same `redactSecrets` pass as
+ * every other displayed field, not just the bidi/newline stripping
+ * `sanitizeSingleLineText` alone provides.
+ */
+export function sanitizePermissionTitle(value: string): string {
+  return redactSecrets(sanitizeSingleLineText(value));
+}
+
+/**
  * Bound `text` to at most `max` Unicode code points via the string iterator
  * (`Array.from`) rather than slicing UTF-16 code units, so an astral-plane
  * character (e.g. an emoji surrogate pair) is never bisected into an unpaired
@@ -134,20 +152,49 @@ export function summarizePermissionText(
  * Bound + redact a single normalized parameter value for the params list.
  * Params render in a single-line flex row, so — unlike `summarizePermissionText`
  * — embedded line breaks are collapsed too (see `sanitizeSingleLineText`).
+ *
+ * Unlike a resource identifier (`sanitizeResourceIdentifier`), a param value
+ * can be genuinely free-text (a search query, a subagent name) with no
+ * natural length limit, so it is bounded the same way a command/content block
+ * is — and the truncation is surfaced (`truncated`/`fullValue`), never
+ * silently dropped, for exactly the same reason `PermissionTextBlock.fullText`
+ * exists: hiding the tail of what the user is approving without any
+ * indication would be a genuine defect, not a cosmetic one.
  */
-function paramValue(raw: unknown): string {
+function buildParam(label: string, raw: unknown): PermissionParam {
   const singleLine = sanitizeSingleLineText(toDisplayString(raw));
-  return boundCodePoints(redactSecrets(singleLine), PERMISSION_PARAM_MAX_CHARS).text;
+  const redacted = redactSecrets(singleLine);
+  const bounded = boundCodePoints(redacted, PERMISSION_PARAM_MAX_CHARS);
+  return { label, value: bounded.text, truncated: bounded.truncated, fullValue: redacted };
 }
 
-/** Sanitize a path for single-line display — see `sanitizeSingleLineText`. */
-function sanitizePath(path: string): string {
-  return redactSecrets(sanitizeSingleLineText(path));
+/**
+ * Sanitize a resource identifier (workspace path or URL) for single-line
+ * display — see `sanitizeSingleLineText`. Never bounded: unlike a free-text
+ * param value, a path or URL is exactly the resource the user is being asked
+ * to approve acting on, so truncating it (even with an indicator) risks
+ * hiding the very thing — a trailing path segment, a query string — that
+ * makes the request dangerous or benign.
+ */
+function sanitizeResourceIdentifier(value: string): string {
+  return redactSecrets(sanitizeSingleLineText(value));
 }
 
 // ── Normalized operation model ───────────────────────────────────────────────
 
-export type PermissionParam = { label: string; value: string };
+export type PermissionParam = {
+  label: string;
+  value: string;
+  /** Whether `value` was cut short of the true (redacted) content. */
+  truncated: boolean;
+  /** Full redacted (never bounded) value — Copy must always use this, never `value`. */
+  fullValue: string;
+};
+
+/** A param whose `value` is already complete (never bounded) — e.g. a path or a fixed literal. */
+function exactParam(label: string, value: string): PermissionParam {
+  return { label, value, truncated: false, fullValue: value };
+}
 
 export type PermissionResource = { kind: 'path'; path: string } | { kind: 'url'; url: string };
 
@@ -218,34 +265,34 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
 
     case 'read-tool-call': {
       const rawPath = toolCall.path ?? toolCall.resource;
-      const path = rawPath ? sanitizePath(rawPath) : undefined;
+      const path = rawPath ? sanitizeResourceIdentifier(rawPath) : undefined;
       return {
         kind: 'read',
         operationLabel: 'Read file',
         scope: WORKSPACE_SCOPE,
         path,
-        params: path ? [{ label: 'Path', value: path }] : [],
+        params: path ? [exactParam('Path', path)] : [],
         resources: path ? [{ kind: 'path', path }] : [],
         riskCues: ['Reads the contents of a file or resource.'],
       };
     }
 
     case 'create-file-tool-call': {
-      const path = sanitizePath(toolCall.path);
+      const path = sanitizeResourceIdentifier(toolCall.path);
       return {
         kind: 'write',
         operationLabel: 'Create file',
         scope: WORKSPACE_SCOPE,
         path,
         content: summarizePermissionText(toolCall.content),
-        params: [{ label: 'Path', value: path }],
+        params: [exactParam('Path', path)],
         resources: [{ kind: 'path', path }],
         riskCues: ['Creates a new file with the content shown below.'],
       };
     }
 
     case 'modify-file-tool-call': {
-      const path = sanitizePath(toolCall.path);
+      const path = sanitizeResourceIdentifier(toolCall.path);
       return {
         kind: 'write',
         operationLabel: 'Modify file',
@@ -255,20 +302,20 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
           oldText: summarizePermissionText(toolCall.oldText),
           newText: summarizePermissionText(toolCall.newText),
         },
-        params: [{ label: 'Path', value: path }],
+        params: [exactParam('Path', path)],
         resources: [{ kind: 'path', path }],
         riskCues: ['Overwrites part of an existing file.'],
       };
     }
 
     case 'delete-file-tool-call': {
-      const path = sanitizePath(toolCall.path);
+      const path = sanitizeResourceIdentifier(toolCall.path);
       return {
         kind: 'delete',
         operationLabel: 'Delete file',
         scope: WORKSPACE_SCOPE,
         path,
-        params: [{ label: 'Path', value: path }],
+        params: [exactParam('Path', path)],
         resources: [{ kind: 'path', path }],
         riskCues: ['Permanently deletes a file. Emdash does not provide an undo for this action.'],
       };
@@ -279,15 +326,15 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
         kind: 'search',
         operationLabel: 'Search workspace',
         scope: WORKSPACE_SCOPE,
-        params: [{ label: 'Query', value: paramValue(toolCall.query) }],
+        params: [buildParam('Query', toolCall.query)],
         resources: [],
         riskCues: ['Searches the workspace; does not modify files by itself.'],
       };
     }
 
     case 'mcp-tool-call': {
-      const params: PermissionParam[] = [{ label: 'Tool', value: paramValue(toolCall.tool) }];
-      if (toolCall.server) params.push({ label: 'Server', value: paramValue(toolCall.server) });
+      const params: PermissionParam[] = [buildParam('Tool', toolCall.tool)];
+      if (toolCall.server) params.push(buildParam('Server', toolCall.server));
       return {
         kind: 'mcp',
         operationLabel: 'Call MCP tool',
@@ -305,10 +352,14 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
       // affected-resources entry — the resource list must never bypass the
       // same redaction the URL param goes through (a raw, unredacted
       // `toolCall.url` here would leak a secret embedded in a query string).
-      const url = toolCall.url ? paramValue(toolCall.url) : undefined;
-      const params: PermissionParam[] = url ? [{ label: 'URL', value: url }] : [];
+      // Never bounded (see `sanitizeResourceIdentifier`): the URL *is* the
+      // resource being approved, so truncating it — even with an indicator —
+      // risks hiding a trailing path segment or query param that changes
+      // what is actually being fetched.
+      const url = toolCall.url ? sanitizeResourceIdentifier(toolCall.url) : undefined;
+      const params: PermissionParam[] = url ? [exactParam('URL', url)] : [];
       if (toolCall.pageTitle) {
-        params.push({ label: 'Page title', value: paramValue(toolCall.pageTitle) });
+        params.push(buildParam('Page title', toolCall.pageTitle));
       }
       return {
         kind: 'fetch',
@@ -323,8 +374,8 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
     }
 
     case 'spawn-subagent-tool-call': {
-      const params: PermissionParam[] = [{ label: 'Name', value: paramValue(toolCall.name) }];
-      if (toolCall.background) params.push({ label: 'Background', value: 'Yes' });
+      const params: PermissionParam[] = [buildParam('Name', toolCall.name)];
+      if (toolCall.background) params.push(exactParam('Background', 'Yes'));
       return {
         kind: 'subagent',
         operationLabel: 'Spawn subagent',
@@ -347,9 +398,8 @@ export function describePermissionOperation(toolCall: ToolCallItem): PermissionO
     }
 
     case 'unknown-tool-call': {
-      const params: PermissionParam[] = [{ label: 'Tool', value: paramValue(toolCall.name) }];
-      if (toolCall.toolKind)
-        params.push({ label: 'Raw kind', value: paramValue(toolCall.toolKind) });
+      const params: PermissionParam[] = [buildParam('Tool', toolCall.name)];
+      if (toolCall.toolKind) params.push(buildParam('Raw kind', toolCall.toolKind));
       return {
         kind: 'unknown',
         operationLabel: 'Unrecognized tool request',
@@ -377,7 +427,7 @@ export function buildPermissionCopyText(detail: PermissionOperationDetail): stri
     lines.push('', 'Current content:', detail.diff.oldText.fullText);
     lines.push('', 'New content:', detail.diff.newText.fullText);
   }
-  for (const param of detail.params) lines.push(`${param.label}: ${param.value}`);
+  for (const param of detail.params) lines.push(`${param.label}: ${param.fullValue}`);
   for (const resource of detail.resources) {
     lines.push(
       resource.kind === 'url' ? `Resource: ${resource.url}` : `Resource: ${resource.path}`

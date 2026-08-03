@@ -408,6 +408,34 @@ describe('AcpChatStore.permissionQueue / resolvePermission', () => {
     expect(item.operation.command?.text).toBe('rm -rf ./dist');
   });
 
+  it('redacts a secret embedded in the toolCall title (e.g. a web-fetch title that falls back to the raw URL)', () => {
+    // `web-fetch-tool-call`'s title falls back to the raw URL when the
+    // provider sends no page title (packages/core/src/acp/reducer/
+    // item-fold.ts's upsertSpecialEvent) — the same secret leak the URL param
+    // itself is redacted against must not reach the composer band via title.
+    const secret = 'super-secret-api-key-value';
+    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
+    store.session = {
+      sessionState: {
+        current: () => ({
+          pendingPermissions: [
+            permissionRequest({
+              toolCall: toolCall({
+                kind: 'web-fetch-tool-call',
+                title: `https://api.example.com/v1?api_key=${secret}`,
+                url: `https://api.example.com/v1?api_key=${secret}`,
+              }),
+            }),
+          ],
+        }),
+      },
+    } as never;
+
+    const item = store.permissionQueue[0];
+    expect(item.title).not.toContain(secret);
+    expect(item.title).toContain('[REDACTED');
+  });
+
   it('resolves the current request through the session and reports resolving state', async () => {
     const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
     let resolvePending!: (value: { success: true; data: undefined }) => void;

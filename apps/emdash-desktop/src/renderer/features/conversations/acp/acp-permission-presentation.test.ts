@@ -5,6 +5,7 @@ import {
   describePermissionOperation,
   PERMISSION_PARAM_MAX_CHARS,
   PERMISSION_TEXT_MAX_CHARS,
+  sanitizePermissionTitle,
   sanitizeSingleLineText,
   summarizePermissionText,
 } from './acp-permission-presentation';
@@ -28,6 +29,14 @@ function base(overrides: Partial<ToolCallItem> = {}): {
     status: 'running',
     ...overrides,
   } as never;
+}
+
+/** An un-truncated `PermissionParam`, for asserting the common (short-value) case. */
+function param(
+  label: string,
+  value: string
+): { label: string; value: string; truncated: boolean; fullValue: string } {
+  return { label, value, truncated: false, fullValue: value };
 }
 
 describe('describePermissionOperation — command (execute-tool-call)', () => {
@@ -135,7 +144,7 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
     } as ToolCallItem);
 
     expect(detail.kind).toBe('search');
-    expect(detail.params).toEqual([{ label: 'Query', value: 'TODO(security)' }]);
+    expect(detail.params).toEqual([param('Query', 'TODO(security)')]);
   });
 
   it('mcp-tool-call: includes server when present and flags unverifiable behavior', () => {
@@ -148,10 +157,7 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
 
     expect(detail.kind).toBe('mcp');
     expect(detail.scope).toBe('Network (outside the task workspace)');
-    expect(detail.params).toEqual([
-      { label: 'Tool', value: 'run_query' },
-      { label: 'Server', value: 'postgres-mcp' },
-    ]);
+    expect(detail.params).toEqual([param('Tool', 'run_query'), param('Server', 'postgres-mcp')]);
     expect(detail.riskCues.join(' ')).toMatch(/cannot verify/i);
   });
 
@@ -162,7 +168,7 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
       tool: 'run_query',
     } as ToolCallItem);
 
-    expect(detail.params).toEqual([{ label: 'Tool', value: 'run_query' }]);
+    expect(detail.params).toEqual([param('Tool', 'run_query')]);
   });
 
   it('web-fetch-tool-call: surfaces the URL as an affected resource', () => {
@@ -176,8 +182,8 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
     expect(detail.kind).toBe('fetch');
     expect(detail.resources).toEqual([{ kind: 'url', url: 'https://example.com/data.json' }]);
     expect(detail.params).toEqual([
-      { label: 'URL', value: 'https://example.com/data.json' },
-      { label: 'Page title', value: 'Example data' },
+      param('URL', 'https://example.com/data.json'),
+      param('Page title', 'Example data'),
     ]);
   });
 
@@ -190,10 +196,7 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
     } as ToolCallItem);
 
     expect(detail.kind).toBe('subagent');
-    expect(detail.params).toEqual([
-      { label: 'Name', value: 'refactor-helper' },
-      { label: 'Background', value: 'Yes' },
-    ]);
+    expect(detail.params).toEqual([param('Name', 'refactor-helper'), param('Background', 'Yes')]);
   });
 
   it('create-plan-tool-call: has no params or resources', () => {
@@ -218,8 +221,8 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
     expect(detail.kind).toBe('unknown');
     expect(detail.rawToolKind).toBe('vendor.custom');
     expect(detail.params).toEqual([
-      { label: 'Tool', value: 'some_custom_tool' },
-      { label: 'Raw kind', value: 'vendor.custom' },
+      param('Tool', 'some_custom_tool'),
+      param('Raw kind', 'vendor.custom'),
     ]);
     expect(detail.riskCues.join(' ')).toMatch(/does not recognize/i);
   });
@@ -233,7 +236,7 @@ describe('describePermissionOperation — generic/inspectable tools', () => {
     } as ToolCallItem);
 
     expect(detail.rawToolKind).toBeNull();
-    expect(detail.params).toEqual([{ label: 'Tool', value: 'mystery' }]);
+    expect(detail.params).toEqual([param('Tool', 'mystery')]);
   });
 });
 
@@ -314,6 +317,32 @@ describe('sanitizeSingleLineText — display-safety for title/option labels', ()
   });
 });
 
+describe('sanitizePermissionTitle — redacts secrets a bare title can carry', () => {
+  it('redacts a secret when the title is itself a raw URL', () => {
+    // `web-fetch-tool-call`'s title falls back to the raw URL when the
+    // provider sends no page title (see
+    // `packages/core/src/acp/reducer/item-fold.ts`'s `upsertSpecialEvent`),
+    // so a secret embedded in the query string must never reach the DOM via
+    // `title` any more than it would via the `url` param row.
+    const secret = 'super-secret-api-key-value';
+    const rawTitleAsUrl = `https://api.example.com/v1?api_key=${secret}`;
+
+    const sanitized = sanitizePermissionTitle(rawTitleAsUrl);
+
+    expect(sanitized).not.toContain(secret);
+    expect(sanitized).toContain('[REDACTED');
+  });
+
+  it('still strips bidi/zero-width spoofing characters like sanitizeSingleLineText', () => {
+    const spoofed = 'Allow‮cxe.tnatropmi';
+    expect(sanitizePermissionTitle(spoofed)).not.toContain('‮');
+  });
+
+  it('leaves an ordinary title unchanged', () => {
+    expect(sanitizePermissionTitle('Execute a Shell Command')).toBe('Execute a Shell Command');
+  });
+});
+
 describe('describePermissionOperation — path display safety', () => {
   it('strips bidi/zero-width characters from a file path before display', () => {
     const detail = describePermissionOperation({
@@ -349,14 +378,54 @@ describe('param redaction and bounding', () => {
     expect(urlParam?.value).not.toContain('super-secret-value-123');
   });
 
-  it('bounds an oversized param value to PERMISSION_PARAM_MAX_CHARS', () => {
+  it('bounds an oversized param value to PERMISSION_PARAM_MAX_CHARS but keeps the full value reachable', () => {
+    const fullQuery = 'x'.repeat(PERMISSION_PARAM_MAX_CHARS + 50);
     const detail = describePermissionOperation({
       ...base(),
       kind: 'search-tool-call',
-      query: 'x'.repeat(PERMISSION_PARAM_MAX_CHARS + 50),
+      query: fullQuery,
     } as ToolCallItem);
 
+    // The bounded view is truncated for display...
     expect(detail.params[0]?.value).toHaveLength(PERMISSION_PARAM_MAX_CHARS);
+    // ...but the truncation is never silent, and the full text stays
+    // reachable via `fullValue` — a "Copy" action (or `buildPermissionCopyText`
+    // below) must never place a silently-truncated view on the clipboard.
+    expect(detail.params[0]?.truncated).toBe(true);
+    expect(detail.params[0]?.fullValue).toBe(fullQuery);
+  });
+
+  it('never bounds a URL param — the URL is the resource itself, not free text', () => {
+    // Unlike a search query, a URL must never be truncated (even with an
+    // indicator): a query string or path segment past the cutoff could be
+    // exactly what makes the request dangerous or benign.
+    const longUrl = `https://api.example.com/${'segment/'.repeat(100)}`;
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'web-fetch-tool-call',
+      url: longUrl,
+    } as ToolCallItem);
+
+    const urlParam = detail.params.find((p) => p.label === 'URL');
+    expect(urlParam?.truncated).toBe(false);
+    expect(urlParam?.value).toBe(longUrl);
+    const urlResource = detail.resources.find((r) => r.kind === 'url');
+    expect(urlResource?.kind === 'url' && urlResource.url).toBe(longUrl);
+  });
+});
+
+describe('buildPermissionCopyText — never copies a silently-truncated param', () => {
+  it('uses the full (untruncated) value for a bounded param', () => {
+    const fullQuery = 'y'.repeat(PERMISSION_PARAM_MAX_CHARS + 50);
+    const detail = describePermissionOperation({
+      ...base(),
+      kind: 'search-tool-call',
+      query: fullQuery,
+    } as ToolCallItem);
+
+    const copyText = buildPermissionCopyText(detail);
+
+    expect(copyText).toContain(`Query: ${fullQuery}`);
   });
 });
 

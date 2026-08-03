@@ -29,7 +29,14 @@ export type ComposerPermissionTextBlock = {
   fullText: string;
 };
 
-export type ComposerPermissionParam = { label: string; value: string };
+export type ComposerPermissionParam = {
+  label: string;
+  value: string;
+  /** Whether `value` was cut short of the true (redacted) content. */
+  truncated: boolean;
+  /** Full redacted (never bounded) value — Copy must always use this, never `value`. */
+  fullValue: string;
+};
 
 export type ComposerPermissionResource =
   | { kind: 'path'; path: string }
@@ -159,6 +166,15 @@ export function PermissionOperationDetails({
           <div key={param.label} className={styles.metaRow}>
             <span className={styles.metaLabel}>{param.label}</span>
             <span className={styles.paramValue}>{param.value}</span>
+            {param.truncated && (
+              <>
+                <span className={styles.truncatedNote}>(truncated)</span>
+                <CopyIconButton
+                  text={param.fullValue}
+                  label={`Copy full ${param.label.toLowerCase()}`}
+                />
+              </>
+            )}
           </div>
         ))}
 

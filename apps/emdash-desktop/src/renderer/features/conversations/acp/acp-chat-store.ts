@@ -47,6 +47,7 @@ import { createStopController, type StopController } from './acp-chat-stop-contr
 import { AcpHistoryPagination } from './acp-history-pagination';
 import {
   describePermissionOperation,
+  sanitizePermissionTitle,
   sanitizeSingleLineText,
   type PermissionOperationDetail,
 } from './acp-permission-presentation';
@@ -303,8 +304,12 @@ export class AcpChatStore {
       // covers the toolCall payload): a permission request is a security
       // decision surface, so title/option labels can never be allowed to
       // spoof via bidi overrides or an embedded line break — see
-      // `sanitizeSingleLineText`.
-      title: sanitizeSingleLineText(request.toolCall.title),
+      // `sanitizeSingleLineText`. `title` also gets `redactSecrets` (see
+      // `sanitizePermissionTitle`): unlike an option's `name`, `title` is a
+      // free-form summary that can be derived directly from a raw resource
+      // (e.g. a web-fetch title falling back to the raw URL), so it can carry
+      // a secret the same way `toolCall.url` can.
+      title: sanitizePermissionTitle(request.toolCall.title),
       itemId: request.toolCall.id,
       operation: describePermissionOperation(request.toolCall),
       options: request.options.map((option) => ({
