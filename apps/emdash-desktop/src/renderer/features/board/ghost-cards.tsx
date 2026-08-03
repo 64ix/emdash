@@ -113,6 +113,11 @@ export function GhostCardView({
               event.stopPropagation();
               onAdopt();
             }}
+            // A keydown on this nested button still bubbles to the card's own
+            // onKeyDown (Enter/Space -> onSelect) even though its click does
+            // not (that's stopped above) — stop it here too, or activating
+            // Adopt/Reject by keyboard also (re)selects the card.
+            onKeyDown={(event) => event.stopPropagation()}
           >
             Adopt
           </Button>
@@ -123,6 +128,7 @@ export function GhostCardView({
               event.stopPropagation();
               onReject();
             }}
+            onKeyDown={(event) => event.stopPropagation()}
           >
             Reject
           </Button>

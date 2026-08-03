@@ -815,6 +815,32 @@ describe('Task Detail Panel — direct navigation (ticket #42)', () => {
 
     expect(mocks.navigate).toHaveBeenCalledWith('task', { projectId: 'p1', taskId: 'card-a' });
   });
+
+  // A synthetic (untrusted) KeyboardEvent never makes a real browser invoke a
+  // focused button's default Enter/Space activation the way trusted user
+  // input does (the same limitation board-dnd.test.tsx's drag tests document
+  // for synthetic PointerEvents never producing a native trailing click) — so
+  // this cannot assert `navigate` fires from a dispatched keydown alone. What
+  // it does prove: the keydown must not bubble past the arrow into the card's
+  // own onKeyDown and (re)select a different card than the one shown.
+  it('a keyboard Enter on the focused hover arrow does not bubble into (re)selecting the card', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(cardEl('card-b'));
+    await settle();
+    expect(panelHeading()).toBe('card-b');
+
+    hoverArrowFor('card-a').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-b');
+  });
 });
 
 describe('Task Detail Panel — ghost mode (ticket #42)', () => {
@@ -911,6 +937,32 @@ describe('Task Detail Panel — ghost mode (ticket #42)', () => {
     expect(panelHeading()).toBe(createdTask.name);
     // Switched to real-task mode, not still showing ghost details.
     expect(panelSection('vitals')).not.toBeNull();
+  });
+
+  // Same nested-interactive seam as the card's hover arrow: the ghost card's
+  // own Adopt/Reject buttons stop a *click* from bubbling into the card's
+  // onClick (opening/reselecting ghost mode), but a keydown still bubbles
+  // unless stopped too — Enter/Space on Adopt/Reject must not also (re)select
+  // the ghost card underneath them.
+  it("a keyboard Enter on the Ghost Card's own Adopt button does not bubble into (re)selecting it", async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+    await settle();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelHeading()).toBe('card-a');
+
+    const adoptButton = Array.from(ghostCardEl(ghostCard.id).querySelectorAll('button')).find(
+      (b) => b.textContent === 'Adopt'
+    ) as HTMLElement;
+    adoptButton.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
   });
 });
 

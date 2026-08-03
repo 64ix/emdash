@@ -27,7 +27,6 @@ import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { StatusIcon } from '@renderer/lib/components/pr-status-icon';
 import { rpc } from '@renderer/lib/ipc';
-import { useNavigate } from '@renderer/lib/layout/navigation-provider';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
@@ -112,12 +111,18 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
   projectId,
   target,
   onClose,
+  onOpenTask,
   onAdoptGhostCard,
   onRejectGhostCard,
 }: {
   projectId: string;
   target: TaskDetailPanelTarget;
   onClose: () => void;
+  /** Direct navigation (CONTEXT.md "Task Detail Panel"): the panel's "Open
+   * task" button delegates to the same handler `BoardMainPanel` already
+   * built for the card's hover arrow, so provision-then-navigate has one
+   * implementation, not two. */
+  onOpenTask: (taskId: string) => void;
   onAdoptGhostCard: (ghostCard: GhostCard) => void;
   onRejectGhostCard: (ghostCard: GhostCard) => void;
 }) {
@@ -132,7 +137,14 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
     );
   }
 
-  return <TaskDetailPanelBody projectId={projectId} taskId={target.taskId} onClose={onClose} />;
+  return (
+    <TaskDetailPanelBody
+      projectId={projectId}
+      taskId={target.taskId}
+      onClose={onClose}
+      onOpenTask={onOpenTask}
+    />
+  );
 });
 
 /**
@@ -146,12 +158,13 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
   projectId,
   taskId,
   onClose,
+  onOpenTask,
 }: {
   projectId: string;
   taskId: string;
   onClose: () => void;
+  onOpenTask: (taskId: string) => void;
 }) {
-  const { navigate } = useNavigate();
   const showRenameTask = useShowModal('renameTaskModal');
   const store = getTaskStore(projectId, taskId);
   const task = store ? registeredTaskData(store) : undefined;
@@ -202,14 +215,10 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
   // then closes this very panel on its own.
   const handleArchive = () => void manager?.archiveTask(taskId);
 
-  // Mirrors `SidebarTaskItem`'s open gesture: provision first when the task
-  // has never been provisioned and isn't already busy, then navigate.
-  const handleOpenTask = () => {
-    if (store.state === 'unprovisioned' && store.phase === 'idle') {
-      void manager?.provisionTask(taskId);
-    }
-    navigate('task', { projectId, taskId });
-  };
+  // Delegates to `BoardMainPanel.handleOpenTask` (passed down as `onOpenTask`),
+  // the same handler the card's hover arrow uses — one provision-then-navigate
+  // implementation for both direct-navigation gestures, not two.
+  const handleOpenTask = () => onOpenTask(taskId);
 
   // The current stage stays selectable even when it falls outside the
   // declarative set (e.g. a stage this ticket's authority can't currently

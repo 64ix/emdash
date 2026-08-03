@@ -461,6 +461,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
             projectId={projectId}
             target={panelTarget}
             onClose={() => setPanelTarget(null)}
+            onOpenTask={handleOpenTask}
             onAdoptGhostCard={handleAdoptGhostCard}
             onRejectGhostCard={rejectGhostCard}
           />
@@ -604,7 +605,10 @@ const BoardCard = observer(function BoardCard({
           navigates straight to the full task view instead of the panel.
           `onPointerDown` stops here so dnd-kit's drag activation (attached to
           this card via `listeners`) never sees the press, and the click
-          itself stops here too so it never also opens/switches the panel. */}
+          itself stops here too so it never also opens/switches the panel.
+          `onKeyDown` stops here for the same reason on the keyboard path: a
+          keydown still bubbles to the card's own onKeyDown (Enter/Space ->
+          handleSelect) even though a click does not. */}
       <button
         type="button"
         aria-label={`Open ${task.name}`}
@@ -614,6 +618,7 @@ const BoardCard = observer(function BoardCard({
           event.stopPropagation();
           onOpenTask(task.id);
         }}
+        onKeyDown={(event) => event.stopPropagation()}
         className="absolute top-1 right-1 rounded p-0.5 text-foreground-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
       >
         <ArrowUpRight className="size-3.5" />
