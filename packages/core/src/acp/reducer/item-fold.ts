@@ -178,17 +178,23 @@ export function createToolCallItem(params: {
     params.inputSummary
   );
   const { title, toolKind } = params;
+  const outputTextField = params.outputText !== undefined ? { outputText: params.outputText } : {};
   if (isSubagentKind(toolKind)) {
     return { kind: 'spawn-subagent-tool-call', ...base, name: title };
   }
   if (isSearchKind(toolKind)) {
-    return { kind: 'search-tool-call', ...base, query: searchQueryFromTitle(title) };
+    return {
+      kind: 'search-tool-call',
+      ...base,
+      query: searchQueryFromTitle(title),
+      ...outputTextField,
+    };
   }
   if (isMcpToolKind(toolKind)) {
-    return { kind: 'mcp-tool-call', ...base, tool: title };
+    return { kind: 'mcp-tool-call', ...base, tool: title, ...outputTextField };
   }
   if (isWebFetchKind(toolKind)) {
-    return { kind: 'web-fetch-tool-call', ...base, url: title };
+    return { kind: 'web-fetch-tool-call', ...base, url: title, ...outputTextField };
   }
   if (isReadKind(toolKind, title)) {
     return {
@@ -202,11 +208,11 @@ export function createToolCallItem(params: {
       kind: 'execute-tool-call',
       ...base,
       command: title,
-      ...(params.outputText !== undefined ? { outputText: params.outputText } : {}),
+      ...outputTextField,
       ...(params.terminalId !== undefined ? { terminalId: params.terminalId } : {}),
     };
   }
-  return { kind: 'unknown-tool-call', ...base, toolKind, name: title };
+  return { kind: 'unknown-tool-call', ...base, toolKind, name: title, ...outputTextField };
 }
 
 function updateToolCallItem(
@@ -246,17 +252,30 @@ function updateToolCallItem(
       return {
         ...common,
         ...(title !== null ? { query: searchQueryFromTitle(nextTitle) } : {}),
+        ...(outputText !== undefined ? { outputText } : {}),
       };
     case 'mcp-tool-call':
-      return { ...common, ...(title !== null ? { tool: nextTitle } : {}) };
+      return {
+        ...common,
+        ...(title !== null ? { tool: nextTitle } : {}),
+        ...(outputText !== undefined ? { outputText } : {}),
+      };
     case 'web-fetch-tool-call':
-      return { ...common, ...(title !== null ? { pageTitle: nextTitle } : {}) };
+      return {
+        ...common,
+        ...(title !== null ? { pageTitle: nextTitle } : {}),
+        ...(outputText !== undefined ? { outputText } : {}),
+      };
     case 'spawn-subagent-tool-call':
       return { ...common, ...(title !== null ? { name: nextTitle } : {}) };
     case 'create-plan-tool-call':
       return common;
     case 'unknown-tool-call':
-      return { ...common, ...(title !== null ? { name: nextTitle } : {}) };
+      return {
+        ...common,
+        ...(title !== null ? { name: nextTitle } : {}),
+        ...(outputText !== undefined ? { outputText } : {}),
+      };
   }
 }
 

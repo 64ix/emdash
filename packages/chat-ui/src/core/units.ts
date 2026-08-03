@@ -29,7 +29,7 @@
  */
 
 import type { Component } from 'solid-js';
-import type { ChatItem, PlanState, SyntheticItem } from '@/model';
+import type { ChatItem, PlanState, SyntheticItem, TranscriptTurnOutcome } from '@/model';
 import type { ChatCaches } from './caches';
 import type { MeasureCtx, RenderCtx } from './define';
 import type { Margin } from './spacing';
@@ -131,6 +131,12 @@ export type SegmentItem = ChatItem | SyntheticItem;
  *
  * `caches.parseBlocks` is WeakMap-memoized; re-segmenting committed items is
  * cheap even if called on every tick.
+ *
+ * `turnOutcome` — the settled outcome of the item's own owning turn, when
+ * known. Populated per-turn by `state/flatten.ts#flattenTier` (committed
+ * turns only; the active turn has no outcome yet). Optional so existing
+ * SegmentCtx construction sites (tests, perf harness) do not need updating —
+ * segmenters that do not care about turn outcome simply never call it.
  */
 export type SegmentCtx = {
   caches: ChatCaches;
@@ -139,6 +145,7 @@ export type SegmentCtx = {
   plan: () => PlanState | null;
   pendingToolCallIds: () => Set<string>;
   terminalOutputText: (terminalId: string) => string | null;
+  turnOutcome?: () => TranscriptTurnOutcome | undefined;
 };
 
 // ── UnitDef ───────────────────────────────────────────────────────────────────
