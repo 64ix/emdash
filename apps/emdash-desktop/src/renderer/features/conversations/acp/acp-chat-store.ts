@@ -139,6 +139,18 @@ export class AcpChatStore {
    */
   newEventCount = 0;
   /**
+   * Transcript outline (one entry per prompt and per turn) — ticket #34.
+   * Recomputed via `_syncOutline` at every point the transcript can grow, for
+   * the same reason `newEventCount` is an explicit field rather than a lazy
+   * `computed`: its inputs (`chatState.transcript.state`,
+   * `chatState.session.state.pendingPrompt`) are Solid signals, not MobX
+   * observables. A `computed` reading only those has ZERO MobX-tracked
+   * dependencies, so MobX caches its first evaluation once observed and never
+   * invalidates it — the outline froze as soon as the panel had rendered once.
+   * Shipped as a `computed` by #34; caught during #37's review.
+   */
+  outline: readonly OutlineEntry[] = [];
+  /**
    * True while a "return to reading position" jump (see `visitNewestEvent`)
    * is available. Ticket #37: visiting the newest event must not lose the
    * exact prior item + offset.
@@ -254,7 +266,7 @@ export class AcpChatStore {
       affordances: computed,
       isEmpty: computed,
       failedSubmissions: computed,
-      outline: computed,
+      outline: observable.ref,
       submitPrompt: action,
       queuePrompt: action,
       retryFailedSubmission: action,
@@ -421,9 +433,9 @@ export class AcpChatStore {
    * rendering, so the outline always matches what is actually loaded —
    * extending without duplicates or reordering as older history pages in.
    */
-  get outline(): readonly OutlineEntry[] {
+  private _syncOutline(): void {
     const transcript = this.chatState.transcript.state;
-    return deriveTranscriptOutline(
+    this.outline = deriveTranscriptOutline(
       transcript.committedTurns,
       transcript.activeTurnSnapshot,
       transcript.turnStatus,
@@ -520,6 +532,7 @@ export class AcpChatStore {
       this._readWatermark = captureReadWatermark(state.committedTurns, state.activeTurnSnapshot);
     }
     this._syncNewEventCount();
+    this._syncOutline();
   }
 
   /**
@@ -553,6 +566,7 @@ export class AcpChatStore {
       this._readWatermark = null;
     }
     this._syncNewEventCount();
+    this._syncOutline();
     this._view?.scrollToBottom({ behavior: 'smooth' });
   }
 
@@ -793,6 +807,7 @@ export class AcpChatStore {
         this._resetReadingPosition();
         this._syncMessageCount();
         this._syncChangesFootprint();
+        this._syncOutline();
       });
     } catch (error) {
       log.error('ACP chat bootstrap failed', {
@@ -991,6 +1006,7 @@ export class AcpChatStore {
           this._syncMessageCount();
           this._syncChangesFootprint();
           this._syncNewEventCount();
+          this._syncOutline();
         })
       ),
       session.draft.onChange((draft) =>
@@ -1075,6 +1091,7 @@ export class AcpChatStore {
       this._syncMessageCount();
       this._syncChangesFootprint();
       this._syncNewEventCount();
+      this._syncOutline();
     });
   }
 
@@ -1124,6 +1141,7 @@ export class AcpChatStore {
         this._syncMessageCount();
         this._syncChangesFootprint();
         this._syncNewEventCount();
+        this._syncOutline();
       });
     } catch (error) {
       this._historyPagination.abortLoadOlder(epoch);

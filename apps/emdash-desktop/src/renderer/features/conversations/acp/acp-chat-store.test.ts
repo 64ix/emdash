@@ -1,4 +1,5 @@
 import type { TranscriptItem, TranscriptTurn } from '@emdash/core/acp/client';
+import { autorun } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
 import { AcpChatStore } from './acp-chat-store';
 import type { AcpHistoryPagination } from './acp-history-pagination';
@@ -175,6 +176,12 @@ function setUpStore(seedTurns: TranscriptTurn[], nextCursor: number | null) {
   pagination.seed({ turns: seedTurns, nextCursor });
   const fakeChatState = store.chatState as unknown as FakeChatState;
   fakeChatState.transcript.history.seed(seedTurns);
+  // Mirror what `_runBootstrap` does after a real (re)seed. `outline` and
+  // `newEventCount` are explicitly-resynced observable fields rather than lazy
+  // computeds (see the field docs in acp-chat-store.ts), so a fixture that
+  // seeds the fake chat state directly has to resync them too — otherwise it
+  // hands tests a store whose derived state never matches its transcript.
+  (store as unknown as { _syncOutline(): void })._syncOutline();
   return { store, fakeChatState };
 }
 
@@ -309,6 +316,8 @@ describe('AcpChatStore.scrollToTranscriptItem', () => {
     pagination.seed({ turns: seedTurns, nextCursor });
     const fakeChatState = store.chatState as unknown as FakeChatState;
     fakeChatState.transcript.history.seed(seedTurns);
+    // See the module-level setUpStore: resync the explicitly-synced fields.
+    (store as unknown as { _syncOutline(): void })._syncOutline();
     return { store, fakeChatState };
   }
 
@@ -386,18 +395,70 @@ describe('AcpChatStore.scrollToTranscriptItem', () => {
 });
 
 describe('AcpChatStore.outline', () => {
-  it('derives from the current committed/active/pending-prompt transcript state', () => {
-    const store = new AcpChatStore('conversation-1', 'project-1', 'task-1');
-    const fakeChatState = store.chatState as unknown as FakeChatState;
-    const turns = [makeTurn(1)];
-    fakeChatState.transcript.history.seed(turns);
+  it('derives from the current committed/active/pending-prompt transcript state', async () => {
+    // `outline` is an explicitly-resynced observable field, not a `computed`
+    // getter: a computed reading only Solid-signal state has no MobX-tracked
+    // dependency, so MobX would cache its first evaluation forever once
+    // observed (the #34 staleness bug found in #37's review). So this test
+    // must grow the transcript through a real store path — seeding the fake
+    // chat state directly, as the original version of this test did, bypasses
+    // every resync point and is exactly the read the old getter made look
+    // correct.
+    const older = makeTurn(1);
+    const { store, fakeChatState } = setUpStore([makeTurn(2)], 1);
+    store.session = {
+      getHistory: vi.fn(async () => ({
+        success: true,
+        data: { turns: [older], nextCursor: null },
+      })),
+    } as never;
+    store.bindView(null);
+
+    void store.loadOlderHistory();
+    await flushMicrotasks();
 
     expect(store.outline).toEqual({
-      committedTurns: turns,
+      committedTurns: fakeChatState.transcript.history.get(),
       activeTurn: fakeChatState.transcript.state.activeTurnSnapshot,
       turnStatus: fakeChatState.transcript.state.turnStatus,
       pendingPrompt: fakeChatState.session.state.pendingPrompt,
     });
+  });
+
+  it('keeps updating once observed, instead of caching its first evaluation', async () => {
+    // Regression guard for the #34 staleness bug. It only reproduces while the
+    // value is *observed*: a MobX `computed` re-evaluates on every read outside
+    // a reaction, so a plain read cannot catch it. `autorun` is what makes the
+    // value "hot" — the same thing `observer()` does in AcpChatPanel's render.
+    // Against the original `computed` (whose body read only Solid-signal state
+    // and therefore had zero MobX-tracked dependencies) the second assertion
+    // below fails: MobX never invalidates, so the outline stays frozen at its
+    // first evaluation no matter how much the transcript grows.
+    const { store, fakeChatState } = setUpStore([makeTurn(2)], 1);
+    store.session = {
+      getHistory: vi.fn(async () => ({
+        success: true,
+        data: { turns: [makeTurn(1)], nextCursor: null },
+      })),
+    } as never;
+    store.bindView(null);
+
+    const seen: number[] = [];
+    const stop = autorun(() => {
+      // The mocked `deriveTranscriptOutline` echoes its arguments back as an
+      // object rather than returning a real OutlineEntry[], hence the cast.
+      const echoed = store.outline as unknown as { committedTurns: readonly unknown[] };
+      seen.push(echoed.committedTurns.length);
+    });
+
+    expect(seen).toEqual([1]);
+
+    void store.loadOlderHistory();
+    await flushMicrotasks();
+
+    expect(fakeChatState.transcript.history.get()).toHaveLength(2);
+    expect(seen.at(-1)).toBe(2);
+    stop();
   });
 });
 
