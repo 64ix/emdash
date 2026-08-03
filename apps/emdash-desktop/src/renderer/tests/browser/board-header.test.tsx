@@ -583,3 +583,146 @@ describe('Board header — filtering never mutates persistence (ticket #45)', ()
     expect(b.updateBoardPosition).not.toHaveBeenCalled();
   });
 });
+
+// ── Drop-rank interpolation with a hidden interior card ─────────────────────
+//
+// Regression coverage (ticket #45): filtering is applied where `rawByColumn`
+// is built (board-main-panel.tsx), so every downstream drag computation only
+// ever sees already-filtered cards. An earlier design filtered only at
+// render time while drop-position math still read the *unfiltered* column —
+// dropping between two visible cards with a hidden card between them would
+// have interpolated against the wrong neighbor (or the hidden card's own
+// slot). These tests drive a real pointer-drag (mirrors board-dnd.test.tsx's
+// harness) to prove the drop rank is computed strictly between the two
+// *visible* neighbors' own stored ranks, and that the hidden interior card's
+// position is never read from or written to.
+
+function pointer(type: string, x: number, y: number): PointerEvent {
+  return new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX: x,
+    clientY: y,
+    button: 0,
+    buttons: 1,
+    pointerId: 1,
+    isPrimary: true,
+  });
+}
+
+function center(el: Element): { x: number; y: number } {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+/** Press on `from`, walk to the target in steps, hover a beat, release. */
+async function drag(from: Element, toX: number, toY: number, hoverFrames = 6) {
+  const start = center(from);
+  from.dispatchEvent(pointer('pointerdown', start.x, start.y));
+  await settle();
+  const steps = 8;
+  document.dispatchEvent(pointer('pointermove', start.x + 10, start.y + 2));
+  await settle();
+  for (let i = 1; i <= steps; i++) {
+    const x = start.x + ((toX - start.x) * i) / steps;
+    const y = start.y + ((toY - start.y) * i) / steps;
+    document.dispatchEvent(pointer('pointermove', x, y));
+    await settle(2);
+  }
+  await settle(hoverFrames);
+  document.dispatchEvent(pointer('pointerup', toX, toY));
+  await settle();
+}
+
+/** The column's droppable card-list element, located by its stage label. */
+function columnZone(label: string): Element {
+  const header = Array.from(document.querySelectorAll('span')).find((s) => s.textContent === label)!;
+  const column = header.parentElement!.parentElement!;
+  return column.lastElementChild!;
+}
+
+describe('Board header — drop-rank interpolation skips a hidden interior card (ticket #45)', () => {
+  /** Idle-only Agent State filter: hides only `hideMe` (status 'error'),
+   * leaving `keepA`/`keepC`/`dragged` (all idle) visible — unlike a search
+   * query, this doesn't also hide the dragged card by its own name. */
+  async function hideOnlyHideMe() {
+    click(filtersTrigger());
+    await settle();
+    click(filterCheckbox('Idle'));
+    await settle();
+  }
+
+  it('interpolates the drop rank strictly between the two visible neighbors, never touching the hidden card between them', async () => {
+    // Idea column, unfiltered order: keep-a ('D') < hide-me ('H') < keep-c ('n').
+    // Filtering to Idle-only hides only "hide-me" (agentStatus 'error'):
+    // keep-a and keep-c become adjacent in the *displayed* list even though a
+    // real card sits between their stored ranks.
+    const keepA = makeStore('keep-a', { name: 'Keep A', workflowStage: 'idea', boardRank: 'D' });
+    const hideMe = {
+      ...makeStore('hide-me', { name: 'Hide me', workflowStage: 'idea', boardRank: 'H' }),
+      agentStatus: 'error' as const,
+    };
+    const keepC = makeStore('keep-c', { name: 'Keep C', workflowStage: 'idea', boardRank: 'n' });
+    // The dragged card starts in a different column (Unstaged) so the drop is
+    // unambiguously a cross-column insert into Idea, not a same-column reorder.
+    const dragged = makeStore('dragged', { name: 'Dragged card' });
+    managerTasks.set('keep-a', keepA);
+    managerTasks.set('hide-me', hideMe);
+    managerTasks.set('keep-c', keepC);
+    managerTasks.set('dragged', dragged);
+    await mount();
+
+    await hideOnlyHideMe();
+    expect(cardEl('Hide me')).toBeNull();
+    expect(cardEl('Keep A')).not.toBeNull();
+    expect(cardEl('Keep C')).not.toBeNull();
+    expect(cardEl('Dragged card')).not.toBeNull();
+
+    // Drop just above Keep C's (visible) card — i.e. the only slot between
+    // the two now-adjacent visible cards.
+    const target = center(cardEl('Keep C')!);
+    await drag(cardEl('Dragged card')!, target.x, target.y - 8);
+
+    expect(dragged.updateBoardPosition).toHaveBeenCalledTimes(1);
+    // rankBetween('D', 'n') — the two *visible* neighbors' own stored ranks —
+    // not anything derived from "hide-me"'s rank ('H') or list position.
+    expect(dragged.updateBoardPosition).toHaveBeenCalledWith('idea', 'V');
+    // The hidden card is never read from or written to by this drop.
+    expect(hideMe.updateBoardPosition).not.toHaveBeenCalled();
+    expect(keepA.updateBoardPosition).not.toHaveBeenCalled();
+    expect(keepC.updateBoardPosition).not.toHaveBeenCalled();
+  });
+
+  it('clearing the filter afterwards reveals the hidden card with its stored rank untouched', async () => {
+    const keepA = makeStore('keep-a', { name: 'Keep A', workflowStage: 'idea', boardRank: 'D' });
+    const hideMe = {
+      ...makeStore('hide-me', { name: 'Hide me', workflowStage: 'idea', boardRank: 'H' }),
+      agentStatus: 'error' as const,
+    };
+    const keepC = makeStore('keep-c', { name: 'Keep C', workflowStage: 'idea', boardRank: 'n' });
+    const dragged = makeStore('dragged', { name: 'Dragged card' });
+    managerTasks.set('keep-a', keepA);
+    managerTasks.set('hide-me', hideMe);
+    managerTasks.set('keep-c', keepC);
+    managerTasks.set('dragged', dragged);
+    await mount();
+
+    await hideOnlyHideMe();
+    const target = center(cardEl('Keep C')!);
+    await drag(cardEl('Dragged card')!, target.x, target.y - 8);
+    expect(dragged.updateBoardPosition).toHaveBeenCalledTimes(1);
+
+    // Only one filter category is active (Agent State: Idle), so the chip
+    // row shows its own remove button rather than "Clear all" (which only
+    // appears once there is more than one chip) — clear it directly.
+    click(chipRemoveButton('Idle'));
+    await settle();
+
+    // The hidden card reappears, its own boardRank field never rewritten by
+    // the drop above (this test's mock stores never mutate `data.boardRank`
+    // on `updateBoardPosition` calls, so its absence here already proves the
+    // filter never touched it; this re-asserts it's visible again post-clear).
+    expect(cardEl('Hide me')).not.toBeNull();
+    expect(hideMe.updateBoardPosition).not.toHaveBeenCalled();
+  });
+});

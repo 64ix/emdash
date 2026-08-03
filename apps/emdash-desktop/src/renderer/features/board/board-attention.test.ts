@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
-import type { AgentStatus } from '@shared/core/agents/agentEvents';
 import type { Task } from '@shared/core/tasks/tasks';
 
 const mocks = vi.hoisted(() => ({
@@ -15,12 +14,12 @@ vi.mock('@renderer/features/tasks/stores/task-store', () => ({
   registeredTaskData: (store: { data: Task | undefined }) => store.data,
 }));
 
-import {
-  agentStatusNeedsAttention,
-  countTasksNeedingAttention,
-  taskNeedsAttention,
-} from './board-attention';
-import { needsAttention as needsAttentionInBoardFilters } from './board-filters';
+// `agentStatusNeedsAttention` itself is covered by `agent-attention.test.ts`
+// next to its dependency-free leaf module (see that module's docstring for
+// why `board-filters.ts` and this module share it instead of each declaring
+// a copy). This file covers only the two things specific to this module:
+// `isBoardDisplayable` gating and the per-project count.
+import { countTasksNeedingAttention, taskNeedsAttention } from './board-attention';
 
 type FakeStore = { data: Task | undefined };
 
@@ -46,37 +45,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     ...overrides,
   };
 }
-
-describe('agentStatusNeedsAttention', () => {
-  it('flags awaiting-input, error, and completed as needing attention', () => {
-    expect(agentStatusNeedsAttention('awaiting-input')).toBe(true);
-    expect(agentStatusNeedsAttention('error')).toBe(true);
-    expect(agentStatusNeedsAttention('completed')).toBe(true);
-  });
-
-  it('does not flag working (still in progress) or idle', () => {
-    expect(agentStatusNeedsAttention('working')).toBe(false);
-    expect(agentStatusNeedsAttention('idle')).toBe(false);
-  });
-
-  it('does not flag no status at all', () => {
-    expect(agentStatusNeedsAttention(null)).toBe(false);
-  });
-
-  it("never diverges from board-filters.ts's own copy of the same rule (kept dependency-free for node tests)", () => {
-    const statuses: (AgentStatus | null)[] = [
-      null,
-      'idle',
-      'working',
-      'awaiting-input',
-      'error',
-      'completed',
-    ];
-    for (const status of statuses) {
-      expect(needsAttentionInBoardFilters(status)).toBe(agentStatusNeedsAttention(status));
-    }
-  });
-});
 
 describe('taskNeedsAttention', () => {
   it('is true for a displayable task with an attention-needing agent status', () => {
