@@ -96,3 +96,46 @@ For state that must survive React unmounts or be shared across unrelated compone
 - **MobX task and project stores** — `src/renderer/features/tasks/stores/` and
   `src/renderer/features/projects/stores/`; access them through selectors
   (`task-selectors.ts`, `project-selectors.ts`) and task view hooks, never directly
+
+## MobX `computed` over non-MobX state (a recurring trap)
+
+A MobX `computed` getter whose body reads only non-MobX-tracked state — a SolidJS
+signal (e.g. `@emdash/chat-ui`'s `ChatState`), a plain class field, or a framework-free
+controller's own state — has **zero MobX-tracked dependencies**. The first time it is
+observed continuously (wrapped in `observer(...)`, or read inside an `autorun`/
+`reaction`), MobX caches that first evaluation and never invalidates it, because nothing
+in its dependency graph ever reports a change. The getter silently freezes at whatever
+it returned on first render, even though the underlying data keeps changing.
+
+This shipped three separate times in `AcpChatStore`
+(`apps/emdash-desktop/src/renderer/features/conversations/acp/acp-chat-store.ts`)
+during spec #18 before being caught: the transcript outline, the permission queue, and
+`searchHistoryExhausted`. All three had the same shape — a `computed` reading
+`chatState.transcript.state`, `session.sessionState.current()`, or another non-MobX
+store directly. Three independent occurrences in one spec is a pattern, not bad luck.
+
+**The fix already established in this file:** make the value an explicit
+`observable`/`observable.ref` field, not a `computed` getter, and recompute it via a
+private `_syncX()` method called at **every** site the underlying non-MobX state can
+change (see `AcpChatStore`'s `outline`, `permissionQueue`, and `attentionQueue` fields
+and their paired `_syncOutline`/`_syncPermissionQueue`/`_syncAttentionQueue` methods for
+the reference pattern, including the doc-comment convention of listing every call
+site). Where the getter must stay a `computed` for API-shape reasons (e.g. delegating to
+a framework-free controller like `AcpChatSearchController`), gate it on a manually
+bumped observable version counter read first in the getter body (see
+`searchVersion`/`permissionResolutionVersion`), and bump that counter unconditionally at
+every site the delegate's state can change — not only when the delegate itself reports
+a change, since a caller can rely on the getter staying live even when the delegate's
+own update is a no-op (see `searchHistoryExhausted`'s doc for why `_syncSearch` bumps
+`searchVersion` unconditionally).
+
+**Before adding or reviewing any MobX `computed` getter, check what it reads.** If its
+body's only MobX-tracked read is a stable object reference (e.g. `this.session`) and
+everything past that is a plain method call (`.current()`, `.state`, a framework-free
+controller's own field), it needs the explicit-field-plus-resync pattern above, not
+`computed`. This is exactly the kind of bug a per-file or per-PR review can miss, since
+the code type-checks, lints, and even passes tests that read the getter without ever
+keeping it "hot" under a continuous observer — write the regression test as an
+`autorun` that keeps observing across a mutation, matching the pattern in
+`acp-chat-store.test.ts`'s "keeps updating once observed, instead of caching its first
+evaluation" tests.

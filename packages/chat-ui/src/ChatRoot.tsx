@@ -1579,12 +1579,17 @@ export function ChatRoot(props: ChatRootProps) {
       onCleanup(() => roSlot.disconnect());
     }
 
-    // Mouse AND keyboard activation of a [data-collapse-id] row (CollapseHeader:
-    // tool groups, thinking, file-ops) both arrive here through `onClick`:
-    // ticket #26 made those headers native `<button>`s, and a native button
-    // dispatches a real `click` on Enter/Space. Ticket #38 had added a separate
-    // keydown delegation for the same goal; it was removed when the two landed
-    // together, because running both would toggle the row twice per keypress.
+    // Shared by `onClick` and `onKeyDown` below so mouse and (real or
+    // synthetic) keyboard activation of a [data-collapse-id] row
+    // (CollapseHeader, CardHeader, Diff header, FileOperation, Subagent) both
+    // toggle through the exact same anchor-pinning logic (#38). Ticket #26
+    // later made every `[data-collapse-id]` producer a native `<button>`,
+    // which on a real, trusted keypress would ALSO fire its own default-action
+    // `click` reaching `onClick` below — seemingly a double-toggle risk once
+    // both tickets' code coexisted. It is not one in practice:
+    // `onKeyDown`'s own `preventDefault()` call (see its doc just below)
+    // suppresses that native default action, so only one toggle ever
+    // happens, on every keyboard/pointer input path this file supports.
     const toggleCollapseTarget = (id: string) => {
       // Pin the toggled row at its current viewport position before the height
       // change. With readPhase no longer reclassifying intent on idle frames,
@@ -1633,7 +1638,21 @@ export function ChatRoot(props: ChatRootProps) {
       const t = e.target as HTMLElement;
       const collapseTarget = t.closest('[data-collapse-id]') as HTMLElement | null;
       if (!collapseTarget?.dataset.collapseId) return;
-      // Prevent Space from scrolling the transcript.
+      // `preventDefault` here is what keeps this safe to run *alongside*
+      // ticket #26's native `<button data-collapse-id>` elements: on a real,
+      // trusted keydown a native button would otherwise also fire its own
+      // default-action `click` on Enter/Space, which would reach `onClick`
+      // above and toggle the row a second time. Calling `preventDefault` in
+      // this bubble-phase listener runs before the browser applies that
+      // default action, so it suppresses the native click and only this
+      // handler's own `toggleCollapseTarget` call fires — see
+      // `a11y-transcript-controls.contract.test.tsx`'s real (trusted, CDP-
+      // driven) keyboard-activation tests, which pass through this exact
+      // interaction and assert a single toggle, not a double one. This also
+      // remains the ONLY path for a synthetic (non-trusted, scripted)
+      // keydown — e.g. `turn-outcome.contract.test.tsx`'s
+      // `dispatchEvent(new KeyboardEvent(...))` — since browsers do not run
+      // a native element's default action for untrusted events at all.
       e.preventDefault();
       toggleCollapseTarget(collapseTarget.dataset.collapseId);
     };
