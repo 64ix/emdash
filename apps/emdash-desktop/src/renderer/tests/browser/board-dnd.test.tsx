@@ -110,6 +110,11 @@ const LAYOUT_CSS = `
   .flex-1 { flex: 1 1 0%; min-height: 0; }
   .h-full { height: 100%; }
   .w-56 { width: 14rem; }
+  .w-14 { width: 3.5rem; }
+  /* Collapsible empty columns (ticket #46): the collapsed width above is
+     overridden while focus lands anywhere inside the column, matching the
+     "focus-within:w-56" utility class the column applies. */
+  .focus-within\\:w-56:focus-within { width: 14rem; }
   .shrink-0 { flex-shrink: 0; }
   .gap-2 { gap: 0.5rem; }
   .gap-3 { gap: 0.75rem; }
@@ -218,6 +223,20 @@ function columnZone(label: string): Element {
   const header = Array.from(host.querySelectorAll('span')).find((s) => s.textContent === label)!;
   const column = header.parentElement!.parentElement!;
   return column.lastElementChild!;
+}
+
+/** The whole column (header + droppable zone) for a given column label — used
+ * to measure the collapse/expand width (ticket #46). */
+function columnWrapper(label: string): HTMLElement {
+  const header = Array.from(host.querySelectorAll('span')).find((s) => s.textContent === label)!;
+  return header.parentElement!.parentElement as HTMLElement;
+}
+
+/** The collapse/expand toggle button for a given (empty-only) column label. */
+function columnToggle(label: string): HTMLButtonElement {
+  return Array.from(host.querySelectorAll('button')).find((button) =>
+    button.getAttribute('aria-label')?.endsWith(`${label} column`)
+  ) as HTMLButtonElement;
 }
 
 function cardEl(name: string): Element {
@@ -639,5 +658,212 @@ describe('board drag-and-drop — cross-column ghost preview', () => {
     document.dispatchEvent(pointer('pointerup', start.x, start.y));
     await settle();
     expect(a.updateBoardPosition).not.toHaveBeenCalled(); // back to square one: no write
+  });
+});
+
+// ── Collapsible empty columns (ticket #46) ─────────────────────────────────
+//
+// Collapse is opt-in per column via a header toggle, defaulted to expanded —
+// every test above never touches it, so the drag geometry, autoscroll,
+// same-column reorder, and cross-column preview behaviour those tests guard
+// is provably unaffected by this feature existing at all. These tests cover
+// the feature itself: a collapsed empty column is narrower, stays a valid
+// pointer AND keyboard drop target, and expands for the duration of a drag
+// or focus interaction that reaches it.
+
+describe('board columns — collapsed empty columns (pointer)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it('a collapsed empty column renders narrower than an expanded one', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    const expandedWidth = columnWrapper('Idea').getBoundingClientRect().width;
+    expect(expandedWidth).toBeGreaterThan(150);
+
+    columnToggle('Idea').click();
+    await settle();
+
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+  });
+
+  it('never offers the toggle on a column that has cards', async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', boardRank: 'm' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    expect(columnToggle('Spec')).toBeUndefined();
+  });
+
+  it('expands for the duration of a drag hovering it, and still accepts the drop', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    const target = center(columnZone('Idea'));
+    const start = center(cardEl('card-a'));
+    cardEl('card-a').dispatchEvent(pointer('pointerdown', start.x, start.y));
+    await settle();
+    document.dispatchEvent(pointer('pointermove', start.x + 10, start.y + 2));
+    await settle();
+    document.dispatchEvent(pointer('pointermove', target.x, target.y));
+    await settle(6);
+
+    // Still mid-drag: the previously-collapsed column has expanded back to
+    // its full width, so aiming the drop stays exactly as easy as any other.
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    document.dispatchEvent(pointer('pointerup', target.x, target.y));
+    await settle();
+
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('idea', expect.any(String));
+  });
+
+  it('collapses back once the drag moves on to another column, while still empty', async () => {
+    const a = makeStore('card-a');
+    const x = makeStore('card-x', { workflowStage: 'spec', boardRank: 'm' });
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(x.data.id, x);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+
+    const ideaTarget = center(columnZone('Idea'));
+    const start = center(cardEl('card-a'));
+    cardEl('card-a').dispatchEvent(pointer('pointerdown', start.x, start.y));
+    await settle();
+    document.dispatchEvent(pointer('pointermove', start.x + 10, start.y + 2));
+    await settle();
+    document.dispatchEvent(pointer('pointermove', ideaTarget.x, ideaTarget.y));
+    await settle(6);
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    // Wander over to Spec (already populated) without dropping.
+    const specTarget = center(cardEl('card-x'));
+    document.dispatchEvent(pointer('pointermove', specTarget.x, specTarget.y));
+    await settle(6);
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    document.dispatchEvent(pointer('pointerup', specTarget.x, specTarget.y));
+    await settle();
+  });
+});
+
+describe('board columns — collapsed empty columns (keyboard focus)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it('expands while focus is inside the collapsed drop zone, and collapses again on blur', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    const dropZone = columnZone('Idea') as HTMLElement;
+    dropZone.focus();
+    await settle();
+    expect(document.activeElement).toBe(dropZone);
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    dropZone.blur();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+  });
+
+  it('also expands while the collapse toggle button itself has focus', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    columnToggle('Idea').click();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+
+    columnToggle('Idea').focus();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeGreaterThan(150);
+
+    columnToggle('Idea').blur();
+    await settle();
+    expect(columnWrapper('Idea').getBoundingClientRect().width).toBeLessThan(100);
+  });
+});
+
+// ── Exception groups: Unstaged and Triage (ticket #46) ─────────────────────
+
+describe('board columns — Unstaged and Triage exception groups', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it("labels Triage with warning semantics that don't rely on colour alone", async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const triageGroup = Array.from(host.querySelectorAll('[role="group"]')).find((el) =>
+      el.getAttribute('aria-label')?.startsWith('Triage')
+    )!;
+    expect(triageGroup.getAttribute('aria-label')).toMatch(/warning/i);
+    // Paired with a visible icon — never colour alone.
+    expect(triageGroup.querySelector('svg')).not.toBeNull();
+  });
+
+  it('labels Unstaged as an exception group outside the delivery pipeline', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const unstagedGroup = Array.from(host.querySelectorAll('[role="group"]')).find((el) =>
+      el.getAttribute('aria-label')?.startsWith('Unstaged')
+    )!;
+    expect(unstagedGroup.getAttribute('aria-label')).toMatch(/exception/i);
+  });
+
+  it('visually separates Unstaged and Triage from the pipeline with a divider on each side', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const row = host.querySelector('.overflow-x-auto')!;
+    const children = Array.from(row.children);
+    const groups = children.filter((el) => el.getAttribute('role') === 'group');
+    const dividers = children.filter((el) => el.getAttribute('aria-hidden') === 'true');
+
+    expect(groups).toHaveLength(8); // every column still renders, none dropped
+    expect(dividers).toHaveLength(2); // Unstaged | pipeline, and pipeline | Triage
+
+    // Triage never sits directly beside Shipped: a divider always separates
+    // them, so Triage is never read as the stage that follows Shipped.
+    const shippedIndex = children.indexOf(columnWrapper('Shipped'));
+    const triageIndex = children.indexOf(columnWrapper('Triage'));
+    expect(triageIndex).toBe(shippedIndex + 2);
   });
 });

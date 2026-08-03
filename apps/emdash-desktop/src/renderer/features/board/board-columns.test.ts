@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
-import { isBoardDisplayable, isTaskShippedFaded, STAGE_LABELS } from './board-columns';
+import {
+  columnEmphasis,
+  isBoardDisplayable,
+  isTaskShippedFaded,
+  PIPELINE_COLUMNS,
+  STAGE_LABELS,
+} from './board-columns';
 import { COLUMNS, stageOf } from './board-ordering';
 
 function makeTask(
@@ -86,6 +92,46 @@ describe('COLUMNS', () => {
     expect(STAGE_LABELS.review).toBe('Review');
     expect(STAGE_LABELS.shipped).toBe('Shipped');
     expect(STAGE_LABELS.triage).toBe('Triage');
+  });
+});
+
+describe('columnEmphasis', () => {
+  it('flags unstaged and triage as exception groups, distinct from each other', () => {
+    expect(columnEmphasis('unstaged')).toBe('unstaged');
+    expect(columnEmphasis('triage')).toBe('triage');
+  });
+
+  it('flags every other column as part of the pipeline', () => {
+    for (const column of [
+      'idea',
+      'exploring',
+      'spec',
+      'implementing',
+      'review',
+      'shipped',
+    ] as const) {
+      expect(columnEmphasis(column)).toBe('pipeline');
+    }
+  });
+});
+
+describe('PIPELINE_COLUMNS', () => {
+  it('is the six-stage delivery sequence, excluding both exception groups', () => {
+    expect(PIPELINE_COLUMNS).toEqual([
+      'idea',
+      'exploring',
+      'spec',
+      'implementing',
+      'review',
+      'shipped',
+    ]);
+  });
+
+  it('never includes unstaged or triage — Triage must never read as following Shipped', () => {
+    expect(PIPELINE_COLUMNS).not.toContain('unstaged');
+    expect(PIPELINE_COLUMNS).not.toContain('triage');
+    // Shipped is the pipeline's true last stage; Triage sits outside it entirely.
+    expect(PIPELINE_COLUMNS.at(-1)).toBe('shipped');
   });
 });
 
