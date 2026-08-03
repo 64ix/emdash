@@ -17,6 +17,7 @@ import {
   deriveGhostDetailViewModel,
   type TaskDetailPanelLink,
 } from '@renderer/features/board/task-detail-panel-view-model';
+import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
 import {
   getTaskGitWorktreeStore,
   getTaskManagerStore,
@@ -26,6 +27,7 @@ import {
 import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { StatusIcon } from '@renderer/lib/components/pr-status-icon';
+import { StackedAgentLogos } from '@renderer/lib/components/stacked-agent-logos';
 import { rpc } from '@renderer/lib/ipc';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { Badge } from '@renderer/lib/ui/badge';
@@ -80,9 +82,12 @@ function LinkedIssueRow({ link }: { link: TaskDetailPanelLink }) {
   );
 }
 
+/** The chain's final link (ticket #49): the Spec-derived PR. `data-delivery-chain-item`
+ * distinguishes this row from the typed Linked Issue rows above it within the
+ * same "Delivery chain" section. */
 function SpecDerivedPrRow({ pr }: { pr: StageHoldingPr }) {
   return (
-    <div className="flex items-center gap-2 text-xs">
+    <div data-delivery-chain-item="pr" className="flex items-center gap-2 text-xs">
       <StatusIcon pr={pr} className="size-3.5" disableTooltip />
       <span className="min-w-0 flex-1 truncate" title={pr.title}>
         {pr.title}
@@ -267,20 +272,31 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
       </div>
 
       <PanelSection id="vitals" title="Vitals">
+        {/* Branch and working-tree changes (ticket #49): read-only, and never
+            provisions anything to display them. `TaskGitDiffStats` (ticket
+            #47's card primitive, reused rather than duplicated here) only
+            ever reads a live `GitWorktreeStore` already mounted for a
+            provisioned task, or the cached `workspaceGit` snapshot for one
+            that isn't — browsing the board (or its inspector) never mounts a
+            worktree or provisions a task just to show this. */}
         <div className="flex items-center gap-1.5 text-xs text-foreground-muted">
           <GitBranch className="size-3 shrink-0" />
           {vm.vitals.branchName ? (
-            <span className="min-w-0 truncate" title={vm.vitals.branchName}>
+            <span className="min-w-0 flex-1 truncate" title={vm.vitals.branchName}>
               {vm.vitals.branchName}
             </span>
           ) : (
-            <span>Not provisioned yet</span>
+            <span className="flex-1">Not provisioned yet</span>
           )}
+          <TaskGitDiffStats task={store} />
         </div>
         <div className="flex items-center justify-between text-xs text-foreground-muted">
           <span>Created</span>
           <RelativeTime value={task.createdAt} />
         </div>
+        {/* Agent and conversation state (ticket #49): the same per-provider
+            session counts (`StackedAgentLogos`) and status indicator the
+            card already shows — reused, not re-derived. */}
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1 text-xs text-foreground-muted">
             <MessageSquare className="size-3" />
@@ -288,7 +304,12 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
               ? '1 session'
               : `${String(vm.vitals.totalSessionCount)} sessions`}
           </span>
-          <AgentStatusIndicator status={vm.vitals.agentStatus} />
+          <div className="flex items-center gap-1.5">
+            {Object.keys(vm.vitals.sessionCounts).length > 0 && (
+              <StackedAgentLogos stats={vm.vitals.sessionCounts} />
+            )}
+            <AgentStatusIndicator status={vm.vitals.agentStatus} />
+          </div>
         </div>
       </PanelSection>
 
@@ -320,19 +341,22 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
         )}
       </PanelSection>
 
-      {vm.links.length > 0 && (
-        <PanelSection id="linked-issues" title="Linked issues">
+      {/* Delivery chain (ticket #49, CONTEXT.md "Origin Issue", "Map",
+          "Spec"): Origin -> Map -> Spec -> Pull Request, in that order, each
+          opening at its external source (`ExternalLinkButton` -> `app.openExternal`,
+          the same helper every row here already used before this ticket —
+          never a raw `window.open`/`<a target=_blank>`). Origin/Map/Spec come
+          from `vm.links` (already Origin-Map-Spec ordered); the Spec-derived
+          PR — the chain's most advanced link — renders last, in the same
+          section, rather than as a second, disconnected block. */}
+      {(vm.links.length > 0 || vm.pr) && (
+        <PanelSection id="delivery-chain" title="Delivery chain">
           <div className="flex flex-col gap-1.5">
             {vm.links.map((link) => (
               <LinkedIssueRow key={link.role} link={link} />
             ))}
+            {vm.pr && <SpecDerivedPrRow pr={vm.pr} />}
           </div>
-        </PanelSection>
-      )}
-
-      {vm.pr && (
-        <PanelSection id="pull-request" title="Pull request">
-          <SpecDerivedPrRow pr={vm.pr} />
         </PanelSection>
       )}
     </div>

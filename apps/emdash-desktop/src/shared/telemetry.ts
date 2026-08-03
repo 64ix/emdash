@@ -4,6 +4,7 @@ import type {
   AutomationRunTriggerKind,
 } from '@shared/core/automations/automation-run';
 import type { PullRequestMergeStrategy } from '@shared/core/pull-requests/pull-requests';
+import type { StageAuthorityFactKind } from '@shared/core/tasks/stage-authority';
 import type { TaskLifecycleStatus, WorkflowStage } from '@shared/core/tasks/tasks';
 import type { OpenInAppId } from '@shared/openInApps';
 
@@ -23,6 +24,11 @@ export type FocusMainPanel = 'agents' | 'editor' | 'diff' | 'browser' | 'termina
 export type FocusedRegion = 'main' | 'bottom';
 
 export type FocusTrigger = 'navigation' | 'panel_switch' | 'region_switch';
+
+/** Which UI affordance navigated to a project's Feature Board (tickets #43,
+ * #44, #50). `stage_chip` is the task titlebar's Workflow Stage chip, which
+ * carries a focused task id back to the board (ticket #50). */
+export type BoardEntrySource = 'sidebar' | 'command_palette' | 'work_mode_switcher' | 'stage_chip';
 
 export interface TelemetryEnvelope {
   event_ts_ms?: number;
@@ -64,6 +70,31 @@ export type TelemetryEventProperties = {
   mcp_viewed: { from_view: FocusView | null };
   automations_viewed: { from_view: FocusView | null };
   board_viewed: { from_view: FocusView | null };
+  /**
+   * Feature Board entry-point instrumentation (spec #25, ticket #43):
+   * distinguishes which UI affordance sent the user to a project's board,
+   * separately from the generic `board_viewed` navigation event above (which
+   * only carries the previous view). Extend `BoardEntrySource` as later
+   * tickets add more entry points (task Workflow Stage chip, project work
+   * mode tabs, ...) rather than introducing a second event for the same
+   * "how did the user get here" question.
+   */
+  board_opened: { source: BoardEntrySource };
+  /**
+   * Board workspace header (spec #25, ticket #45): distinguishes Needs
+   * Attention filtering from every other board interaction, without
+   * recording any task content — only whether the filter was turned on or
+   * off, plus the pre-existing `project_id` envelope field.
+   */
+  board_needs_attention_filtered: { active: boolean };
+  /**
+   * The board inspector (Task Detail Panel, ticket #49) opening — distinct
+   * from `board_opened` above (the board itself). Carries only which kind of
+   * target is shown (a task vs. a Ghost Card), never a task name, issue
+   * title, branch name, or other task content (minimal-payload shape,
+   * precedent: `board_opened`).
+   */
+  board_inspector_opened: { target_kind: 'task' | 'ghost' };
 
   automation_created: {
     enabled: boolean;
@@ -111,6 +142,18 @@ export type TelemetryEventProperties = {
     to_stage: WorkflowStage | null;
     /** True when the Workflow Stage is unchanged and only the Board Rank moved. */
     reordered: boolean;
+  };
+  /**
+   * A drag attempted to move a GitHub-authoritative card into a Workflow
+   * Stage its governing fact would silently overwrite (ticket #48). No move
+   * is persisted for this attempt — carries only stage names and the
+   * governing fact's kind, never issue titles, branch names, PR titles, or
+   * other task content (minimal-payload shape, precedent: `board_opened`).
+   */
+  board_move_blocked: {
+    from_stage: WorkflowStage | null;
+    attempted_stage: WorkflowStage | null;
+    governing_fact: StageAuthorityFactKind;
   };
 
   conversation_created: { provider: AgentProviderId; is_first_in_task: boolean };

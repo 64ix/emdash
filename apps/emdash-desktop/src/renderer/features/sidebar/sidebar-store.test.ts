@@ -97,6 +97,57 @@ describe('SidebarStore project ordering', () => {
     expect(store.orderedProjects.map((project) => project.id)).toEqual(['new', 'manual', 'old']);
   });
 
+  it('places a board row before task rows for each expanded, mounted project', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          taskIds: ['task-1a', 'task-1b'],
+        },
+        {
+          id: 'project-2',
+          createdAt: '2026-01-02T00:00:00.000Z',
+          taskIds: ['task-2a'],
+        },
+      ])
+    );
+
+    store.setProjectOrder(['project-1', 'project-2']);
+    store.ensureProjectExpanded('project-1');
+    store.ensureProjectExpanded('project-2');
+    store.setTaskOrder('project-1', ['task-1a', 'task-1b']);
+
+    expect(store.sidebarRows).toEqual([
+      { kind: 'project', projectId: 'project-1' },
+      { kind: 'board', projectId: 'project-1' },
+      { kind: 'task', projectId: 'project-1', taskId: 'task-1a' },
+      { kind: 'task', projectId: 'project-1', taskId: 'task-1b' },
+      { kind: 'project', projectId: 'project-2' },
+      { kind: 'board', projectId: 'project-2' },
+      { kind: 'task', projectId: 'project-2', taskId: 'task-2a' },
+    ]);
+  });
+
+  it('omits the board row for a collapsed project', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        { id: 'project-1', createdAt: '2026-01-01T00:00:00.000Z', taskIds: ['task-1a'] },
+      ])
+    );
+
+    expect(store.sidebarRows).toEqual([{ kind: 'project', projectId: 'project-1' }]);
+  });
+
+  it('omits the board row for an expanded project that has not mounted yet', () => {
+    const store = new SidebarStore(
+      projectManager([{ id: 'project-1', createdAt: '2026-01-01T00:00:00.000Z' }])
+    );
+    store.ensureProjectExpanded('project-1');
+
+    expect(store.sidebarRows).toEqual([{ kind: 'project', projectId: 'project-1' }]);
+  });
+
   it('returns visible task entries in rendered project-tree order', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([

@@ -3,8 +3,19 @@
 ## Feature Board
 
 The kanban view (fork-only) that shows a project's tasks as cards grouped in
-columns by **Workflow Stage**. Reached from the project titlebar dropdown.
-Not part of the settings/options UI.
+columns by **Workflow Stage**. Project-scoped: every entry point resolves an
+explicit project, never an implicit or last-used one. Reached from the
+project's Board row in the left sidebar (shown before its task rows while
+the project is expanded), the command palette's Open Feature Board command,
+or a task's Workflow Stage chip in its titlebar. Not part of the
+settings/options UI.
+
+Navigation into the Feature Board may carry an optional focused task. The
+board resolves it against the project's own displayable tasks (the same set
+its columns already show), scrolls that card into view, highlights it, and
+opens the Task Detail Panel for it. An id that doesn't resolve there
+(invalid, archived, or simply absent) is a no-op — the board still renders
+normally.
 
 ## Workflow Stage
 
@@ -31,7 +42,8 @@ pushes cards in; only the user or an agent moves a card back out.
 
 A display rule, not a stage: `shipped` cards whose PR merged more than a
 fixed window ago are hidden from the Feature Board. The task keeps its
-stage forever.
+stage forever. The Shipped column discloses this window so older cards
+never appear to vanish arbitrarily.
 
 ## Awaiting Input
 
@@ -58,7 +70,8 @@ Sourced from the [Issue Tracker Repository](#issue-tracker-repository) only.
 ## Link Suggestion
 
 An orphan Spec- or Map-shaped GitHub issue — no [Task Marker](#task-marker),
-no task linking it — surfaced above the Feature Board with three answers:
+no task linking it — surfaced in the board's Inbox (a compact, count-bearing
+summary above the Feature Board that expands on demand) with three answers:
 **attach** it to an existing task, **adopt** it into a task of its own (the
 issue came from elsewhere and no task covers it), or **dismiss** it. Adoption
 sets the issue in its suggested [Linked Issue Role](#linked-issue-role), never

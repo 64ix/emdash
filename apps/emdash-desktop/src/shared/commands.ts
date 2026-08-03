@@ -57,6 +57,14 @@ export const APP_COMMAND_DEFS = defineCommandDefs([
     iconKey: 'square-plus',
   },
   {
+    id: 'app.openFeatureBoard',
+    label: 'Open Feature Board',
+    description: "Open this project's Feature Board",
+    scope: 'app',
+    group: 'App',
+    iconKey: 'kanban',
+  },
+  {
     id: 'app.giveFeedback',
     label: 'Give Feedback',
     description: 'Send feedback to the emdash team',

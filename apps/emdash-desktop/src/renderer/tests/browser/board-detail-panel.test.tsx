@@ -23,6 +23,8 @@ import { page } from 'vitest/browser';
 import { modalStore } from '@renderer/lib/modal/modal-store';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssueRoles } from '@shared/core/linked-issue';
+import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type {
   CreateTaskError,
   CreateTaskSuccess,
@@ -45,6 +47,21 @@ type MockStore = {
     archivedAt?: string;
     isPinned?: boolean;
     linkedIssues?: LinkedIssueRoles;
+    // Ticket #49: threads a task's own provisioned-workspace presence
+    // through to the stage explanation (`hasWorkspace`), same as
+    // `board-main-panel.tsx`'s own `authorityForTask` already does for drag.
+    workspaceId?: string;
+    // Ticket #49: `TaskGitDiffStats` (the panel's working-tree-changes row)
+    // falls back to this cached snapshot for a task with no live
+    // `GitWorktreeStore` mounted — same shape `board-card-hierarchy.test.tsx`
+    // already exercises for the card.
+    workspaceGit?: { linesAdded: number; linesDeleted: number };
+    // Ticket #50: `board-filters.ts`'s `matchesSearchQuery` reads this
+    // unconditionally (unlike `authorityForTask`'s defensive `task.prs ??
+    // []`) — defaulted to `[]` by `makeStore`/`makeLiveStore` below so the
+    // focused-task navigation suite's search-filter interaction never trips
+    // it for a mock task that otherwise has no reason to carry any PRs.
+    prs?: PullRequest[];
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
@@ -86,10 +103,20 @@ const mocks = vi.hoisted(() => ({
       ) => Promise<Result<CreateTaskSuccess, CreateTaskError>>
     >(),
   rejectGhostCard: vi.fn(() => Promise.resolve()),
+  // Ticket #49: `board_inspector_opened` telemetry — stubbed directly
+  // (mirrors `board-dnd.test.tsx`'s `board_move_blocked` stub) rather than
+  // exercising the real RPC/session-id round trip these tests have no
+  // reason to cover.
+  captureTelemetry: vi.fn(),
+  // Ticket #50: the task titlebar's Workflow Stage chip carries this back to
+  // the board via `useParams('board')`. A mutable field (not a fixed
+  // literal) so individual tests can drive it, mirroring how
+  // `sidebar-board-row.test.tsx` makes its own mocked params configurable.
+  focusTaskId: undefined as string | undefined,
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
-  useParams: () => ({ params: { projectId: 'p1' } }),
+  useParams: () => ({ params: { projectId: 'p1', focusTaskId: mocks.focusTaskId } }),
   useNavigate: () => ({ navigate: mocks.navigate }),
 }));
 
@@ -114,10 +141,31 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
   registeredTaskData: (store: MockStore) => store.data,
+  // Ticket #47's card now renders `TaskGitDiffStats`, which imports
+  // `isRegistered` from this module — the mock still needs to shadow the
+  // real export so that import does not resolve to `undefined`.
+  isRegistered: () => true,
 }));
 
 vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
   AgentStatusIndicator: () => null,
+}));
+
+// `StackedAgentLogos` (ticket #47's card, provider/session context) reads
+// agent metadata through `@tanstack/react-query` and, via `PluginIcon`'s
+// theme lookup, transitively reaches the app-wide store graph
+// (`ThemeProvider` -> pty -> `appState` -> `ProjectManagerStore` -> ... ->
+// `open-file-in-file-editor.ts`) — none of it relevant to these tests, and
+// each hop needs its own real (unmocked) module. Mocked away wholesale, the
+// same way `AgentStatusIndicator` already is above.
+vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
+  StackedAgentLogos: () => null,
+}));
+
+// Ticket #49: `board_inspector_opened` — stub the whole client the same way
+// `board-dnd.test.tsx` stubs it for `board_move_blocked`.
+vi.mock('@renderer/utils/telemetryClient', () => ({
+  captureTelemetry: (...args: unknown[]) => mocks.captureTelemetry(...args),
 }));
 
 // BoardMainPanel pulls in BoardLinkSuggestions and GhostCards (real rpc calls
@@ -157,6 +205,7 @@ function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): Mock
       status: 'active',
       type: 'task',
       createdAt: '2026-01-01T00:00:00.000Z',
+      prs: [],
       ...overrides,
     },
     conversationStats: {},
@@ -173,6 +222,7 @@ function makeLiveStore(id: string, overrides: Partial<MockStore['data']> = {}) {
     status: 'active',
     type: 'task',
     createdAt: '2026-01-01T00:00:00.000Z',
+    prs: [] as PullRequest[],
     ...overrides,
   });
   return {
@@ -283,6 +333,7 @@ function setupDom() {
     mocks.getGhostCards.mockImplementation(() => Promise.resolve([]));
     mocks.adoptGhostCard.mockReset();
     mocks.rejectGhostCard.mockImplementation(() => Promise.resolve());
+    mocks.focusTaskId = undefined;
   });
 
   afterEach(() => {
@@ -292,6 +343,7 @@ function setupDom() {
     managerTasks.clear();
     branchByTaskId.clear();
     vi.clearAllMocks();
+    mocks.focusTaskId = undefined;
   });
 }
 
@@ -325,6 +377,22 @@ function closeButton(): HTMLElement {
   ) as HTMLElement;
 }
 
+/** The collapse/expand toggle button for a given (empty-only) column label
+ * (ticket #46, mirrors `board-dnd.test.tsx`'s `columnToggle`). */
+function columnToggle(label: string): HTMLButtonElement | undefined {
+  return Array.from(host.querySelectorAll('button')).find((button) =>
+    button.getAttribute('aria-label')?.endsWith(`${label} column`)
+  ) as HTMLButtonElement | undefined;
+}
+
+/** Card name spans (`line-clamp-2`, ticket #47), in DOM order, for a column —
+ * used to assert Board Rank/ordering is untouched by opening/closing the panel. */
+function cardNamesInColumn(label: string): string[] {
+  return Array.from(columnZone(label).querySelectorAll('span.line-clamp-2')).map(
+    (el) => el.textContent ?? ''
+  );
+}
+
 /** The open panel's full text content — used for simple presence/absence assertions. */
 function panelText(): string {
   return host.querySelector('h2')?.parentElement?.parentElement?.textContent ?? '';
@@ -349,6 +417,12 @@ function linkedIssueRoles(): string[] {
   return Array.from(host.querySelectorAll('[data-linked-issue-role]')).map(
     (el) => el.getAttribute('data-linked-issue-role') ?? ''
   );
+}
+
+/** The Spec-derived PR's own row within the merged "Delivery chain" section
+ * (ticket #49), or `null` when nothing references the Spec. */
+function deliveryChainPrRow(): Element | null {
+  return host.querySelector('[data-delivery-chain-item="pr"]');
 }
 
 /** A card's hover-revealed direct-navigation arrow (ticket #42). */
@@ -490,6 +564,23 @@ describe('Task Detail Panel — open, switch, close', () => {
     await settle();
     expect(panelHeading()).toBeNull();
   });
+
+  it('clicking the card\'s "Move" handle (ticket #52) does not select it — that handle owns keyboard drag pick-up only, never selection', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const moveHandle = host.querySelector(`button[aria-label="Move card-a"]`) as HTMLElement;
+    click(moveHandle);
+    await settle();
+
+    // A stationary click never reaches dnd-kit's pointer-drag activation
+    // constraint either, so this exercises the same click-bubbling contract
+    // a real "press and release without moving" mouse gesture would: the
+    // handle's own `onClick` stops propagation, so the card's `onClick` (the
+    // thing that opens the panel) never fires.
+    expect(panelHeading()).toBeNull();
+  });
 });
 
 describe('Task Detail Panel — card highlight', () => {
@@ -626,6 +717,40 @@ describe('Task Detail Panel — vitals (ticket #41)', () => {
   });
 });
 
+// Ticket #49: branch + working-tree changes, and agent/conversation state —
+// both reuse the same read-only primitives the card already renders
+// (`TaskGitDiffStats`, `StackedAgentLogos`) rather than a new derivation, and
+// neither ever provisions or mutates the task to display them.
+describe('Task Detail Panel — branch, working-tree changes and agent/conversation state (ticket #49)', () => {
+  setupDom();
+
+  it('shows working-tree diff stats from the cached workspace snapshot, without provisioning anything', async () => {
+    const a = makeStore('card-a', { workspaceGit: { linesAdded: 5, linesDeleted: 2 } });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).toContain('+5');
+    expect(panelText()).toContain('-2');
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+  });
+
+  it('shows no diff stats for a task with no cached or live working-tree data', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).not.toContain('+0');
+    expect(panelText()).not.toContain('-0');
+  });
+});
+
 describe('Task Detail Panel — typed links (ticket #41)', () => {
   setupDom();
 
@@ -657,7 +782,7 @@ describe('Task Detail Panel — typed links (ticket #41)', () => {
     expect(panelText()).toContain('Spec issue');
   });
 
-  it('renders no Linked issues section for a purely local task with no links', async () => {
+  it('renders no Delivery chain section for a purely local task with no links or PR', async () => {
     const a = makeStore('card-a');
     managerTasks.set(a.data.id, a);
     await mount();
@@ -665,15 +790,27 @@ describe('Task Detail Panel — typed links (ticket #41)', () => {
     click(cardEl('card-a'));
     await settle();
 
-    expect(panelSection('linked-issues')).toBeNull();
+    expect(panelSection('delivery-chain')).toBeNull();
   });
 });
 
 describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)', () => {
   setupDom();
 
-  it('renders no Pull request section when nothing references the Spec', async () => {
-    const a = makeStore('card-a');
+  // Ticket #49: Origin/Map/Spec and the Spec-derived PR merge into one
+  // "Delivery chain" section — a task with linked issues but no PR still
+  // shows the chain (its typed links), just with no PR row inside it.
+  it('shows no PR row in the delivery chain when nothing references the Spec', async () => {
+    const linkedIssues: LinkedIssueRoles = {
+      version: '1',
+      origin: {
+        provider: 'github',
+        url: 'https://github.com/acme/repo/issues/1',
+        title: 'Origin issue',
+        identifier: '#1',
+      },
+    };
+    const a = makeStore('card-a', { linkedIssues });
     managerTasks.set(a.data.id, a);
     await mount();
 
@@ -681,10 +818,11 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
     await settle();
 
-    expect(panelSection('pull-request')).toBeNull();
+    expect(panelSection('delivery-chain')).not.toBeNull();
+    expect(deliveryChainPrRow()).toBeNull();
   });
 
-  it('shows the Spec-derived PR, disables the stage selector, and names the holding fact', async () => {
+  it('shows the Spec-derived PR in the delivery chain, disables the stage selector, and names the holding fact', async () => {
     const pr: StageHoldingPr = {
       url: 'https://github.com/acme/repo/pull/9',
       title: 'Ship the feature',
@@ -704,7 +842,8 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
     await settle();
 
-    expect(panelSection('pull-request')).not.toBeNull();
+    expect(panelSection('delivery-chain')).not.toBeNull();
+    expect(deliveryChainPrRow()).not.toBeNull();
     expect(panelText()).toContain('Ship the feature');
     expect(stageSelect().disabled).toBe(true);
     expect(panelText()).toContain('#9');
@@ -764,7 +903,11 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     expect(panelText()).toContain('#42');
   });
 
-  it('does not lock the selector for a task sitting in Spec whose linked Spec issue is closed', async () => {
+  // Ticket #48: a closed Spec issue with no merged PR is not a "no authority"
+  // fact — it is exactly the contradiction the next issues-sync pass would
+  // sweep into Triage, so the panel locks the selector on that fact instead
+  // of falsely offering a manual choice the sync would overwrite.
+  it('locks the selector on the Triage contradiction for a task sitting in Spec whose linked Spec issue closed without a merged PR', async () => {
     const linkedIssues: LinkedIssueRoles = {
       version: '1',
       spec: {
@@ -783,11 +926,73 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
     await settle();
 
-    expect(stageSelect().disabled).toBe(false);
-    // The linked issue is still listed in the Linked Issues section (ticket
-    // #41's content) — only the stage-authority claim goes away.
+    expect(stageSelect().disabled).toBe(true);
     expect(panelText()).not.toContain('Held in Spec');
+    expect(panelText()).toContain('Triage');
+    expect(panelText()).toContain('#42');
+    // The linked issue is still listed in the Delivery chain section (ticket
+    // #41's content) regardless of which stage-authority claim it backs.
     expect(linkedIssueRoles()).toEqual(['spec']);
+  });
+});
+
+// Ticket #49: the stage explanation now always names *something* — a
+// governing GitHub fact (already covered above), the workspace fact behind a
+// runtime-derived Implementing, or an explicitly-labelled manual placement —
+// so "no explanation" never reads as "nothing to say about this".
+describe('Task Detail Panel — Workflow Stage explanation: manual and workspace labelling (ticket #49)', () => {
+  setupDom();
+
+  it('labels a manual placement as manual when no GitHub or workspace fact backs it', async () => {
+    const a = makeStore('card-a', { workflowStage: 'idea' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(stageSelect().disabled).toBe(false);
+    expect(panelText()).toContain('Manual placement');
+  });
+
+  it('names the provisioned workspace behind a runtime-derived Implementing', async () => {
+    const a = makeStore('card-a', { workflowStage: 'implementing', workspaceId: 'workspace-1' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(stageSelect().disabled).toBe(false);
+    expect(panelText()).toContain('Implementing');
+    expect(panelText()).toContain('workspace');
+  });
+
+  it('labels Implementing manual instead when there is no provisioned workspace yet', async () => {
+    const a = makeStore('card-a', { workflowStage: 'implementing' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(panelText()).toContain('Manual placement');
+  });
+
+  it('shows no stage explanation at all for an Unstaged task with no fact either', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    await settle();
+
+    expect(panelSection('workflow-stage')).not.toBeNull();
+    expect(panelText()).not.toContain('Manual placement');
   });
 });
 
@@ -1067,4 +1272,425 @@ describe('Task Detail Panel — management actions (ticket #42)', () => {
 
     expect(mocks.archiveTask).toHaveBeenCalledWith('card-a');
   });
+});
+
+// Ticket #49: keyboard and pointer selection must be indistinguishable —
+// both land on the exact same handler (`BoardMainPanel`'s `handleSelectTask`),
+// so a card's own `onKeyDown` (Enter/Space -> select, inherited from spec
+// #12/ticket #40) is exercised here directly rather than only through a
+// pointer click, the way every describe block above this one does it.
+describe('Task Detail Panel — selection: keyboard and pointer are identical (ticket #49)', () => {
+  setupDom();
+
+  it('a keyboard Enter on the card itself opens the panel exactly like a pointer click', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    (cardEl('card-a') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+    expect((cardEl('card-a') as HTMLElement).className).toContain('border-primary');
+  });
+
+  it('a keyboard Space on the card itself opens the panel too', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    (cardEl('card-a') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+  });
+
+  it('a keyboard Enter on a different card switches the panel, same as a pointer click would', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelHeading()).toBe('card-a');
+
+    (cardEl('card-b') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-b');
+  });
+});
+
+// Ticket #49's hard safety criterion: browsing the board never provisions,
+// archives, or otherwise mutates a task. Selecting a card is a read-only
+// view-state change (which task the inspector shows) — this is the mutation
+// seam itself: the exact calls a provision/archive/write would go through.
+describe('Task Detail Panel — selection never mutates a task (safety, ticket #49)', () => {
+  setupDom();
+
+  it('selecting a card via pointer calls no provision, archive, or board-position write', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+  });
+
+  it('selecting a card via keyboard calls no provision, archive, or board-position write either', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    (cardEl('card-a') as HTMLElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(panelHeading()).toBe('card-a');
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+  });
+
+  it('switching between cards and closing the panel still calls no provision, archive, or write', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(cardEl('card-b'));
+    await settle();
+    click(closeButton());
+    await settle();
+
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(b.updateBoardPosition).not.toHaveBeenCalled();
+  });
+});
+
+// Ticket #49: closing the inspector preserves scroll, column state and card
+// ordering — the panel is ephemeral, board-owned view state (CONTEXT.md
+// "Task Detail Panel") that must never reset anything else the board itself
+// owns just because it closed.
+describe('Task Detail Panel — closing preserves board state (ticket #49)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    // Wide enough that every column is visible and nothing scrolls off by
+    // itself, mirroring `board-dnd.test.tsx`'s wide-viewport drag suites.
+    await page.viewport(2200, 800);
+  });
+
+  it('preserves a collapsed empty column across open and close', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    // "card-a" has no Workflow Stage, so it lands in Unstaged — every
+    // pipeline column (e.g. Spec) starts empty and collapsible.
+    const toggle = columnToggle('Spec')!;
+    expect(toggle).toBeTruthy();
+    toggle.click();
+    await settle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelHeading()).toBe('card-a');
+
+    click(closeButton());
+    await settle();
+    expect(panelHeading()).toBeNull();
+
+    expect(columnToggle('Spec')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('preserves the board scroll position across open and close', async () => {
+    // Narrow enough that the board actually overflows horizontally (the wide
+    // 2200px viewport above fits every column with nothing to scroll) —
+    // mirrors `board-dnd.test.tsx`'s own narrow-viewport scroll suite.
+    await page.viewport(414, 896);
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const scroller = host.querySelector<HTMLElement>('.overflow-x-auto')!;
+    scroller.scrollLeft = 200;
+    await settle();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(closeButton());
+    await settle();
+
+    expect(scroller.scrollLeft).toBe(200);
+  });
+
+  it('preserves card ordering (Board Rank) across open and close, with no write triggered', async () => {
+    const a = makeStore('card-a', { workflowStage: 'idea', boardRank: 'b' });
+    const b = makeStore('card-b', { workflowStage: 'idea', boardRank: 'a' });
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    const orderBefore = cardNamesInColumn('Idea');
+    expect(orderBefore).toEqual(['card-b', 'card-a']); // 'a' sorts before 'b'
+
+    click(cardEl('card-a'));
+    await settle();
+    click(closeButton());
+    await settle();
+
+    expect(cardNamesInColumn('Idea')).toEqual(orderBefore);
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(b.updateBoardPosition).not.toHaveBeenCalled();
+  });
+});
+
+// Ticket #49: telemetry distinguishes the inspector opening, with no
+// sensitive task content (no task name, issue title, or branch) — mirrors
+// `board_opened`'s minimal `{ source }` payload.
+describe('Task Detail Panel — board_inspector_opened telemetry (ticket #49)', () => {
+  setupDom();
+
+  it('captures board_inspector_opened for a task, with no task content in the payload', async () => {
+    const a = makeStore('card-a', { name: 'Sensitive task name' });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('Sensitive task name'));
+    await settle();
+
+    expect(mocks.captureTelemetry).toHaveBeenCalledWith('board_inspector_opened', {
+      target_kind: 'task',
+      project_id: 'p1',
+    });
+    const call = mocks.captureTelemetry.mock.calls.find((c) => c[0] === 'board_inspector_opened');
+    expect(JSON.stringify(call)).not.toContain('Sensitive task name');
+  });
+
+  it('does not re-fire when re-clicking the already-open card (no-op re-select)', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(cardEl('card-a'));
+    await settle();
+
+    const calls = mocks.captureTelemetry.mock.calls.filter(
+      (c) => c[0] === 'board_inspector_opened'
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it('fires again when switching to a different card', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    click(cardEl('card-b'));
+    await settle();
+
+    const calls = mocks.captureTelemetry.mock.calls.filter(
+      (c) => c[0] === 'board_inspector_opened'
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  it('captures board_inspector_opened with target_kind "ghost" for a Ghost Card', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+
+    expect(mocks.captureTelemetry).toHaveBeenCalledWith('board_inspector_opened', {
+      target_kind: 'ghost',
+      project_id: 'p1',
+    });
+  });
+});
+
+// Ticket #50: focused-task navigation. The task titlebar's Workflow Stage
+// chip (`task-titlebar.test.tsx`) carries an optional `focusTaskId` back to
+// this board via `useParams('board')`. Resolved against exactly the
+// active-task set the board itself already renders (`storeById`, which
+// already excludes archived and Shipped-Faded tasks), reusing
+// `handleSelectTask` (ticket #49) — the one existing selection path — so a
+// focused arrival opens the inspector and highlights the card exactly like a
+// manual click would, and scrolls it into view. An id that never resolves
+// there (invalid, archived, or simply absent) is a silent no-op: the board
+// renders normally, nothing is selected, and nothing throws.
+describe('Board — focused-task navigation (ticket #50)', () => {
+  setupDom();
+
+  /** Whether a card with this name is currently rendered — safe for the
+   * "does not exist at all" cases, unlike `cardEl`, which throws on a miss. */
+  function cardExists(name: string): boolean {
+    return Array.from(host.querySelectorAll('span')).some((s) => s.textContent === name);
+  }
+
+  it('opens the inspector and highlights the focused card on arrival', async () => {
+    const a = makeStore('card-a');
+    const b = makeStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b);
+    mocks.focusTaskId = 'card-a';
+    await mount();
+
+    expect(panelHeading()).toBe('card-a');
+    expect((cardEl('card-a') as HTMLElement).className).toContain('border-primary');
+    expect((cardEl('card-b') as HTMLElement).className).not.toContain('border-primary');
+  });
+
+  it('scrolls the focused card into view on arrival', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'card-a';
+    const scrollIntoViewSpy = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => {});
+
+    await mount();
+
+    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    scrollIntoViewSpy.mockRestore();
+  });
+
+  it('fails safely for a focusTaskId that does not resolve to any task (invalid)', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'does-not-exist';
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    expect(cardExists('card-a')).toBe(true); // the board still renders normally
+  });
+
+  it('fails safely for an archived task id', async () => {
+    const a = makeStore('card-a', { archivedAt: '2026-01-01T00:00:00.000Z' });
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'card-a';
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+  });
+
+  // A Shipped-Faded task (CONTEXT.md "Shipped Fade") is neither invalid nor
+  // archived — it is a real, valid task whose PR merged long enough ago that
+  // `isBoardDisplayable` (the same predicate `storeById` is built from) hides
+  // it from the board's own columns. Resolution must fail exactly as safely
+  // here as for an archived id: no throw, no stale/impossible selection, the
+  // rest of the board renders normally.
+  it('fails safely for a Shipped-Faded task id (real, non-archived, but hidden by the fade window)', async () => {
+    const oldMergedAt = new Date(Date.now() - (SHIPPED_FADE_WINDOW_MS + 1000)).toISOString();
+    const a = makeStore('card-a', {
+      workflowStage: 'shipped',
+      prs: [
+        {
+          url: 'https://github.com/acme/repo/pull/1',
+          title: 'Ship it',
+          identifier: '#1',
+          status: 'merged',
+          isDraft: false,
+          mergedAt: oldMergedAt,
+        } as PullRequest,
+      ],
+    });
+    managerTasks.set(a.data.id, a);
+    mocks.focusTaskId = 'card-a';
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    expect(cardExists('card-a')).toBe(false); // faded out of the board, same as before navigation
+  });
+
+  it('renders normally with nothing selected when no focusTaskId is present', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+
+    await mount();
+
+    expect(panelHeading()).toBeNull();
+    expect(cardExists('card-a')).toBe(true);
+  });
+
+  it('does not re-select or re-scroll on a later, unrelated re-render carrying the same focusTaskId', async () => {
+    const a = makeStore('card-a');
+    const b = makeLiveStore('card-b');
+    managerTasks.set(a.data.id, a);
+    managerTasks.set(b.data.id, b as unknown as MockStore);
+    mocks.focusTaskId = 'card-a';
+    await mount();
+    expect(panelHeading()).toBe('card-a');
+
+    // A manual click elsewhere, then some unrelated re-render, must not fight
+    // the user's own new selection just because `focusTaskId` is still the
+    // same string it always was. `workflowStage` is read directly by
+    // `BoardMainPanel`'s own render loop (bucketing cards into columns), so
+    // mutating it — unlike a field only a child component reads — genuinely
+    // forces `BoardMainPanel` itself to re-render, the same way the
+    // "disappearance" suite above forces one via `archivedAt`.
+    click(cardEl('card-b'));
+    await settle();
+    expect(panelHeading()).toBe('card-b');
+
+    runInAction(() => {
+      b.data.workflowStage = 'idea';
+    });
+    await settle();
+
+    expect(panelHeading()).toBe('card-b');
+  });
+
+  // The board's own filters (search, Needs Attention, compact filters) are
+  // local `useState`, reset to empty on every mount — and every existing
+  // navigation path that sets `focusTaskId` (the titlebar's Workflow Stage
+  // chip) lands on `board` through a genuine fresh mount (`Workspace` swaps
+  // `MainPanel` components on view change), so "a focused task the board's
+  // own filters currently hide" cannot actually arise today: there is no
+  // way to reach this component with both a `focusTaskId` and a non-default
+  // `filters` value already in place. The `setFilters(EMPTY_BOARD_FILTERS)`
+  // safety net in `board-main-panel.tsx` exists for defense-in-depth against
+  // a future navigation change that stops remounting the board, and is
+  // verified by code review (its condition is exactly the same
+  // `taskPassesBoardFilters` predicate `board-filters.test.ts` already
+  // covers exhaustively) rather than by a test here: reproducing "already
+  // mounted with active filters" would require the mocked `useParams` to be
+  // genuinely reactive the way the real MobX-backed one is (this suite's
+  // `BoardMainPanel` is `observer`-wrapped, which bails out of a bare
+  // `root.render()` repeat when its props -- there are none -- haven't
+  // changed), which is disproportionate machinery for a path that cannot
+  // occur through any registered navigation entry point today.
 });

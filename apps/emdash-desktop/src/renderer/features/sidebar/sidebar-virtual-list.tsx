@@ -27,8 +27,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { type SidebarRow } from '@renderer/features/sidebar/sidebar-store';
 import { getTaskStore } from '@renderer/features/tasks/stores/task-selectors';
+import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import { useParams, useWorkspaceSlots } from '@renderer/lib/layout/navigation-provider';
 import { sidebarStore } from '@renderer/lib/stores/app-state';
+import { SidebarBoardItem } from './board-item';
 import { SidebarProjectItem } from './project-item';
 import { SidebarTaskItem } from './task-item';
 
@@ -39,6 +41,7 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
   const { currentView } = useWorkspaceSlots();
   const { params: taskParams } = useParams('task');
   const { params: projectParams } = useParams('project');
+  const { params: boardParams } = useParams('board');
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const initialPointerYRef = useRef<number | null>(null);
@@ -52,7 +55,9 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
     currentView === 'task' && taskParams.projectId
       ? sidebarStore.expandedProjectIds.has(taskParams.projectId)
       : null;
-  const allDndIds = useMemo(() => rows.map(rowToDndId), [rows]);
+  // Board rows (ticket #43) are a fixed anchor, never sortable — dnd-kit's
+  // sortable id list only ever contains project and task rows.
+  const allDndIds = useMemo(() => rows.filter(isSortableRow).map(rowToDndId), [rows]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -73,6 +78,15 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
     sidebarStore.ensureProjectExpanded(targetProjectId);
   }, [currentView, taskParams.projectId, taskParams.taskId]);
 
+  // Same expansion guarantee for the board (ticket #43 acceptance criterion:
+  // opening a board keeps its parent project expanded, not just active).
+  useEffect(() => {
+    if (currentView !== 'board') return;
+    const targetProjectId = boardParams.projectId;
+    if (!targetProjectId) return;
+    sidebarStore.ensureProjectExpanded(targetProjectId);
+  }, [currentView, boardParams.projectId]);
+
   // Scroll the active project/task into view only when the navigation target itself
   // changes, plus the active task's project expansion state. Re-running on every
   // `rows` change would yank the user back to the active row whenever the
@@ -81,15 +95,15 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   useEffect(() => {
-    let targetProjectId: string | null = null;
-    let targetTaskId: string | null = null;
-
-    if (currentView === 'task') {
-      targetProjectId = taskParams.projectId;
-      targetTaskId = taskParams.taskId;
-    } else if (currentView === 'project') {
-      targetProjectId = projectParams.projectId;
-    }
+    // `activeProjectIdForView` also resolves `board` (ticket #43) — opening a
+    // project's board scrolls that project's row into view exactly like
+    // opening its task list does.
+    const targetProjectId = activeProjectIdForView(currentView, {
+      task: taskParams.projectId,
+      project: projectParams.projectId,
+      board: boardParams.projectId,
+    });
+    const targetTaskId = currentView === 'task' ? (taskParams.taskId ?? null) : null;
 
     if (!targetProjectId) return;
 
@@ -117,6 +131,7 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
     taskParams.projectId,
     taskParams.taskId,
     projectParams.projectId,
+    boardParams.projectId,
     activeTaskProjectExpanded,
     virtualizer,
   ]);
@@ -157,7 +172,9 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
     const isAbove = isCursorAbove(pointerY, active.rect.current.translated, over.rect);
 
     if (aParsed.kind === 'project') {
-      const overRowIdx = rows.findIndex((r) => rowToDndId(r) === String(over.id));
+      const overRowIdx = rows.findIndex(
+        (r) => isSortableRow(r) && rowToDndId(r) === String(over.id)
+      );
       if (overRowIdx === -1) return;
       const insertionRowIdx = isAbove ? overRowIdx : overRowIdx + 1;
       const ids = sidebarStore.orderedProjects
@@ -207,7 +224,6 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
             {virtualizer.getVirtualItems().map((vItem) => {
               const row = rows[vItem.index];
               if (!row) return null;
-              const dndId = rowToDndId(row);
               const vStyle: React.CSSProperties = {
                 position: 'absolute',
                 top: vItem.start,
@@ -215,6 +231,16 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
                 width: '100%',
                 height: `${vItem.size}px`,
               };
+              if (row.kind === 'board') {
+                // Fixed anchor, not part of the sortable set (see `allDndIds`)
+                // — rendered as a plain row rather than a `SortableRow`.
+                return (
+                  <div key={`board:${row.projectId}`} style={vStyle}>
+                    <SidebarBoardItem projectId={row.projectId} />
+                  </div>
+                );
+              }
+              const dndId = rowToDndId(row);
               if (row.kind === 'project') {
                 return (
                   <SortableRow key={row.projectId} dndId={dndId} style={vStyle}>
@@ -246,7 +272,12 @@ type SidebarDndId =
   | { kind: 'project'; projectId: string }
   | { kind: 'task'; projectId: string; taskId: string };
 
-function rowToDndId(row: SidebarRow): string {
+/** Board rows (ticket #43) never enter dnd-kit's sortable id list. */
+function isSortableRow(row: SidebarRow): row is Exclude<SidebarRow, { kind: 'board' }> {
+  return row.kind !== 'board';
+}
+
+function rowToDndId(row: Exclude<SidebarRow, { kind: 'board' }>): string {
   if (row.kind === 'project') return toProjectDndId(row.projectId);
   return toTaskDndId(row.projectId, row.taskId);
 }

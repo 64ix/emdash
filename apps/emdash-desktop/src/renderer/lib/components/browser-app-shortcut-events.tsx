@@ -3,6 +3,7 @@ import type { ViewId } from '@renderer/app/view-registry';
 import { getRegisteredTaskData, getTaskView } from '@renderer/features/tasks/stores/task-selectors';
 import { commandRegistry } from '@renderer/lib/commands/registry';
 import { events } from '@renderer/lib/ipc';
+import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import {
   type WorkspaceLayoutContextValue,
   useWorkspaceLayoutContext,
@@ -26,13 +27,15 @@ export function BrowserAppShortcutEvents() {
   const { currentView, lastNonSettingsView } = useWorkspaceSlots();
   const { params: taskParams } = useParams('task');
   const { params: projectParams } = useParams('project');
+  const { params: boardParams } = useParams('board');
 
-  const currentProjectId =
-    currentView === 'task'
-      ? taskParams.projectId
-      : currentView === 'project'
-        ? projectParams.projectId
-        : undefined;
+  // `board` (ticket #43) resolves here too, so shortcuts fired from the
+  // Feature Board stay scoped to that project.
+  const currentProjectId = activeProjectIdForView(currentView, {
+    task: taskParams.projectId,
+    project: projectParams.projectId,
+    board: boardParams.projectId,
+  });
   const currentTaskId = currentView === 'task' ? taskParams.taskId : undefined;
 
   useEffect(() => {

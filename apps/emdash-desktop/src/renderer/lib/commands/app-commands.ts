@@ -4,6 +4,7 @@ import { toggleSettingsView } from '@renderer/lib/layout/settings-toggle';
 import { showModal } from '@renderer/lib/modal/modal-provider';
 import { appState } from '@renderer/lib/stores/app-state';
 import { toggleAppTheme } from '@renderer/lib/theme/theme-toggle';
+import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { APP_COMMAND_DEFS, type AppCommandId, type CommandDef } from '@shared/commands';
 import { commandRegistry } from './registry';
 import type { AppCommand, CommandProvider } from './types';
@@ -16,7 +17,8 @@ function isLibraryView(viewId: string): boolean {
   return viewId === 'library' || viewId === 'skills' || viewId === 'mcp';
 }
 
-function createAppCommandProvider(): CommandProvider {
+/** Exported for the project-aware Feature Board command's unit tests (ticket #43). */
+export function createAppCommandProvider(): CommandProvider {
   return {
     scopeId: 'app',
 
@@ -118,6 +120,23 @@ function createAppCommandProvider(): CommandProvider {
           group: newTaskDef.group,
           execute() {
             showModal('taskModal', { projectId });
+          },
+        });
+
+        // Project-aware board destination (ticket #43): only ever offered
+        // while a project is contextually resolved (project/task/board view
+        // params all carry `projectId`) — never falls back to an implicit or
+        // last-used project.
+        const openFeatureBoardDef = appDef('app.openFeatureBoard');
+        commands.push({
+          id: openFeatureBoardDef.id,
+          label: openFeatureBoardDef.label,
+          description: openFeatureBoardDef.description,
+          shortcutKey: openFeatureBoardDef.shortcutKey,
+          group: openFeatureBoardDef.group,
+          execute() {
+            captureTelemetry('board_opened', { source: 'command_palette', project_id: projectId });
+            appState.navigation.navigate('board', { projectId });
           },
         });
       }

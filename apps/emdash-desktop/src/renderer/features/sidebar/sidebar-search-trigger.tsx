@@ -1,6 +1,7 @@
 import { Search } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { getRegisteredTaskData } from '@renderer/features/tasks/stores/task-selectors';
+import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import { useParams, useWorkspaceSlots } from '@renderer/lib/layout/navigation-provider';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { BoundShortcut } from '@renderer/lib/ui/shortcut';
@@ -11,13 +12,15 @@ export const SidebarSearchTrigger = observer(function SidebarSearchTrigger() {
   const { currentView } = useWorkspaceSlots();
   const { params: taskParams } = useParams('task');
   const { params: projectParams } = useParams('project');
+  const { params: boardParams } = useParams('board');
 
-  const currentProjectId =
-    currentView === 'task'
-      ? taskParams.projectId
-      : currentView === 'project'
-        ? projectParams.projectId
-        : undefined;
+  // `board` (ticket #43) resolves here too, so opening search from the
+  // Feature Board keeps it scoped to that project.
+  const currentProjectId = activeProjectIdForView(currentView, {
+    task: taskParams.projectId,
+    project: projectParams.projectId,
+    board: boardParams.projectId,
+  });
   const currentTaskId = currentView === 'task' ? taskParams.taskId : undefined;
 
   const currentWorkspaceId =

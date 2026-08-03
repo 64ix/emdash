@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   eventOn: vi.fn(),
   sshConnect: vi.fn(),
   sshStateFor: vi.fn(),
+  navRevalidate: vi.fn(),
+  viewStateCacheGet: vi.fn(async (): Promise<unknown> => undefined),
 }));
 
 vi.mock('@renderer/lib/ipc', () => ({
@@ -39,6 +41,21 @@ vi.mock('@renderer/lib/ipc', () => ({
       patchProjectSettings: mocks.patchProjectSettings,
       updateProjectSettings: mocks.updateProjectSettings,
     },
+    tasks: {
+      getTasks: vi.fn(async () => []),
+    },
+    conversations: {
+      getConversationsForProject: vi.fn(async () => []),
+    },
+    gitRepository: {
+      getRepoSnapshot: vi.fn(async () => ({ success: true, data: { refs: {}, remotes: {} } })),
+      resolveProviderRepository: vi.fn(async () => ({ success: true, data: null })),
+      getDefaultBranch: vi.fn(async () => ({ success: true, data: null })),
+    },
+    pullRequests: {
+      cancelSync: vi.fn(),
+      syncPullRequests: vi.fn(),
+    },
   },
 }));
 
@@ -46,7 +63,7 @@ vi.mock('@renderer/lib/stores/app-state', () => ({
   appState: {
     navigation: {
       currentViewId: 'home',
-      revalidate: vi.fn(),
+      revalidate: mocks.navRevalidate,
       viewParamsStore: {},
     },
     sshConnections: {
@@ -58,7 +75,8 @@ vi.mock('@renderer/lib/stores/app-state', () => ({
 
 vi.mock('@renderer/lib/stores/view-state-cache', () => ({
   viewStateCache: {
-    get: vi.fn(async () => undefined),
+    get: mocks.viewStateCacheGet,
+    set: vi.fn(),
   },
 }));
 
@@ -141,6 +159,7 @@ describe('ProjectManagerStore project creation', () => {
     });
     mocks.sshConnect.mockResolvedValue(undefined);
     mocks.sshStateFor.mockReturnValue('disconnected');
+    mocks.viewStateCacheGet.mockResolvedValue(undefined);
   });
 
   it('returns an existing project without starting creation', async () => {
@@ -385,6 +404,34 @@ describe('ProjectManagerStore project creation', () => {
 
     expect(mocks.sshConnect).not.toHaveBeenCalled();
     expect(mocks.openProject).toHaveBeenCalledWith(project.id);
+  });
+
+  it('revalidates navigation once a mounted project has restored its saved work-mode snapshot (ticket #44)', async () => {
+    // Reproduces the disclosed race: `projectView.canActivate`'s board-redirect
+    // check reads `getProjectViewStore(projectId)`, which is `undefined` until
+    // this project is mounted. If nothing revalidates the current view's guard
+    // once mounting finishes and the saved ProjectViewSnapshot (activeView:
+    // 'board') is restored, a user who reopens this still-unmounted project
+    // (e.g. an SSH project regaining connection while its `project` view is
+    // already on screen) would stay stuck on List instead of Board.
+    mocks.openProject.mockResolvedValueOnce({
+      success: true,
+      data: { repositoryWorkspaceId: null },
+    });
+    mocks.viewStateCacheGet.mockResolvedValueOnce({
+      activeView: 'board',
+      taskViewTab: 'active',
+    });
+
+    const store = new ProjectManagerStore();
+    const project = localProject();
+    store.projects.set(project.id, createUnmountedProject(project, 'idle'));
+
+    await store.mountProject(project.id);
+
+    const mounted = store.projects.get(project.id)?.mountedProject;
+    expect(mounted?.view.activeView).toBe('board');
+    expect(mocks.navRevalidate).toHaveBeenCalled();
   });
 
   it('does not write GitHub account settings when creation did not specify one', async () => {
