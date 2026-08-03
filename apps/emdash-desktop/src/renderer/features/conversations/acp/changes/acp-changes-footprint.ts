@@ -32,6 +32,24 @@ import { relativeToWorkspace } from '@renderer/features/tasks/stores/workspace-p
  *    `seq` order (regardless of the order the caller passes them in, so a
  *    prepended older-history page never reorders the outcome), and the
  *    active turn — always the most recent — is processed last.
+ *  - When Git reports a `'renamed'` change with a known `oldPath` (see
+ *    `GitChange.oldPath`), and the transcript already tracked that old path
+ *    (an edit and/or a read from before the rename, which happened outside
+ *    any tracked tool call), the old path must not survive as its own
+ *    entry — it no longer exists on disk — and its provenance (edit wins
+ *    over read, same as everywhere else) is carried forward onto the new
+ *    path instead. A new path that already earned its own provenance from
+ *    direct tracked activity keeps it; forwarding only ever fills a `null`
+ *    source. Reconciliation walks each hop's `oldPath` back to the nearest
+ *    tracked ancestor, so a multi-hop chain would resolve too — but that is
+ *    defensive depth, not a case real Git produces: `git status` never marks
+ *    a purely unstaged rename as `renamed`, and successive staged renames
+ *    collapse into a single A->C entry (verified empirically against
+ *    `git status --porcelain=v2`, see `git-worktree.test.ts`). Treat the
+ *    chain walk as a guard against a future producer, not as the motivating
+ *    case. An absent `oldPath` (older producers, or an SSH host status) or
+ *    an old path equal to the new path disables reconciliation entirely,
+ *    leaving today's behavior unchanged.
  */
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -170,18 +188,63 @@ export function buildChangesFootprint({
 
   const gitByPath = new Map<
     string,
-    { status: GitChangeStatus; additions: number; deletions: number }
+    { status: GitChangeStatus; additions: number; deletions: number; oldPath?: string }
   >();
   for (const change of gitChanges) {
     const path = normalizePath(change.path, workspacePath);
+    let oldPath: string | undefined;
+    if (change.status === 'renamed' && change.oldPath) {
+      const normalizedOldPath = normalizePath(change.oldPath, workspacePath);
+      if (normalizedOldPath !== path) oldPath = normalizedOldPath;
+    }
     gitByPath.set(path, {
       status: change.status,
       additions: change.additions,
       deletions: change.deletions,
+      oldPath,
     });
   }
 
-  const editedPaths = new Set<string>([...editEvents.keys(), ...gitByPath.keys()]);
+  // Old paths that Git reports as renamed away within this snapshot. They
+  // must never survive as their own entry — the file no longer exists there
+  // — regardless of whether the transcript still has an edit/read event
+  // keyed on that path.
+  const renamedAwayPaths = new Set<string>();
+  for (const entry of gitByPath.values()) {
+    if (entry.oldPath) renamedAwayPaths.add(entry.oldPath);
+  }
+
+  /**
+   * Walks a renamed path's `oldPath` chain backward looking for the nearest
+   * ancestor the transcript tracked, and returns that ancestor's provenance
+   * (edit wins over read, mirroring the direct-path precedence below).
+   * Returns `null` when no ancestor was ever tracked, or when this path has
+   * no `oldPath` at all.
+   *
+   * In practice Git only ever hands us a single hop (A->B): successive staged
+   * renames collapse, and unstaged renames are never reported as `renamed`.
+   * The loop and its `seen` guard exist so a future producer emitting a real
+   * chain — or a cycle — degrades safely rather than surprising us.
+   */
+  function forwardedRenameSource(path: string): ChangesFootprintProvenance | null {
+    const seen = new Set<string>([path]);
+    let current = gitByPath.get(path)?.oldPath;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const editEntry = editEvents.get(current);
+      if (editEntry) return { turnId: editEntry.turnId, itemId: editEntry.itemId };
+      const readEntry = readEvents.get(current);
+      if (readEntry) return readEntry;
+      current = gitByPath.get(current)?.oldPath;
+    }
+    return null;
+  }
+
+  const editedPaths = new Set<string>();
+  for (const path of editEvents.keys()) {
+    if (!renamedAwayPaths.has(path)) editedPaths.add(path);
+  }
+  for (const path of gitByPath.keys()) editedPaths.add(path);
 
   const edited: EditedChangesFootprintEntry[] = [...editedPaths].map((path) => {
     const gitEntry = gitByPath.get(path);
@@ -195,7 +258,7 @@ export function buildChangesFootprint({
       gitEntry?.status ?? (editEntry ? statusForEditKind(editEntry.changeKind) : 'modified');
     const source = editEntry
       ? { turnId: editEntry.turnId, itemId: editEntry.itemId }
-      : (readEntry ?? null);
+      : (readEntry ?? forwardedRenameSource(path));
     return {
       kind: 'edited' as const,
       path,
@@ -207,7 +270,7 @@ export function buildChangesFootprint({
   });
 
   const read: ReadChangesFootprintEntry[] = [...readEvents.entries()]
-    .filter(([path]) => !editedPaths.has(path))
+    .filter(([path]) => !editedPaths.has(path) && !renamedAwayPaths.has(path))
     .map(([path, source]) => ({ kind: 'read' as const, path, source }));
 
   edited.sort((a, b) => a.path.localeCompare(b.path));
