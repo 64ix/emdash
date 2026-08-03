@@ -18,19 +18,47 @@ export type StageDerivationInput = {
  * *advance* a task rather than regress it, derived from the canonical
  * `workflowStages` enum order so the two can't drift. `triage` trails the
  * enum as the out-of-flow stage and is handled by its own guards below,
- * never through this ranking.
+ * never through this ranking. Exported for `stage-authority.ts` (ticket #48),
+ * which needs the exact same rank to decide which cross-stage board
+ * destinations `deriveWorkflowStageFromIssues`'s own `canAdvanceTo` rule would
+ * — and would not — silently overwrite.
  */
-function stageRank(stage: WorkflowStage): number {
+export function stageRank(stage: WorkflowStage): number {
   return workflowStages.options.indexOf(stage);
 }
 
-function canAdvanceTo(
+/**
+ * Whether an issue-derived fact proving `desired` would *advance or match*
+ * `current` rather than regress it — the direction guard behind both
+ * `deriveWorkflowStageFromIssues`'s open-Map/open-Spec branches. Exported for
+ * `stage-authority.ts` (ticket #48): the same predicate that decides whether
+ * the periodic issues sync would (re)assert `desired` also decides whether an
+ * open Map/Spec issue currently governs a card sitting at `current`.
+ */
+export function canAdvanceTo(
   current: WorkflowStage | null | undefined,
   desired: 'exploring' | 'spec'
 ): boolean {
   if (!current) return true;
   if (current === 'triage') return false;
   return stageRank(current) <= stageRank(desired);
+}
+
+/**
+ * True when a closed Spec issue with no matching merged PR is the fact that
+ * justifies Triage — the "Spec closed mid-flight" contradiction (ADR 0003).
+ * Extracted so a caller that needs to *explain* a Triage-bound placement
+ * (`stage-authority.ts`, ticket #48) can ask this question directly:
+ * `deriveWorkflowStageFromIssues` deliberately refuses to derive anything
+ * once `currentStage` is already `triage` (see its own docstring) — that
+ * guard protects the periodic sync from re-deriving a sink stage, it is not a
+ * statement that the underlying fact stops existing.
+ */
+export function isClosedSpecTriageContradiction(
+  specIssue: IssueStateFact | undefined,
+  hasMergedPullRequest: boolean
+): boolean {
+  return specIssue?.state === 'closed' && !hasMergedPullRequest;
 }
 
 /**
@@ -63,7 +91,7 @@ export function deriveWorkflowStageFromIssues(input: StageDerivationInput): Work
     // whose PR is open or merged back into `triage` — e.g. the common
     // "Closes #N" auto-close racing ahead of the local PR-row sync.
     if (currentStage === 'review' || currentStage === 'shipped') return null;
-    return hasMergedPullRequest ? null : 'triage';
+    return isClosedSpecTriageContradiction(specIssue, hasMergedPullRequest) ? 'triage' : null;
   }
 
   if (mapIssue?.state === 'open') {

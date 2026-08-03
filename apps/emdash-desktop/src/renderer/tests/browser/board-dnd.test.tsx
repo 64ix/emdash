@@ -22,6 +22,8 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import type { LinkedIssueRoles } from '@shared/core/linked-issue';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 
 // ── Store mocks ───────────────────────────────────────────────────────────────
 
@@ -34,12 +36,17 @@ type MockStore = {
     workflowStage?: string;
     boardRank?: string;
     archivedAt?: string;
+    // Stage authority (ticket #48): the facts `authorityForTask` reads.
+    linkedIssues?: LinkedIssueRoles;
+    prs?: PullRequest[];
+    workspaceId?: string;
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
 };
 
 const managerTasks = new Map<string, MockStore>();
+const captureTelemetryMock = vi.fn();
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
   useParams: () => ({ params: { projectId: 'p1' } }),
@@ -86,6 +93,13 @@ vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
   StackedAgentLogos: () => null,
 }));
 
+// Stage authority (ticket #48): `board_move_blocked` is captured through this
+// module — stub it directly rather than the real RPC/session-id round trip
+// `captureTelemetry` performs, which this suite has no reason to exercise.
+vi.mock('@renderer/utils/telemetryClient', () => ({
+  captureTelemetry: (...args: unknown[]) => captureTelemetryMock(...args),
+}));
+
 // BoardMainPanel pulls in BoardLinkSuggestions and GhostCards, which call the
 // real `rpc`/`events` singletons on mount (link suggestions, ghost cards,
 // board/issue sync). This suite only exercises drag-and-drop geometry, so
@@ -115,6 +129,20 @@ function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): Mock
     data: { id, name: id, status: 'active', type: 'task', ...overrides },
     conversationStats: {},
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+/** An open GitHub Spec issue — governs Spec (ticket #48). */
+function openSpecLink(): LinkedIssueRoles {
+  return {
+    version: '1',
+    spec: {
+      provider: 'github',
+      url: 'https://github.com/acme/repo/issues/42',
+      title: 'Spec issue',
+      identifier: '#42',
+      status: 'open',
+    },
   };
 }
 
@@ -235,11 +263,15 @@ async function mount() {
   await settle();
 }
 
+/** The column's own outer container — carries `aria-disabled`/`title` (ticket #48). */
+function columnContainer(label: string): Element {
+  const header = Array.from(host.querySelectorAll('span')).find((s) => s.textContent === label)!;
+  return header.parentElement!.parentElement!;
+}
+
 /** The column list container (droppable zone) for a given column label. */
 function columnZone(label: string): Element {
-  const header = Array.from(host.querySelectorAll('span')).find((s) => s.textContent === label)!;
-  const column = header.parentElement!.parentElement!;
-  return column.lastElementChild!;
+  return columnContainer(label).lastElementChild!;
 }
 
 /** The whole column (header + droppable zone) for a given column label — used
@@ -784,6 +816,198 @@ describe('board columns — collapsed empty columns (pointer)', () => {
 
     document.dispatchEvent(pointer('pointerup', specTarget.x, specTarget.y));
     await settle();
+  });
+});
+
+describe('board drag-and-drop — GitHub-authoritative cards (ticket #48)', () => {
+  setupDom();
+
+  beforeEach(async () => {
+    await page.viewport(2200, 800);
+  });
+
+  it('keeps a GitHub-authoritative card reorderable within its own column', async () => {
+    const top = makeStore('card-top', {
+      workflowStage: 'spec',
+      boardRank: 'a',
+      linkedIssues: openSpecLink(),
+    });
+    const bottom = makeStore('card-bottom', {
+      workflowStage: 'spec',
+      boardRank: 'm',
+      linkedIssues: openSpecLink(),
+    });
+    managerTasks.set(top.data.id, top);
+    managerTasks.set(bottom.data.id, bottom);
+    await mount();
+
+    const topCenter = center(cardEl('card-top'));
+    await drag(cardEl('card-bottom'), topCenter.x, topCenter.y - 10);
+
+    expect(bottom.updateBoardPosition).toHaveBeenCalledTimes(1);
+    const [stage, rank] = bottom.updateBoardPosition.mock.calls[0]!;
+    expect(stage).toBe('spec');
+    expect(rank < 'a').toBe(true); // still lands above card-top
+  });
+
+  it('disables a cross-stage destination the next sync pass would overwrite (Idea)', async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues: openSpecLink() });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const target = center(columnZone('Idea'));
+    await drag(cardEl('card-a'), target.x, target.y);
+
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(captureTelemetryMock).toHaveBeenCalledWith(
+      'board_move_blocked',
+      expect.objectContaining({
+        from_stage: 'spec',
+        attempted_stage: 'idea',
+        governing_fact: 'open-spec',
+      })
+    );
+  });
+
+  it('allows a cross-stage destination the governing fact would not contest (Implementing)', async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues: openSpecLink() });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const target = center(columnZone('Implementing'));
+    await drag(cardEl('card-a'), target.x, target.y);
+
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('implementing', expect.any(String));
+  });
+
+  it('allows Triage as an escape valve even for a GitHub-authoritative card', async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues: openSpecLink() });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const target = center(columnZone('Triage'));
+    await drag(cardEl('card-a'), target.x, target.y);
+
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('triage', expect.any(String));
+  });
+
+  it('disables Review for an open-PR-governed card, with no Triage-style escape needed to see the block', async () => {
+    const openPr: PullRequest = {
+      url: 'https://github.com/acme/repo/pull/77',
+      provider: 'github',
+      repositoryUrl: 'https://github.com/acme/repo',
+      baseRefName: 'main',
+      baseRefOid: 'abc',
+      headRepositoryUrl: 'https://github.com/acme/repo',
+      headRefName: 'task/branch',
+      headRefOid: 'def',
+      identifier: '#77',
+      title: 'Implement the spec',
+      // References the Spec issue (#42, from `openSpecLink()`) by number —
+      // `getTaskGitWorktreeStore` is mocked to return no branch name in this
+      // suite, so the description reference is the only match path available.
+      description: 'Closes #42',
+      status: 'open',
+      isDraft: false,
+      additions: null,
+      deletions: null,
+      changedFiles: null,
+      commitCount: null,
+      mergeableStatus: null,
+      mergeStateStatus: null,
+      reviewDecision: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      mergedAt: null,
+      author: null,
+      labels: [],
+      assignees: [],
+      checks: [],
+    };
+    const a = makeStore('card-a', {
+      workflowStage: 'review',
+      linkedIssues: openSpecLink(),
+      prs: [openPr],
+    });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const target = center(columnZone('Shipped'));
+    await drag(cardEl('card-a'), target.x, target.y);
+
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(captureTelemetryMock).toHaveBeenCalledWith(
+      'board_move_blocked',
+      expect.objectContaining({
+        from_stage: 'review',
+        attempted_stage: 'shipped',
+        governing_fact: 'open-pr',
+      })
+    );
+
+    // Triage is still the escape valve even for a PR-governed card.
+    captureTelemetryMock.mockClear();
+    const triageTarget = center(columnZone('Triage'));
+    await drag(cardEl('card-a'), triageTarget.x, triageTarget.y);
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('triage', expect.any(String));
+  });
+
+  it('renders an accessible explanation naming the governing fact while hovering a disabled destination', async () => {
+    const a = makeStore('card-a', { workflowStage: 'spec', linkedIssues: openSpecLink() });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const target = center(columnZone('Idea'));
+    const start = center(cardEl('card-a'));
+    cardEl('card-a').dispatchEvent(pointer('pointerdown', start.x, start.y));
+    await settle();
+    document.dispatchEvent(pointer('pointermove', start.x + 10, start.y + 2));
+    await settle();
+    document.dispatchEvent(pointer('pointermove', target.x, target.y));
+    await settle(6);
+
+    const ideaColumn = columnContainer('Idea');
+    expect(ideaColumn.getAttribute('aria-disabled')).toBe('true');
+    expect(ideaColumn.getAttribute('title')).toContain('Spec');
+    expect(ideaColumn.getAttribute('title')).toContain('#42');
+
+    const status = host.querySelector('[data-board-status]');
+    expect(status?.textContent).toContain('Spec');
+    expect(status?.textContent).toContain('#42');
+
+    // The card never visually enters the disabled column.
+    expect(columnZone('Idea').contains(cardEl('card-a'))).toBe(false);
+
+    document.dispatchEvent(pointer('pointerup', target.x, target.y));
+    await settle();
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+  });
+
+  it('does not restrict any destination for a task in Exploring whose linked Map issue is closed (false-authority regression, #56)', async () => {
+    const a = makeStore('card-a', {
+      workflowStage: 'exploring',
+      linkedIssues: {
+        version: '1',
+        map: {
+          provider: 'github',
+          url: 'https://github.com/acme/repo/issues/11',
+          title: 'Map issue',
+          identifier: '#11',
+          status: 'closed',
+        },
+      },
+    });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const target = center(columnZone('Idea'));
+    await drag(cardEl('card-a'), target.x, target.y);
+
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('idea', expect.any(String));
   });
 });
 
