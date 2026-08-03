@@ -7,6 +7,7 @@ import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
 import { linkSuggestionsUpdatedChannel } from '@shared/core/issues/issueEvents';
 import type { LinkSuggestion } from '@shared/core/issues/link-suggestion';
+import { deriveWorkflowStageFromIssues } from '@shared/core/tasks/stage-derivation';
 import type { CreateTaskError, CreateTaskSuccess, WorkflowStage } from '@shared/core/tasks/tasks';
 import { adoptIssueAsTask } from './adopt-issue-task';
 import { parseGitHubIssueUrl } from './github-issue-url';
@@ -17,7 +18,6 @@ import {
   getCachedSuggestions,
   setCachedSuggestionsIfChanged,
 } from './link-suggestions-store';
-import { deriveWorkflowStageFromIssues } from './stage-derivation';
 
 /**
  * Cached link suggestions for the project's issue tracker — the single

@@ -1,6 +1,7 @@
 import type { AgentStatus } from '@shared/core/agents/agentEvents';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssue, LinkedIssueRole, LinkedIssueRoles } from '@shared/core/linked-issue';
+import { deriveStageAuthority, describeStageAuthorityFact } from '@shared/core/tasks/stage-authority';
 import type {
   StageHoldingPr,
   Task,
@@ -95,102 +96,51 @@ export type TaskDetailPanelStage = {
   explanationLink: { url: string; label: string } | null;
 };
 
-function prLabel(pr: StageHoldingPr): string {
-  return pr.identifier ?? pr.title;
-}
-
-function stageAuthorityExplanation(pr: StageHoldingPr): string {
-  switch (pr.status) {
-    case 'open':
-      return `Held in Review by an open PR referencing the Spec: ${prLabel(pr)}.`;
-    case 'merged':
-      return `Held in Shipped by a merged PR referencing the Spec: ${prLabel(pr)}.`;
-    case 'closed':
-      return `Held in Triage by a closed PR referencing the Spec: ${prLabel(pr)}.`;
-  }
-}
-
-function issueLabel(issue: LinkedIssue): string {
-  return issue.identifier || issue.title;
-}
-
 /**
- * Whether a linked issue is the same fact `deriveWorkflowStageFromIssues`
- * (`src/main/core/issues/inbound-sync/stage-derivation.ts`) would read as
- * `state: 'open'`. That function is fed exclusively by the GitHub inbound
- * issues sync (`issues-sync-engine.ts`), which only ever computes Map/Spec
- * facts for issues belonging to the project's connected GitHub repository —
- * a linked issue from another provider is never consulted, no matter what its
- * own status string says. `remoteIssueToLinkedIssue` (`link-suggestions.ts`)
- * stamps `status` with the raw GitHub `state` for those issues, so `provider
- * === 'github' && status === 'open'` is the literal value the derivation
- * would see; every other provider's status vocabulary (e.g. GitLab's
- * `'opened'`, Jira/Linear workflow names, Forgejo's GitHub-shaped `'open'`)
- * is not a fact this panel can treat as GitHub-proven.
- */
-function isGithubProvenOpenIssue(issue: LinkedIssue): boolean {
-  return issue.provider === 'github' && issue.status === 'open';
-}
-
-/** `exploring`/`spec` explanation text using the linked Map/Spec issue itself as the fact. */
-function issueStageAuthorityExplanation(stage: 'exploring' | 'spec', issue: LinkedIssue): string {
-  return stage === 'exploring'
-    ? `Held in Exploring by its linked Map issue: ${issueLabel(issue)}.`
-    : `Held in Spec by its linked Spec issue: ${issueLabel(issue)}.`;
-}
-
-/**
- * Not yet loaded (`undefined` authority) reads the same as "no PR authority fact" —
- * declarative, unlocked, *unless* `currentStage` is itself `exploring`/`spec`.
+ * Delegates to the shared explanation contract (ticket #48,
+ * `@shared/core/tasks/stage-authority.ts`) — the single pure function that
+ * computes a task's Workflow Stage authority from the same observable facts
+ * and precedence rules board synchronization uses. This panel only adapts
+ * the result into its own selector shape; it does not derive anything itself.
  *
- * `exploring` and `spec` are GitHub-provable stages (CONTEXT.md "Workflow Stage",
- * docs/adr/0003) the `tasks.getTaskStageAuthority` RPC doesn't speak to — it only
- * derives the PR-provable half. `DECLARATIVE_WORKFLOW_STAGES` never offers
- * `exploring`/`spec` as a manual choice, but the board's drag-and-drop *can* still
- * move a card into either column (ticket #48/#56) regardless of its linked issues,
- * so a persisted `exploring`/`spec` stage is not proof by itself that the
- * issue-derived sync pass put it there. Lock the selector only when the linked
- * Map/Spec issue is the exact fact `deriveWorkflowStageFromIssues` would read as
- * open (`isGithubProvenOpenIssue`) — a merely-present but closed, stale, or
- * non-GitHub link never gave the sync pass a reason to assert this stage, so
- * asserting an authority explanation from it here would be as false as the
- * drag-and-drop premise this replaces.
+ * Not yet loaded (`undefined` authority) reads the same as "no PR authority
+ * fact" — declarative, unlocked, unless the linked Map/Spec issue itself
+ * governs `currentStage` (an open, GitHub-provenanced issue the periodic
+ * issues sync would read as open — see `deriveStageAuthority`'s docstring).
+ * `hasWorkspace: false` is passed unconditionally: this call site doesn't
+ * thread workspace presence through yet, so a persisted `implementing` stage
+ * falls back to the unlocked/declarative branch exactly as before, rather
+ * than a `deriveStageAuthority` category this panel isn't wired to surface.
  */
 export function deriveStageSection(
   currentStage: WorkflowStage | null,
   authority: TaskStageAuthority | null | undefined,
   linkedIssues?: LinkedIssueRoles | null
 ): TaskDetailPanelStage {
-  const holdingPr = authority?.holdingPr ?? null;
-  if (authority?.isCurrentStageGithubProven && holdingPr) {
+  const result = deriveStageAuthority({
+    currentStage,
+    linkedIssues,
+    prAuthority: authority,
+    hasWorkspace: false,
+  });
+
+  if (!result.governs) {
     return {
       current: currentStage,
-      locked: true,
-      options: [],
-      explanation: stageAuthorityExplanation(holdingPr),
-      explanationLink: { url: holdingPr.url, label: prLabel(holdingPr) },
+      locked: false,
+      options: DECLARATIVE_WORKFLOW_STAGES,
+      explanation: null,
+      explanationLink: null,
     };
   }
 
-  if (currentStage === 'exploring' || currentStage === 'spec') {
-    const holdingIssue = currentStage === 'exploring' ? linkedIssues?.map : linkedIssues?.spec;
-    if (holdingIssue && isGithubProvenOpenIssue(holdingIssue)) {
-      return {
-        current: currentStage,
-        locked: true,
-        options: [],
-        explanation: issueStageAuthorityExplanation(currentStage, holdingIssue),
-        explanationLink: { url: holdingIssue.url, label: issueLabel(holdingIssue) },
-      };
-    }
-  }
-
+  const description = describeStageAuthorityFact(result.fact);
   return {
     current: currentStage,
-    locked: false,
-    options: DECLARATIVE_WORKFLOW_STAGES,
-    explanation: null,
-    explanationLink: null,
+    locked: true,
+    options: [],
+    explanation: description?.fact ?? null,
+    explanationLink: description?.link ?? null,
   };
 }
 

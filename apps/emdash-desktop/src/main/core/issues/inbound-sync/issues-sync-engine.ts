@@ -17,6 +17,7 @@ import {
   parseIssueNumberFromIdentifier,
   type PrWorkflowFact,
 } from '@shared/core/pull-requests/pr-workflow-derivation';
+import { deriveWorkflowStageFromIssues, type IssueStateFact } from '@shared/core/tasks/stage-derivation';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { parseRepositoryRefResult } from '@shared/repository-ref';
 import { getRejectedIssueUrls, setCachedGhostCardsIfChanged } from './ghost-card-store';
@@ -35,7 +36,6 @@ import {
 } from './link-suggestions';
 import { getDismissedIssueUrls, setCachedSuggestionsIfChanged } from './link-suggestions-store';
 import { isRootIssueCandidate } from './root-issue';
-import { deriveWorkflowStageFromIssues, type IssueStateFact } from './stage-derivation';
 
 export type IssuesSyncAuthContext = Pick<GitHubApiAuthContext, 'accountId'>;
 
