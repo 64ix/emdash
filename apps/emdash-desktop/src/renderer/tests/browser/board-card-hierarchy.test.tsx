@@ -35,6 +35,7 @@ type MockStore = {
     archivedAt?: string;
     linkedIssues?: LinkedIssueRoles;
     prs: PullRequest[];
+    workspaceGit?: { linesAdded: number; linesDeleted: number };
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
@@ -311,6 +312,29 @@ describe('Feature Board card — most relevant delivery artifact (ticket #47)', 
     await mount();
 
     expect(cardEl('card-a').textContent).toContain('Spec #3');
+  });
+});
+
+describe('Feature Board card — code-change statistics (ticket #47)', () => {
+  setupDom();
+
+  it('shows additions and deletions when the task has a cached diff', async () => {
+    const a = makeStore('card-a', { workspaceGit: { linesAdded: 5, linesDeleted: 2 } });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const card = cardEl('card-a');
+    expect(card.textContent).toContain('+5');
+    expect(card.textContent).toContain('-2');
+  });
+
+  it('shows nothing when the task has no diff to show', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const card = cardEl('card-a');
+    expect(card.textContent).not.toContain('+');
   });
 });
 
