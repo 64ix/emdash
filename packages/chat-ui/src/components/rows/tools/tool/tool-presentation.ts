@@ -14,8 +14,8 @@
  * crash or render blank on an unexpected payload shape.
  */
 
-import { redactSecrets } from '@emdash/shared/logger';
 import type { SegmentCtx } from '@core/units';
+import { redactSecrets } from '@emdash/shared/logger';
 import type {
   ChatToolCall,
   ToolNode,
@@ -184,7 +184,10 @@ export function buildToolResources(item: ToolCallLike): ToolResource[] {
  * Whether a call's raw output/matchCount represents a *meaningful* result —
  * distinct from a call that finished with nothing to show (the 'empty' state).
  */
-export function computeHasResult(item: ToolCallLike, outputText: ToolTextBlock | undefined): boolean {
+export function computeHasResult(
+  item: ToolCallLike,
+  outputText: ToolTextBlock | undefined
+): boolean {
   if (typeof item.matchCount === 'number' && Number.isFinite(item.matchCount)) {
     return item.matchCount > 0;
   }
@@ -283,7 +286,9 @@ export function toolFromItem(item: ToolNode, ctx: SegmentCtx): ChatToolCall {
     rawToolKind: item.kind === 'unknown-tool-call' ? item.toolKind : undefined,
     params: buildToolParams(item),
     resources: buildToolResources(item),
-    ...(isError ? { errorDetail: outputText, error: firstLine(outputText) } : { result: outputText }),
+    ...(isError
+      ? { errorDetail: outputText, error: firstLine(outputText) }
+      : { result: outputText }),
   };
 }
 
@@ -296,7 +301,8 @@ export function buildCopyText(item: ChatToolCall): string {
   for (const p of item.params ?? []) lines.push(`${p.label}: ${p.value}`);
   if (item.result) {
     lines.push('', 'Result:', item.result.text);
-    if (item.result.truncated) lines.push(`(truncated — ${item.result.omittedChars} chars omitted)`);
+    if (item.result.truncated)
+      lines.push(`(truncated — ${item.result.omittedChars} chars omitted)`);
   }
   if (item.errorDetail) {
     lines.push('', 'Error:', item.errorDetail.text);

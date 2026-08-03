@@ -60,7 +60,7 @@ export type ChatMessage = {
 /**
  * Presentation-level status for the generic tool inspector — richer than the
  * raw ACP `ToolStatus`. Derived (never stored) by `deriveToolPresentationStatus`
- * in `tool.presenter.ts` from the raw status, permission/turn context, and
+ * in `tool-presentation.ts` from the raw status, permission/turn context, and
  * whether the call produced a meaningful result.
  */
 export type ToolPresentationStatus =

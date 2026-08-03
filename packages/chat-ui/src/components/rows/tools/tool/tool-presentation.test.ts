@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ChatToolCall } from '@/model';
 import {
   boundCodePoints,
   buildCopyText,
@@ -12,13 +13,16 @@ import {
   safeToolName,
   summarizeToolText,
 } from './tool-presentation';
-import type { ChatToolCall } from '@/model';
 
 // ── boundCodePoints ───────────────────────────────────────────────────────────
 
 describe('boundCodePoints', () => {
   it('returns untouched text under the limit', () => {
-    expect(boundCodePoints('hello', 10)).toEqual({ text: 'hello', truncated: false, omittedChars: 0 });
+    expect(boundCodePoints('hello', 10)).toEqual({
+      text: 'hello',
+      truncated: false,
+      omittedChars: 0,
+    });
   });
 
   it('truncates and reports the omitted count', () => {
@@ -193,7 +197,9 @@ describe('buildToolParams', () => {
   });
 
   it('mcp: tool + server', () => {
-    expect(buildToolParams({ kind: 'mcp-tool-call', tool: 'searchIssues', server: 'linear' })).toEqual([
+    expect(
+      buildToolParams({ kind: 'mcp-tool-call', tool: 'searchIssues', server: 'linear' })
+    ).toEqual([
       { label: 'Tool', value: 'searchIssues' },
       { label: 'Server', value: 'linear' },
     ]);
@@ -213,7 +219,9 @@ describe('buildToolParams', () => {
   });
 
   it('unknown: tool name + raw kind', () => {
-    expect(buildToolParams({ kind: 'unknown-tool-call', name: 'vendor_tool', toolKind: 'custom' })).toEqual([
+    expect(
+      buildToolParams({ kind: 'unknown-tool-call', name: 'vendor_tool', toolKind: 'custom' })
+    ).toEqual([
       { label: 'Tool', value: 'vendor_tool' },
       { label: 'Raw kind', value: 'custom' },
     ]);
@@ -254,9 +262,9 @@ describe('buildToolResources', () => {
   });
 
   it('web-fetch falls back to the url itself as the label', () => {
-    expect(buildToolResources({ kind: 'web-fetch-tool-call', url: 'https://example.test/a' })).toEqual([
-      { kind: 'url', url: 'https://example.test/a', label: 'https://example.test/a' },
-    ]);
+    expect(
+      buildToolResources({ kind: 'web-fetch-tool-call', url: 'https://example.test/a' })
+    ).toEqual([{ kind: 'url', url: 'https://example.test/a', label: 'https://example.test/a' }]);
   });
 
   it('search/mcp/unknown have no resolvable resources today', () => {

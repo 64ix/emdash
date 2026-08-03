@@ -125,7 +125,10 @@ export function flattenTier(
     }
 
     if (!ctx.active && turn.outcome && turn.outcome.kind !== 'done') {
-      processItem({ kind: 'turn-outcome', id: `${turn.id}:outcome`, outcome: turn.outcome }, turnCtx);
+      processItem(
+        { kind: 'turn-outcome', id: `${turn.id}:outcome`, outcome: turn.outcome },
+        turnCtx
+      );
     }
   }
 

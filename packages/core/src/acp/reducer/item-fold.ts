@@ -178,8 +178,7 @@ export function createToolCallItem(params: {
     params.inputSummary
   );
   const { title, toolKind } = params;
-  const outputTextField =
-    params.outputText !== undefined ? { outputText: params.outputText } : {};
+  const outputTextField = params.outputText !== undefined ? { outputText: params.outputText } : {};
   if (isSubagentKind(toolKind)) {
     return { kind: 'spawn-subagent-tool-call', ...base, name: title };
   }

@@ -198,6 +198,53 @@ describe('flatten — identity stability', () => {
   });
 });
 
+describe('flatten — turnOutcome scoping', () => {
+  it("scopes turnOutcome to each item's own turn, never a sibling turn's", () => {
+    const seenOutcomes: unknown[] = [];
+    const capturingSegmenters: Record<string, ItemSegmenter> = {
+      ...STUB_SEGMENTERS,
+      tool: {
+        kind: 'tool',
+        segment: (item, ctx) => {
+          seenOutcomes.push(ctx.turnOutcome?.());
+          return [unit('tool', item, item, { key: 'self' })];
+        },
+      },
+    };
+    const tx = createTranscript();
+    const cancelledTurn: TranscriptTurn = {
+      ...turn('t1', 0, tool('a', 0)),
+      outcome: { kind: 'cancelled' },
+    };
+    const doneTurn: TranscriptTurn = { ...turn('t2', 1, tool('b', 0)), outcome: { kind: 'done' } };
+    tx.history.seed([cancelledTurn, doneTurn]);
+
+    flattenTier(tx.state.committedTurns, segCtx, capturingSegmenters);
+
+    expect(seenOutcomes).toEqual([{ kind: 'cancelled' }, { kind: 'done' }]);
+  });
+
+  it('leaves turnOutcome undefined for a turn with no settled outcome (e.g. the active turn)', () => {
+    const seenOutcomes: unknown[] = [];
+    const capturingSegmenters: Record<string, ItemSegmenter> = {
+      ...STUB_SEGMENTERS,
+      tool: {
+        kind: 'tool',
+        segment: (item, ctx) => {
+          seenOutcomes.push(ctx.turnOutcome?.());
+          return [unit('tool', item, item, { key: 'self' })];
+        },
+      },
+    };
+    const tx = createTranscript();
+    tx.history.seed([turn('t1', 0, tool('a', 0))]);
+
+    flattenTier(tx.state.committedTurns, segCtx, capturingSegmenters);
+
+    expect(seenOutcomes).toEqual([undefined]);
+  });
+});
+
 describe('collectUserTurnUnits', () => {
   it('returns empty array when no user messages', () => {
     const tx = createTranscript();
