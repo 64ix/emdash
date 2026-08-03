@@ -24,12 +24,21 @@ interface ChangesRailRowProps {
 }
 
 /**
- * One Changes rail entry — a semantic, focusable button, never a clickable
- * `div`. Ticket #35 layers three explicit actions onto it without merging
- * them: the row body jumps to transcript provenance (or falls back to
- * opening the file/diff when there is none), while "Open file"/"Open diff"
- * stay reachable as separate hover/focus-revealed buttons regardless of
- * which action the row body performs — see `changes-rail-actions.ts`.
+ * One Changes rail entry — a semantic, focusable control, never a clickable
+ * `div` with no keyboard equivalent. Ticket #35 layers three explicit actions
+ * onto it without merging them: the row body jumps to transcript provenance
+ * (or falls back to opening the file/diff when there is none), while
+ * "Open file"/"Open diff" stay reachable as separate hover/focus-revealed
+ * buttons regardless of which action the row body performs — see
+ * `changes-rail-actions.ts`.
+ *
+ * The row itself is a `role="button"` `div`, not a real `<button>`: the
+ * hover-revealed "Open file"/"Open diff" actions are real `<button>`
+ * elements, and a `<button>` cannot validly contain another `<button>` (React
+ * warns on exactly this nesting — "In HTML, <button> cannot be a descendant
+ * of <button>" — because it produces an inconsistent a11y tree and, under
+ * real HTML parsing, invalid nesting). `tabIndex`/`onKeyDown` restore the
+ * keyboard activation a native button would have given us for free.
  */
 export function ChangesRailRow({
   entry,
@@ -42,13 +51,20 @@ export function ChangesRailRow({
   const provenanceLabel = changesProvenanceLabel(entry);
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       aria-current={isSelected ? 'true' : undefined}
       title={changesProvenanceTooltip(entry)}
       className={cn(
-        'group/item flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-left hover:bg-background-1',
+        'group/item flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-left outline-none hover:bg-background-1 focus-visible:ring-2 focus-visible:ring-ring/50',
         isSelected && 'bg-background-2 hover:bg-background-2'
       )}
     >
@@ -97,6 +113,6 @@ export function ChangesRailRow({
       ) : (
         <Eye className="size-3.5 shrink-0 text-foreground-muted" aria-hidden="true" />
       )}
-    </button>
+    </div>
   );
 }

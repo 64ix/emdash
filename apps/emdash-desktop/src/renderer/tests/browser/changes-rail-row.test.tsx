@@ -6,8 +6,16 @@
  * "last" wording) is covered by `changes-provenance.test.ts`'s pure-function
  * tests; this file only asserts what requires real rendering: which actions
  * are present per entry kind, that they stay independent of each other and
- * of the row's primary click, and that a Git-only entry (no transcript
- * provenance) degrades gracefully instead of exposing a dead affordance.
+ * of the row's primary click, that a Git-only entry (no transcript
+ * provenance) degrades gracefully instead of exposing a dead affordance, and
+ * that the row is keyboard-operable.
+ *
+ * The row itself renders as `role="button"` on a `div`, not a real
+ * `<button>` — see `changes-rail-row.tsx`'s doc comment for why nesting the
+ * hover-revealed action `<button>`s inside a real `<button>` row would be
+ * invalid. `getRow()` below selects on `[role="button"]` rather than the
+ * first `button` in the host so these tests keep asserting the row itself,
+ * not whichever action button happens to render first in DOM order.
  */
 
 import React, { act } from 'react';
@@ -76,6 +84,10 @@ describe('ChangesRailRow', () => {
     return { onSelect, onOpenFile, onOpenDiff };
   }
 
+  function getRow(): HTMLElement {
+    return host.querySelector<HTMLElement>('[role="button"]')!;
+  }
+
   it('renders the filename and directory for the entry path', async () => {
     await renderRow({ entry: editedEntry({ path: 'src/nested/a.ts' }) });
 
@@ -83,27 +95,60 @@ describe('ChangesRailRow', () => {
     expect(host.textContent).toContain('src/nested');
   });
 
+  it('renders the row as a div, never a real <button>, so the hover-revealed action buttons are not nested inside another button', async () => {
+    await renderRow({});
+
+    const row = getRow();
+    expect(row.tagName).toBe('DIV');
+    // The row must still be its own DOM node distinct from (and not an
+    // ancestor confusion with) the action buttons — but action buttons *are*
+    // expected descendants of the row (for layout); the point is the row
+    // itself is not a <button>.
+    expect(row.querySelectorAll('button').length).toBeGreaterThan(0);
+  });
+
   it('calls onSelect when the row body is clicked', async () => {
     const { onSelect } = await renderRow({});
 
-    const row = host.querySelector<HTMLButtonElement>('button')!;
+    const row = getRow();
     await act(async () => row.click());
 
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  it('calls onSelect on Enter or Space — keyboard activation for the non-native-button row', async () => {
+    const { onSelect } = await renderRow({});
+
+    const row = getRow();
+    row.focus();
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+
+    expect(onSelect).toHaveBeenCalledTimes(2);
+  });
+
   it('reflects isSelected via aria-current on the row, not the action buttons', async () => {
     await renderRow({ isSelected: true });
 
-    const row = host.querySelector<HTMLButtonElement>('button')!;
+    const row = getRow();
     expect(row.getAttribute('aria-current')).toBe('true');
   });
 
   it('exposes an honest "jump to last edit" tooltip when the entry has provenance', async () => {
     await renderRow({ entry: editedEntry() });
 
-    const row = host.querySelector<HTMLButtonElement>('button')!;
+    const row = getRow();
     expect(row.getAttribute('title')).toBe('src/nested/a.ts — Jump to last edit in transcript');
+  });
+
+  it('shows the history/jump indicator only when the entry has transcript provenance', async () => {
+    await renderRow({ entry: editedEntry() });
+
+    expect(host.querySelector('svg.lucide-history')).not.toBeNull();
   });
 
   it('falls back to the bare path tooltip for a Git-only entry with no transcript provenance', async () => {
@@ -111,8 +156,16 @@ describe('ChangesRailRow', () => {
       entry: editedEntry({ path: 'src/renamed.ts', status: 'renamed', source: null }),
     });
 
-    const row = host.querySelector<HTMLButtonElement>('button')!;
+    const row = getRow();
     expect(row.getAttribute('title')).toBe('src/renamed.ts');
+  });
+
+  it('renders no history/jump indicator for a Git-only entry with no transcript provenance — no dead affordance', async () => {
+    await renderRow({
+      entry: editedEntry({ path: 'src/renamed.ts', status: 'renamed', source: null }),
+    });
+
+    expect(host.querySelector('svg.lucide-history')).toBeNull();
   });
 
   it('calls onOpenFile — and not onSelect — when the "Open file" action is used', async () => {
