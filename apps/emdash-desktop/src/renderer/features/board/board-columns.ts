@@ -1,6 +1,6 @@
 import { isShippedFaded } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { Task } from '@shared/core/tasks/tasks';
-import type { ColumnId } from './board-ordering';
+import { COLUMNS, type ColumnId } from './board-ordering';
 
 /**
  * Feature Board column labels. Names and ordering follow the glossary in
@@ -17,6 +17,31 @@ export const STAGE_LABELS: Record<ColumnId, string> = {
   shipped: 'Shipped',
   triage: 'Triage',
 };
+
+/**
+ * Presentation grouping (ticket #46, CONTEXT.md "Unstaged", "Triage"):
+ * Unstaged and Triage are exception groups outside the normal
+ * feature-delivery sequence — Unstaged precedes it (a task has not entered
+ * the pipeline yet), Triage sits outside it entirely (a contradicted task
+ * pulled out of flow), and neither is a stage `idea -> ... -> shipped`
+ * progresses through. `columnEmphasis` drives the board's visual grouping
+ * (a divider plus distinct styling) so Triage is never rendered as if it
+ * were the stage that follows Shipped. This is presentation-only: it does
+ * not reorder `COLUMNS`, which remains the domain traversal/render order
+ * relied on by drag-and-drop and column ordering tests.
+ */
+export type ColumnEmphasis = 'pipeline' | 'unstaged' | 'triage';
+
+export function columnEmphasis(column: ColumnId): ColumnEmphasis {
+  if (column === 'unstaged') return 'unstaged';
+  if (column === 'triage') return 'triage';
+  return 'pipeline';
+}
+
+/** The six-stage delivery pipeline, excluding the Unstaged/Triage exception groups. */
+export const PIPELINE_COLUMNS: ColumnId[] = COLUMNS.filter(
+  (column) => columnEmphasis(column) === 'pipeline'
+);
 
 /**
  * Shipped Fade (CONTEXT.md): `shipped` cards whose PR merged more than the fade

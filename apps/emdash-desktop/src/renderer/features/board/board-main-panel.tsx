@@ -2,6 +2,7 @@ import {
   closestCenter,
   DndContext,
   DragOverlay,
+  MeasuringStrategy,
   PointerSensor,
   pointerWithin,
   useDroppable,
@@ -20,10 +21,16 @@ import {
   type AnimateLayoutChanges,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ArrowUpRight, MessageSquare } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, ChevronRight, MessageSquare } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useState } from 'react';
-import { isBoardDisplayable, STAGE_LABELS } from '@renderer/features/board/board-columns';
+import {
+  columnEmphasis,
+  isBoardDisplayable,
+  PIPELINE_COLUMNS,
+  STAGE_LABELS,
+  type ColumnEmphasis,
+} from '@renderer/features/board/board-columns';
 import { BoardLinkSuggestions } from '@renderer/features/board/board-link-suggestions';
 import { GhostCardView, useGhostCards } from '@renderer/features/board/ghost-cards';
 import {
@@ -114,6 +121,22 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   // never survives leaving the board (unmount resets it) and writes nothing
   // to the database. `null` means the panel is closed.
   const [panelTarget, setPanelTarget] = useState<TaskDetailPanelTarget | null>(null);
+  // Collapsible empty columns (ticket #46): user-toggled per column, and only
+  // ever collapsed while the column is actually empty — a column that
+  // receives a card (drop, sync, or otherwise) always renders expanded
+  // regardless of this set. Opt-in and defaulted to empty (nothing
+  // collapsed) so the board's default layout — and every existing
+  // real-layout drag geometry test, which never touches the toggle — is
+  // completely unaffected by this feature.
+  const [collapsedColumns, setCollapsedColumns] = useState<ReadonlySet<ColumnId>>(new Set());
+  const toggleColumnCollapsed = (column: ColumnId) => {
+    setCollapsedColumns((previous) => {
+      const next = new Set(previous);
+      if (next.has(column)) next.delete(column);
+      else next.add(column);
+      return next;
+    });
+  };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   // Board open triggers an immediate derivation pass (PR facts + inbound issues);
@@ -404,6 +427,35 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
 
   const activeDragStore = activeDragId ? storeById.get(activeDragId) : undefined;
 
+  // Shared column renderer for all three groups below (Unstaged, the
+  // six-stage pipeline, Triage) so every column keeps the same wiring —
+  // only grouping and emphasis differ.
+  const renderColumn = (column: ColumnId) => (
+    <BoardColumn
+      key={column}
+      column={column}
+      entries={displayByColumn.get(column) ?? []}
+      storeById={storeById}
+      selectedTaskId={panelTarget?.kind === 'task' ? panelTarget.taskId : null}
+      onSelectTask={(taskId) => setPanelTarget({ kind: 'task', taskId })}
+      onOpenTask={handleOpenTask}
+      // Ghost Cards (ticket #9) are not tasks and never sort/drag — they
+      // only ever live in the `idea` column, after real cards.
+      ghostCards={column === 'idea' ? ghostCards : undefined}
+      selectedGhostCardId={panelTarget?.kind === 'ghost' ? panelTarget.ghostCard.id : null}
+      onSelectGhostCard={(ghostCard) => setPanelTarget({ kind: 'ghost', ghostCard })}
+      onAdoptGhostCard={handleAdoptGhostCard}
+      onRejectGhostCard={rejectGhostCard}
+      isCollapsed={collapsedColumns.has(column)}
+      onToggleCollapsed={() => toggleColumnCollapsed(column)}
+      // Collapsible empty columns (ticket #46): the column currently under
+      // the cross-column drag preview must expand for the duration of the
+      // drag regardless of its collapsed toggle, so a collapsed column
+      // never becomes a harder-to-hit drop target mid-gesture.
+      isDragHovered={previewColumn === column}
+    />
+  );
+
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       <div className="flex items-baseline gap-2 px-4 pt-4 pb-2">
@@ -425,32 +477,30 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
           // one the user aimed at. 5% keeps edge-push scrolling for offscreen
           // columns while leaving visible targets stationary.
           autoScroll={{ threshold: { x: 0.05, y: 0.2 } }}
+          // Collapsible empty columns (ticket #46) resize during a drag (see
+          // `isDragHovered` above): dnd-kit's default measuring strategy only
+          // re-measures droppable rects on scroll, so a column that expands
+          // mid-hover would leave stale (narrow) cached geometry behind it.
+          // `Always` keeps every droppable rect current for the columns this
+          // feature can resize; it is a no-op for the fixed-width case every
+          // existing drag test exercises.
+          measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           onDragStart={handleDragStart}
           onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
           onDragCancel={handleDragCancel}
         >
           <div className="flex flex-1 gap-3 overflow-x-auto px-4 pb-4">
-            {COLUMNS.map((column) => (
-              <BoardColumn
-                key={column}
-                column={column}
-                entries={displayByColumn.get(column) ?? []}
-                storeById={storeById}
-                selectedTaskId={panelTarget?.kind === 'task' ? panelTarget.taskId : null}
-                onSelectTask={(taskId) => setPanelTarget({ kind: 'task', taskId })}
-                onOpenTask={handleOpenTask}
-                // Ghost Cards (ticket #9) are not tasks and never sort/drag —
-                // they only ever live in the `idea` column, after real cards.
-                ghostCards={column === 'idea' ? ghostCards : undefined}
-                selectedGhostCardId={
-                  panelTarget?.kind === 'ghost' ? panelTarget.ghostCard.id : null
-                }
-                onSelectGhostCard={(ghostCard) => setPanelTarget({ kind: 'ghost', ghostCard })}
-                onAdoptGhostCard={handleAdoptGhostCard}
-                onRejectGhostCard={rejectGhostCard}
-              />
-            ))}
+            {renderColumn('unstaged')}
+            {/* Exception groups (CONTEXT.md "Unstaged", "Triage"; ticket
+                #46): Unstaged and Triage sit outside the six-stage delivery
+                pipeline, separated from it by a divider plus their own
+                styling (see `columnEmphasis`) — deliberately so Triage never
+                reads as the stage that follows Shipped. */}
+            <BoardColumnGroupDivider />
+            {PIPELINE_COLUMNS.map((column) => renderColumn(column))}
+            <BoardColumnGroupDivider />
+            {renderColumn('triage')}
           </div>
           <DragOverlay>
             {activeDragStore ? <BoardCardPreview store={activeDragStore} /> : null}
@@ -471,6 +521,22 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   );
 });
 
+/** Decorative separator between the Unstaged/pipeline/Triage groups (ticket #46). */
+function BoardColumnGroupDivider() {
+  return <div aria-hidden="true" className="mx-1 w-px shrink-0 self-stretch bg-border" />;
+}
+
+/** Column emphasis (CONTEXT.md "Unstaged", "Triage"): accessible name suffix
+ *  and visual treatment for the two exception groups. Triage additionally
+ *  pairs the warning styling with an icon and this text so the warning
+ *  never depends on colour alone. */
+const EMPHASIS_ARIA_SUFFIX: Record<ColumnEmphasis, string> = {
+  pipeline: '',
+  unstaged: ' — exception group, outside the delivery pipeline',
+  triage:
+    ' — warning: exception stage for contradicted delivery facts, not part of the delivery pipeline',
+};
+
 const BoardColumn = observer(function BoardColumn({
   column,
   entries,
@@ -483,6 +549,9 @@ const BoardColumn = observer(function BoardColumn({
   onSelectGhostCard,
   onAdoptGhostCard,
   onRejectGhostCard,
+  isCollapsed,
+  onToggleCollapsed,
+  isDragHovered,
 }: {
   column: ColumnId;
   entries: CardEntry[];
@@ -495,6 +564,9 @@ const BoardColumn = observer(function BoardColumn({
   onSelectGhostCard: (ghostCard: GhostCard) => void;
   onAdoptGhostCard: (ghostCard: GhostCard) => void;
   onRejectGhostCard: (ghostCard: GhostCard) => void;
+  isCollapsed: boolean;
+  onToggleCollapsed: () => void;
+  isDragHovered: boolean;
 }) {
   const cardCount = entries.length + (ghostCards?.length ?? 0);
   const { setNodeRef, isOver } = useDroppable({ id: columnDropId(column) });
@@ -506,15 +578,76 @@ const BoardColumn = observer(function BoardColumn({
   const cardIdsKey = entries.map((entry) => entry.id).join('\n');
   const cardIds = useMemo(() => (cardIdsKey ? cardIdsKey.split('\n') : []), [cardIdsKey]);
 
+  const emphasis = columnEmphasis(column);
+  // Collapsible empty columns (ticket #46): only ever collapsible while
+  // actually empty, and forced back open for the duration of a drag that is
+  // currently hovering it. Keyboard focus is handled separately below by a
+  // plain CSS `focus-within` override, so it keeps working even if focus
+  // lands on the collapsed drop zone itself rather than the toggle button —
+  // no React state round-trip needed for that path.
+  const isCollapsible = cardCount === 0;
+  const effectiveCollapsed = isCollapsed && isCollapsible && !isDragHovered;
+
   return (
-    <div className="flex w-56 shrink-0 flex-col rounded-lg border border-border bg-background-2/40">
-      <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-xs font-medium text-foreground-muted">{STAGE_LABELS[column]}</span>
-        <Badge variant="secondary">{cardCount}</Badge>
+    <div
+      role="group"
+      aria-label={`${STAGE_LABELS[column]} column${EMPHASIS_ARIA_SUFFIX[emphasis]}`}
+      className={cn(
+        'flex shrink-0 flex-col rounded-lg border',
+        effectiveCollapsed ? 'w-14' : 'w-56',
+        // A collapsed column must expand for the duration of a keyboard
+        // focus interaction too (ticket #46) — `focus-within` covers both
+        // the toggle button below and the collapsed drop zone's own
+        // `tabIndex`, and is a no-op once already expanded.
+        isCollapsible && 'focus-within:w-56',
+        emphasis === 'pipeline' && 'border-border bg-background-2/40',
+        emphasis === 'unstaged' && 'border-dashed border-border bg-background-2/20',
+        emphasis === 'triage' && 'border-dashed border-border-warning bg-background-warning/30'
+      )}
+    >
+      <div className="flex items-center gap-1 px-3 py-2">
+        {isCollapsible && (
+          <button
+            type="button"
+            aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${STAGE_LABELS[column]} column`}
+            aria-expanded={!effectiveCollapsed}
+            onClick={onToggleCollapsed}
+            className="-ml-1 shrink-0 rounded p-0.5 text-foreground-muted hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn('size-3.5 transition-transform', !effectiveCollapsed && 'rotate-90')}
+            />
+          </button>
+        )}
+        {/* Triage's warning semantics (ticket #46) pair this icon with the
+            warning-tinted label text below — never colour alone. */}
+        {emphasis === 'triage' && (
+          <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0 text-foreground-warning" />
+        )}
+        <span
+          className={cn(
+            'truncate text-xs font-medium',
+            emphasis === 'triage' ? 'text-foreground-warning' : 'text-foreground-muted'
+          )}
+          title={STAGE_LABELS[column]}
+        >
+          {STAGE_LABELS[column]}
+        </span>
+        <Badge variant="secondary" className="ml-auto shrink-0">
+          {cardCount}
+        </Badge>
       </div>
       <SortableContext items={cardIds} strategy={verticalListSortingStrategy}>
         <div
           ref={setNodeRef}
+          // A collapsed column stays a focusable, labeled drop target even
+          // with no cards inside to carry focus themselves (ticket #46).
+          tabIndex={effectiveCollapsed ? 0 : undefined}
+          aria-label={
+            effectiveCollapsed
+              ? `${STAGE_LABELS[column]} drop target, collapsed and empty`
+              : undefined
+          }
           className={cn(
             'flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2',
             isOver && 'bg-foreground/5'
