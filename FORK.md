@@ -77,6 +77,7 @@ Keep this list current — everything else we write must stay additive.
 | `apps/emdash-desktop/src/renderer/lib/stores/navigation-store.ts` | `viewEvents` map |
 | test DDL fixtures (`legacy-port/**/relational.test.ts`, `service.test.ts`, `createTask.test.ts`, `renameTask.test.ts`) | mirror the `tasks` DDL / row shape |
 | `apps/emdash-desktop/vitest.config.ts` | `FORK_CI` exclude for PTY integration tests |
+| `apps/emdash-desktop/package.json` | `package:fork` script (see "Personal macOS builds") |
 
 Additive (no conflict risk): `features/board/`, `operations/updateTaskWorkflowStage.ts`,
 `drizzle/0020_*.sql`.
@@ -94,3 +95,105 @@ check for a collision with our migrations and renumber ours (regenerate with
   `pnpm exec nx run-many -t build --projects "packages/*"`.
 - Isolated dev DB: `EMDASH_DB_FILE=<path> pnpm dev` (real emdash data lives in
   `~/Library/Application Support/emdash/`).
+- `pnpm run package:mac|linux|win` is broken in the monorepo layout: `electron` is a
+  range (`^40.7.0`) hoisted to the workspace root, so electron-builder aborts with
+  *"Cannot compute electron version from installed node modules"*. Only
+  `scripts/release/build.ts` works, because it resolves the version itself and passes
+  `electronVersion` into the config (`build.ts:78`). `electron-builder.fork.config.ts`
+  does the same resolution inline.
+- electron-builder's dependency collector mishandles the `node-linker=hoisted` layout
+  in three ways, each of which kills the packaged app at boot while `pnpm dev` works
+  fine: (1) a version conflict resolved in the app's or a workspace package's own
+  `node_modules` is flattened to the root's (wrong) version — glob 7 shadowing
+  glob 13 broke `import { globIterate }` in `@emdash/core` and `import { glob }` in
+  `out/main`; (2) nested conflict copies (`node_modules/x/node_modules/y`) are
+  dropped — node-fetch 2 lost its whatwg-url 5 and crashed on whatwg-url 16 requiring
+  the unpackaged `@exodus/bytes`; (3) a root package whose only consumers are nested
+  is never visited — open 11's closure (`default-browser`, …) was absent.
+  `electron-builder.fork.config.ts` compensates with generated `files` mappings: it
+  walks the runtime graph with Node's real upward resolution, re-adds every non-root
+  `node_modules` it traverses, and maps root packages the collector's naive walk
+  can't reach. Audit a candidate asar before installing it: extract with
+  `pnpm exec asar extract` (beware: `extract-file` writes into the CURRENT directory)
+  and check that every packaged package.json's deps resolve at a compatible version
+  from its location. Upstream escapes all of this by luck: their root hoist happened
+  to resolve glob@10, which still had the named exports.
+
+## Personal macOS builds (auto-update from this fork)
+
+A packaged build is a normal `Emdash.app` you can keep in `/Applications` instead of
+living in `pnpm dev`. Two things need care.
+
+**The update feed.** `electron-builder.config.ts` publishes to `generalaction/emdash`
++ `releases.emdash.sh`, and the updater reads that feed from the `app-update.yml`
+embedded at packaging time (there is no `setFeedURL` anywhere in the code). A fork
+build using it would offer upstream's next stable release and silently replace our
+features on install. `electron-builder.fork.config.ts` overrides `publish` to point at
+`64ix/emdash` and nothing else.
+
+**Code signing.** On macOS `electron-updater` hands the install to Squirrel.Mac, which
+validates the downloaded bundle against the running app's designated requirement. An
+unsigned build downloads the update and then fails at install, so a fork build that
+wants working auto-updates must be signed — with the *same* identity every time,
+starting with the first build you actually install. A self-signed identity is enough
+for personal use.
+
+One-time setup (already done on the original machine; `~/.emdash-fork-signing/` holds
+the key, so it is per-machine):
+
+```bash
+D=~/.emdash-fork-signing && mkdir -p "$D" && chmod 700 "$D"
+openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+  -keyout "$D/signing.key" -out "$D/signing.crt" -config "$D/openssl.cnf"
+/usr/bin/openssl pkcs12 -export -inkey "$D/signing.key" -in "$D/signing.crt" \
+  -out "$D/signing.p12" -passout pass:emdash-fork -name "Emdash Fork Signing"
+security create-keychain -p "$(openssl rand -hex 24 | tee "$D/keychain-password")" \
+  "$D/fork-signing.keychain-db"
+security import "$D/signing.p12" -k "$D/fork-signing.keychain-db" -P emdash-fork \
+  -T /usr/bin/codesign -A
+security set-key-partition-list -S apple-tool:,apple:,codesign: \
+  -s -k "$(cat "$D/keychain-password")" "$D/fork-signing.keychain-db"
+```
+
+`codesign` resolves identities through the user's keychain search list, so the
+dedicated keychain has to be appended to it — neither `--keychain` nor `CSC_KEYCHAIN`
+is enough on its own. `build-fork.sh` does this idempotently on every run.
+
+`openssl.cnf` must set `extendedKeyUsage = critical,codeSigning` and
+`basicConstraints = critical,CA:false`. The certificate is then still
+`CSSMERR_TP_NOT_TRUSTED` and `codesign` reports "no identity found" until it is
+trusted for code signing — this step needs your login password, so it cannot be
+scripted from an agent:
+
+```bash
+security add-trusted-cert -r trustRoot -p codeSign \
+  -k "$HOME/Library/Keychains/login.keychain-db" ~/.emdash-fork-signing/signing.crt
+```
+
+Scope: trust is limited to `codeSign` (not TLS) and to this user account. Anything
+signed with that key is treated as validly signed on this machine, so keep
+`~/.emdash-fork-signing/` at `chmod 700`.
+
+Then build and, optionally, publish a release on `64ix/emdash`:
+
+```bash
+pnpm run package:fork -- --version 1.2.0
+pnpm run package:fork -- --version 1.2.0 --publish
+```
+
+The version is injected via `extraMetadata`, never committed — `package.json` keeps
+upstream's value so rebases stay clean. Rules: plain `x.y.z`, strictly increasing
+(`allowDowngrade` is `false`), no prerelease suffix (`allowPrerelease` is `false` off
+the canary channel), and above upstream's line — upstream lives in `1.1.x`, so `1.2.0`,
+`1.3.0`, … are ours. `--publish` creates the GitHub release *and* the `v<version>` tag
+on the fork, and uploads the dmg, the zip and the `latest-mac.yml` the updater reads.
+
+**Shared state with the official app.** The fork build keeps upstream's identity —
+`Emdash.app`, `com.emdash.stable`, data in `~/Library/Application Support/emdash/`.
+So it replaces a `/Applications/Emdash.app` installed from emdash.sh and shares its
+database, which our migrations will upgrade. Back that directory up before the first
+launch. Because the signing identity differs from General Action's, macOS will also
+ask once to let the app reach the `emdash Safe Storage` keychain item holding the
+encrypted secrets. To run both side by side instead, build the canary variant
+(`VITE_BUILD=canary` in `.env.production` + `electron-builder.canary.config.ts`):
+separate app name, bundle id and `emdash-canary/` data directory.
