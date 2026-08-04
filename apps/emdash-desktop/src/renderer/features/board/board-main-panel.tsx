@@ -52,6 +52,7 @@ import {
 } from '@renderer/features/board/board-columns';
 import {
   EMPTY_BOARD_FILTERS,
+  ghostCardPassesBoardFilters,
   taskPassesBoardFilters,
   type BoardFilterState,
 } from '@renderer/features/board/board-filters';
@@ -355,6 +356,16 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
       rawByColumn.get(stageOf(task))?.push({ id: task.id, rank: task.boardRank ?? null });
     }
   }
+
+  // The same filtering pass for Ghost Cards, which are not tasks and so never
+  // reach the loop above. Only what the Idea column *renders* is filtered:
+  // `ghostCards` itself stays whole, because the open panel's target is
+  // resolved against the unfiltered set (`panelTargetGone` below, mirroring
+  // how `storeById` deliberately stays unfiltered for tasks) — hiding a card
+  // must never close an inspector the user opened.
+  const visibleGhostCards = ghostCards.filter((ghostCard) =>
+    ghostCardPassesBoardFilters(ghostCard, filters)
+  );
 
   // Disappearance handling (CONTEXT.md "Task Detail Panel"): a task archived
   // elsewhere, or faded out by Shipped Fade, or a Ghost Card that stopped
@@ -835,8 +846,10 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
       onOpenTask={handleOpenTask}
       onCreateTask={handleCreateTask}
       // Ghost Cards (ticket #9) are not tasks and never sort/drag — they
-      // only ever live in the `idea` column, after real cards.
-      ghostCards={column === 'idea' ? ghostCards : undefined}
+      // only ever live in the `idea` column, after real cards. Filtered, so
+      // an active search or filter narrows candidates exactly like tasks and
+      // the column's own count follows (`cardCount` sums both).
+      ghostCards={column === 'idea' ? visibleGhostCards : undefined}
       selectedGhostCardId={panelTarget?.kind === 'ghost' ? panelTarget.ghostCard.id : null}
       onSelectGhostCard={handleSelectGhostCard}
       onAdoptGhostCard={handleAdoptGhostCard}
