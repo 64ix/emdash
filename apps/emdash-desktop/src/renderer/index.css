@@ -64,6 +64,11 @@
   --color-primary-button-foreground: var(--primary-button-foreground);
   --color-primary-button-border: var(--primary-button-border);
 
+  /* Legacy aliases still used by renderer primitives and feature surfaces. */
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
   --color-foreground-diff-added: var(--foreground-diff-added);
   --color-foreground-diff-modified: var(--foreground-diff-modified);
   --color-foreground-diff-deleted: var(--foreground-diff-deleted);
@@ -376,6 +381,8 @@
     --primary-button-background-hover: var(--jade-11);
     --primary-button-foreground: var(--jade-2);
     --primary-button-border: transparent;
+    --primary: var(--primary-button-background);
+    --primary-foreground: var(--primary-button-foreground);
 
     --border: var(--neutral-5);
     --border-1: var(--neutral-8);
@@ -686,6 +693,8 @@
     --primary-button-background-hover: var(--jade-5);
     --primary-button-foreground: var(--jade-12);
     --primary-button-border: var(--jade-7);
+    --primary: var(--primary-button-background);
+    --primary-foreground: var(--primary-button-foreground);
 
     --border: var(--neutral-6);
     --border-1: var(--neutral-7);
