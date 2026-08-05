@@ -400,6 +400,47 @@ export class WorkspaceViewModel implements ILifecycle {
     );
   }
 
+  /**
+   * Resolves the focused-conversation navigation parameter (ticket #67):
+   * tolerant of conversation data for this task still loading, unlike
+   * `openConversation`'s plain synchronous check.
+   *
+   * A task view reached via a fresh provision (never opened before) turns
+   * `ready` — and mounts this resolution — the moment the task store
+   * transitions to provisioned, in the very same tick that acquires a
+   * *non-preloaded* `ConversationManagerStore`: its conversation list is
+   * fetched over IPC and is not yet populated. Calling `openConversation`
+   * directly right there would see an empty registry and silently no-op,
+   * exactly the discard-on-provision race this ticket exists to close —
+   * only one call site removed. Mirrors `DefaultConversationSeeder`'s own
+   * handling of the identical race: waits for the first non-empty
+   * conversation list, then resolves exactly once via `openConversation`
+   * (still a no-op if the id truly doesn't resolve once data has loaded —
+   * "fails safe" holds either way).
+   *
+   * Returns a disposer: callers that may move on before this fires (e.g. a
+   * React effect whose params changed, or unmounting) should call it so a
+   * stale attempt never surfaces later. Also self-registers for cleanup on
+   * `dispose()`, so it never outlives this view model either way.
+   */
+  resolveFocusedConversation(conversationId: string): () => void {
+    const conversations = conversationRegistry.get(this.taskId);
+    if (conversations && conversations.conversations.size > 0) {
+      this.openConversation(conversationId);
+      return () => {};
+    }
+    const disposer = reaction(
+      () => conversationRegistry.get(this.taskId)?.conversations.size ?? 0,
+      (size) => {
+        if (size === 0) return;
+        disposer();
+        this.openConversation(conversationId);
+      }
+    );
+    this._disposers.push(disposer);
+    return disposer;
+  }
+
   activateLastTabOfKind(kind: 'conversation' | 'file' | 'diff' | 'browser' | 'terminal'): void {
     const tabId = [...this.activePane.tabOrder]
       .reverse()

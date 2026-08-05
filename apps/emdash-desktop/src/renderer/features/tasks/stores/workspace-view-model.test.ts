@@ -984,3 +984,91 @@ describe('WorkspaceViewModel.openConversation', () => {
     viewModel.dispose();
   });
 });
+
+describe('WorkspaceViewModel.resolveFocusedConversation', () => {
+  // Reproduces the race the focused-conversation navigation parameter exists to close: a
+  // never-provisioned task's conversation list is fetched over IPC and is not yet populated
+  // the instant the task turns 'ready' (see main-panel.tsx). `openConversation`'s plain
+  // synchronous check would see an empty registry here and silently no-op — the exact
+  // discard this ticket is meant to fix, just one call site removed from provisioning itself.
+  it('demonstrates that openConversation alone loses a conversation that has not loaded yet', async () => {
+    const conversations = conversationRegistry.acquire('task-1', 'project-1', []);
+    const viewModel = makeViewModel();
+
+    // The conversation is requested before the registry has it — exactly the race window.
+    viewModel.openConversation('conversation-1');
+
+    runInAction(() => {
+      addConversation(conversations, { id: 'conversation-1' });
+    });
+    await Promise.resolve();
+
+    // Lost: the plain synchronous method never retries once the data arrives.
+    expect(conversationTabIds(viewModel)).toHaveLength(0);
+
+    viewModel.dispose();
+  });
+
+  it('resolves once conversation data arrives after being empty at call time', async () => {
+    const conversations = conversationRegistry.acquire('task-1', 'project-1', []);
+    const viewModel = makeViewModel();
+
+    viewModel.resolveFocusedConversation('conversation-1');
+    expect(viewModel.activePane.resolvedTabs).toHaveLength(0);
+
+    runInAction(() => {
+      addConversation(conversations, { id: 'conversation-1' });
+    });
+    await Promise.resolve();
+
+    expect(conversationTabIds(viewModel)).toEqual(['conversation-1']);
+
+    viewModel.dispose();
+  });
+
+  it('resolves immediately, without waiting, when conversation data is already loaded', () => {
+    conversationRegistry.acquire('task-1', 'project-1', [
+      makeConversation({ id: 'conversation-1' }),
+    ]);
+    const viewModel = makeViewModel();
+
+    viewModel.resolveFocusedConversation('conversation-1');
+
+    expect(conversationTabIds(viewModel)).toEqual(['conversation-1']);
+
+    viewModel.dispose();
+  });
+
+  it('does not resolve after the caller disposes it before data arrives', async () => {
+    const conversations = conversationRegistry.acquire('task-1', 'project-1', []);
+    const viewModel = makeViewModel();
+
+    const disposeResolution = viewModel.resolveFocusedConversation('conversation-1');
+    disposeResolution();
+
+    runInAction(() => {
+      addConversation(conversations, { id: 'conversation-1' });
+    });
+    await Promise.resolve();
+
+    expect(conversationTabIds(viewModel)).toHaveLength(0);
+
+    viewModel.dispose();
+  });
+
+  it('is still a no-op once data has loaded and the id truly does not resolve', async () => {
+    const conversations = conversationRegistry.acquire('task-1', 'project-1', []);
+    const viewModel = makeViewModel();
+
+    viewModel.resolveFocusedConversation('does-not-exist');
+
+    runInAction(() => {
+      addConversation(conversations, { id: 'conversation-1' });
+    });
+    await Promise.resolve();
+
+    expect(viewModel.activePane.resolvedTabs).toHaveLength(0);
+
+    viewModel.dispose();
+  });
+});

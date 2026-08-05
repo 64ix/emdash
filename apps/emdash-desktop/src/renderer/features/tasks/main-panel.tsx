@@ -115,16 +115,23 @@ const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
   // through the navigation store's existing view-param update API once
   // resolved — view params are persisted and restored across app restarts,
   // and a lingering id would re-fire on a cold start and override restored
-  // tab state. `openConversation` itself fails safe: an id that resolves to
-  // no conversation on this task is a no-op — the task view is otherwise
-  // unaffected.
+  // tab state.
+  //
+  // Goes through `resolveFocusedConversation`, not the plain
+  // `openConversation`: a never-provisioned task turns `ready` (mounting
+  // this effect) in the very tick its conversation list starts loading over
+  // IPC, before that fetch resolves — `openConversation`'s synchronous check
+  // would see an empty registry and silently no-op, losing the very race
+  // this ticket exists to close. `resolveFocusedConversation` waits for
+  // conversation data to actually arrive before resolving, and its returned
+  // disposer is cleaned up here if this effect reruns or unmounts first.
   const focusHandledRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const focusConversationId = params.focusConversationId;
     if (!focusConversationId || focusHandledRef.current === focusConversationId) return;
     focusHandledRef.current = focusConversationId;
-    taskView.openConversation(focusConversationId);
     setParams({ focusConversationId: undefined });
+    return taskView.resolveFocusedConversation(focusConversationId);
   }, [params.focusConversationId, taskView, setParams]);
 
   useEffect(() => {
