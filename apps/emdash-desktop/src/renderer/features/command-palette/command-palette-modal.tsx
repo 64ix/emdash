@@ -248,15 +248,23 @@ export function CommandPaletteModal({
     navigate('project', { projectId: item.id });
   };
 
+  // Focused-conversation navigation (ticket #67): carries the target
+  // conversation's id as a navigation parameter rather than opening its tab
+  // directly. Opening it eagerly only works when the task is already
+  // provisioned — provisioning a never-opened task restores the persisted
+  // tab snapshot by wiping and rebuilding the panes, silently discarding a
+  // tab opened before navigating. `ReadyTaskMainPanel` resolves the
+  // parameter (via `WorkspaceViewModel.openConversation`, the shared entry
+  // point) once the task is actually `ready`, on both a fresh and an
+  // already-open task view.
   const handleNavigateToConversation = (item: SearchItem) => {
     if (!item.projectId || !item.taskId) return;
-    getTaskView(item.projectId, item.taskId)?.paneLayout.open(
-      'conversation',
-      { conversationId: item.id },
-      { preview: false }
-    );
     handleClose();
-    navigate('task', { projectId: item.projectId, taskId: item.taskId });
+    navigate('task', {
+      projectId: item.projectId,
+      taskId: item.taskId,
+      focusConversationId: item.id,
+    });
   };
 
   const handleOpenFile = (item: SearchItem) => {

@@ -67,6 +67,9 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   // the panel never opens) — the mock still needs to shadow the real exports.
   getTaskStore: (_projectId: string, taskId: string) => managerTasks.get(taskId),
   getTaskGitWorktreeStore: () => undefined,
+  // Ticket #68's Conversations section reads this to build its rows — always
+  // stubbed here too, for the same reason as `getTaskStore` above.
+  getConversationsForTask: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
@@ -92,6 +95,14 @@ vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
 // the same way `AgentStatusIndicator` already is above.
 vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
   StackedAgentLogos: () => null,
+}));
+
+// `ConversationAgentIcon` (ticket #68's Conversations section rows) reaches
+// the exact same heavy theme/store chain as `StackedAgentLogos` above (via
+// `AgentIcon` -> `PluginIcon` -> `useTheme`) — mocked away wholesale for the
+// same reason.
+vi.mock('@renderer/features/conversations/conversation-agent-icon', () => ({
+  ConversationAgentIcon: () => null,
 }));
 
 // Stage authority (ticket #48): `board_move_blocked` is captured through this

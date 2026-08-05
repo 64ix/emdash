@@ -64,6 +64,8 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   // No task in this suite is provisioned; `TaskGitDiffStats` falls back to
   // the task's cached `workspaceGit` snapshot instead (set per test).
   getTaskGitWorktreeStore: () => undefined,
+  // Ticket #68's Conversations section reads this to build its rows.
+  getConversationsForTask: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
@@ -79,6 +81,13 @@ vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
   StackedAgentLogos: ({ stats }: { stats: Record<string, number> }) => (
     <span data-mock="provider-logos">{Object.entries(stats).length}</span>
   ),
+}));
+
+// `ConversationAgentIcon` (ticket #68's Conversations section rows) reaches
+// the same heavy theme/store chain `StackedAgentLogos` above is mocked away
+// for — see `board-dnd.test.tsx`'s identical mock for the full explanation.
+vi.mock('@renderer/features/conversations/conversation-agent-icon', () => ({
+  ConversationAgentIcon: () => null,
 }));
 
 vi.mock('@renderer/lib/ipc', () => ({

@@ -88,6 +88,8 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   taskAgentStatus: () => 'idle',
   getTaskStore: (_projectId: string, taskId: string) => managerTasks.get(taskId),
   getTaskGitWorktreeStore: () => undefined,
+  // Ticket #68's Conversations section reads this to build its rows.
+  getConversationsForTask: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
@@ -101,6 +103,12 @@ vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
 
 vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
   StackedAgentLogos: () => null,
+}));
+
+// `ConversationAgentIcon` (ticket #68's Conversations section rows) reaches
+// the same heavy chain `StackedAgentLogos` above is mocked away for.
+vi.mock('@renderer/features/conversations/conversation-agent-icon', () => ({
+  ConversationAgentIcon: () => null,
 }));
 
 vi.mock('@renderer/lib/ipc', () => ({

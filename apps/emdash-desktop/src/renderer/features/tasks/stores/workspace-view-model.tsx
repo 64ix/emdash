@@ -1,7 +1,9 @@
 import type { ILifecycle } from '@emdash/shared';
 import { computed, makeAutoObservable, observable, reaction, runInAction } from 'mobx';
 import { ChangesRailViewStore } from '@renderer/features/conversations/acp/changes/changes-rail-store';
+import { conversationTabKind } from '@renderer/features/conversations/conversation-tab-kind';
 import { DefaultConversationSeeder } from '@renderer/features/conversations/default-conversation-seeder';
+import { conversationRegistry } from '@renderer/features/conversations/stores/conversation-registry';
 import type { TaskTabContext } from '@renderer/features/tabs/core/task-tab-context';
 import { getDiffTabManager } from '@renderer/features/tasks/diff-view/stores/diff-tab-manager';
 import { DiffViewStore } from '@renderer/features/tasks/diff-view/stores/diff-view-store';
@@ -363,6 +365,125 @@ export class WorkspaceViewModel implements ILifecycle {
   // -------------------------------------------------------------------------
   // Actions
   // -------------------------------------------------------------------------
+
+  /**
+   * Opens a Conversation by id — the one shared entry point for "land on this
+   * Conversation" (ticket #67). Both command-palette jump sites (the search
+   * result and the Notifications-group entry) and the Task Detail Panel's
+   * conversation row (next ticket) route through this rather than each
+   * hardcoding a tab kind or opening the tab before the task view has
+   * actually navigated there — see the focused-conversation navigation
+   * parameter this method backs, which is what survives provisioning.
+   *
+   * Resolves the surface (ACP chat vs. terminal conversation) from the
+   * conversation's own transport type via `conversationTabKind` — the same
+   * mapper `SidebarConversationsList` already uses — never a hardcoded kind
+   * or a second mapper. Marks the default-conversation seeder consumed
+   * *before* opening (only once the conversation is confirmed to exist), so
+   * a fresh task view whose seeder hasn't fired yet opens only the requested
+   * conversation, never the initial one plus this one. `paneLayout.open`'s
+   * existing single-mount dedup (both conversation tab kinds are keyed on
+   * conversation id) activates an already-open tab instead of duplicating it.
+   *
+   * A conversation id that doesn't resolve on this task is a complete no-op —
+   * the seeder is left untouched, so a fresh task view still opens its normal
+   * default conversation.
+   */
+  openConversation(conversationId: string): void {
+    const conversation = conversationRegistry.get(this.taskId)?.conversations.get(conversationId);
+    if (!conversation) return;
+    this._seeder.markConsumed(true);
+    this.paneLayout.open(
+      conversationTabKind(conversation.data.type),
+      { conversationId },
+      { preview: false }
+    );
+  }
+
+  /**
+   * Resolves the focused-conversation navigation parameter (ticket #67):
+   * tolerant of conversation data for this task still loading, unlike
+   * `openConversation`'s plain synchronous check.
+   *
+   * A task view reached via a fresh provision (never opened before) turns
+   * `ready` — and mounts this resolution — the moment the task store
+   * transitions to provisioned, in the very same tick that acquires a
+   * *non-preloaded* `ConversationManagerStore`: its conversation list is
+   * fetched over IPC and is not yet populated. Calling `openConversation`
+   * directly right there would see an empty registry and silently no-op,
+   * exactly the discard-on-provision race this ticket exists to close —
+   * only one call site removed. Mirrors `DefaultConversationSeeder`'s own
+   * handling of the identical race: waits for the first non-empty
+   * conversation list, then resolves exactly once via `openConversation`
+   * (still a no-op if the id truly doesn't resolve once data has loaded —
+   * "fails safe" holds either way).
+   *
+   * Returns a disposer: callers that may move on before this fires (e.g. a
+   * React effect whose params changed, or unmounting) should call it so a
+   * stale attempt never surfaces later. Also self-registers for cleanup on
+   * `dispose()`, so it never outlives this view model either way.
+   *
+   * Suppresses the seeder *synchronously*, before either the wait below or
+   * the seeder's own reaction can run — not merely once `openConversation`
+   * resolves. The seeder subscribes its own one-shot "first non-empty
+   * conversation list" reaction in the constructor, unconditionally, well
+   * before this method can ever be called; when the never-provisioned race
+   * this method exists for actually happens, both reactions watch the exact
+   * same transition and the seeder's — subscribed first — always runs
+   * first. Marking it consumed only inside `openConversation` (i.e. only
+   * once resolution actually happens) is one reaction-tick too late: the
+   * seeder would already have opened the initial conversation *alongside*
+   * the requested one. Marking it consumed up front closes that window; if
+   * the id turns out not to resolve, the seeder is explicitly reset and
+   * re-run (`markConsumed(false)` + `seed()`) so it still opens its normal
+   * default conversation, matching `openConversation`'s own "seeder left
+   * untouched" contract. If this resolution is cancelled before it ever
+   * settles (the returned disposer), the suppression is undone the same
+   * way, so the seeder's own still-pending reaction can seed normally
+   * whenever conversation data does arrive.
+   */
+  resolveFocusedConversation(conversationId: string): () => void {
+    this._seeder.markConsumed(true);
+    let settled = false;
+
+    const settle = (resolve: () => void): void => {
+      settled = true;
+      resolve();
+    };
+
+    const tryResolve = (): void => {
+      const conversation = conversationRegistry.get(this.taskId)?.conversations.get(conversationId);
+      if (conversation) {
+        settle(() => this.openConversation(conversationId));
+        return;
+      }
+      settle(() => {
+        this._seeder.markConsumed(false);
+        this._seeder.seed();
+      });
+    };
+
+    const conversations = conversationRegistry.get(this.taskId);
+    if (conversations && conversations.conversations.size > 0) {
+      tryResolve();
+      return () => {};
+    }
+
+    const disposeReaction = reaction(
+      () => conversationRegistry.get(this.taskId)?.conversations.size ?? 0,
+      (size) => {
+        if (size === 0) return;
+        disposeReaction();
+        tryResolve();
+      }
+    );
+    const disposer = (): void => {
+      disposeReaction();
+      if (!settled) this._seeder.markConsumed(false);
+    };
+    this._disposers.push(disposer);
+    return disposer;
+  }
 
   activateLastTabOfKind(kind: 'conversation' | 'file' | 'diff' | 'browser' | 'terminal'): void {
     const tabId = [...this.activePane.tabOrder]
