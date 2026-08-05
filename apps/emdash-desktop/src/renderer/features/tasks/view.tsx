@@ -20,6 +20,17 @@ const TaskViewWrapperWithProviders = observer(function TaskViewWrapperWithProvid
   children: ReactNode;
   projectId: string;
   taskId: string;
+  /**
+   * Optional focused-conversation identifier (ticket #67): the command
+   * palette's conversation jumps (and the Task Detail Panel's conversation
+   * row, next ticket) navigate here carrying the target conversation's id so
+   * `ReadyTaskMainPanel` can resolve it once the task is `ready` — the direct
+   * mirror of `ProjectViewWrapperProps.focusTaskId`. Declared here (rather
+   * than consumed) purely so `WrapParams<'task'>` (`view-registry.ts`), which
+   * derives from this component's own props, carries the field; resolution
+   * itself lives in `main-panel.tsx`.
+   */
+  focusConversationId?: string;
 }) {
   const taskStore = getTaskStore(projectId, taskId);
   const kind = taskViewKind(taskStore, projectId);
