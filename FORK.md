@@ -390,6 +390,39 @@ Required final assets are the arm64 DMG and ZIP with both blockmaps and
 finalize job refuses to publish if any one is absent. The workflow never publishes to
 upstream or Cloudflare R2 and does not mutate the version in `package.json`.
 
+### The native-module rebuild, and why v1.2.8 was withdrawn
+
+Both platform jobs pass `--project-root "$GITHUB_WORKSPACE"` to `rebuild-native.ts`. It is
+load-bearing. `@electron/rebuild` needs two facts to agree, and under pnpm's hoisted linker
+no single directory carries both: the `package.json` whose prod dependencies *name* the
+native modules (the app's) and the `node_modules` they physically *live* in (the workspace
+root's, because they are hoisted out of the app). Given only a `buildPath` it uses it for
+both, so the app directory answers "not installed", the workspace root answers "not a
+dependency", and either way it rebuilds nothing, prints success, and exits 0 in about a
+second. Upstream never hits this: `build.ts` packages from a `pnpm deploy --legacy --prod`
+tree where both facts hold at once. The fork workflow cannot use that tree, because it must
+package with the fork config, whose file mappings are relative to the app directory.
+
+A missed rebuild is invisible until the app is launched. electron-builder runs with
+`npmRebuild: false`, so it packages whatever `pnpm install` compiled — and on CI that is the
+runner's *system Node*, because `scripts/postinstall.ts` skips electron-rebuild whenever `CI`
+is set. Electron keeps its own `NODE_MODULE_VERSION` namespace, so the two can never
+coincidentally agree: Electron 40 requires 143 where Node 24 produces 137. The packaged app
+throws on its first `require('better-sqlite3')` and never opens a window.
+
+**Happened once:** v1.2.8 shipped exactly that, and every guard waved it through —
+`codesign --verify` signs a bundle that cannot boot, and `verify-mac.ts` checks for a module
+named `sqlite3`, which this app does not use, so it only *warns* when it is absent. The
+release was published, caught, and reverted to a draft within minutes; the tag and draft were
+deleted and the fix shipped as v1.2.9, a version bump rather than a re-cut of 1.2.8, because
+a client that had already updated would never re-download the same version.
+
+`scripts/release/verify-native-abi.ts` now runs on both platforms after packaging. It is the
+real test rather than a proxy: it runs the *packaged* Electron binary as Node
+(`ELECTRON_RUN_AS_NODE=1`, which reports Electron's module version) and `dlopen`s the packaged
+`.node` files. If they load there, they load in the app. Because it runs after upload, a
+failure leaves an updater-invisible draft rather than a shipped release.
+
 **Shared state with the official app.** The fork build keeps upstream's identity —
 `Emdash.app`, `com.emdash.stable`, data in `~/Library/Application Support/emdash/`.
 So it replaces a `/Applications/Emdash.app` installed from emdash.sh and shares its
