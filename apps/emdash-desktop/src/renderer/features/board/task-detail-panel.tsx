@@ -187,9 +187,8 @@ const PanelConversationRow = observer(function PanelConversationRow({
   // never triggers an export — deferring the import to the actual export
   // gesture keeps that weight out of the board's always-loaded module graph.
   const handleExport = async () => {
-    const { getAcpChatResourceManager } = await import(
-      '@renderer/features/conversations/acp/acp-chat-resource-manager'
-    );
+    const { getAcpChatResourceManager } =
+      await import('@renderer/features/conversations/acp/acp-chat-resource-manager');
     const store = getAcpChatResourceManager(taskId, projectId).get(row.id);
     if (!store) {
       toast({
@@ -258,7 +257,7 @@ const PanelConversationRow = observer(function PanelConversationRow({
           />
         )}
       </span>
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
         {row.tabKind === 'acp-chat' && (
           <Button
             size="icon-sm"
@@ -277,7 +276,12 @@ const PanelConversationRow = observer(function PanelConversationRow({
         >
           <Pencil className="size-3.5" />
         </Button>
-        <Button size="icon-sm" variant="ghost" aria-label="Delete conversation" onClick={handleDelete}>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Delete conversation"
+          onClick={handleDelete}
+        >
           <Trash2 className="size-3.5" />
         </Button>
       </div>

@@ -137,6 +137,21 @@ being displayable (archived, faded by Shipped Fade) closes the panel rather
 than showing stale or missing data. Clicking a Ghost Card opens the same
 panel in ghost mode with the issue's details and an Adopt action.
 
+The panel's Conversations section lists one row per Conversation on the
+task — provider icon, display title, live agent status and last-active
+time — with rename, delete and (for ACP Conversations) transcript export.
+A Conversation Awaiting Input is elevated to the top of the section at
+render time only, never persisted (ADR 0002's rule, applied to
+Conversations); the rest are ordered by most-recent activity. Clicking a
+row provisions the workspace first when the task has never been
+provisioned, then opens the task view with that Conversation active.
+Navigation out of the panel into the task view may carry an optional
+focused conversation, the direct mirror of the board's own optional
+focused task above; an id that no longer resolves (the Conversation was
+deleted) is a no-op — the task view still opens, with nothing focused.
+Not shown in ghost mode — a Ghost Card is not a task and has no
+Conversations.
+
 ## Context Usage
 
 The per-conversation measure of how full one agent session's context
