@@ -343,10 +343,12 @@ that draft, checks the complete asset list, and only then publishes it. A failed
 therefore leaves an updater-invisible draft that can be inspected or retried.
 
 The Windows artifacts are intentionally unsigned until the fork owns a Windows
-code-signing certificate. `electron-builder.fork.windows.config.ts` removes the
-upstream Azure identity as well as its `General Action, Inc.` publisher requirement,
-so the unsigned fork can update itself; Windows SmartScreen will still warn on a
-manual install.
+code-signing certificate. `electron-builder.fork.windows.config.ts` drops the upstream
+Azure identity and sets `verifyUpdateCodeSignature: false`, which is what keeps
+`publisherName: General Action, Inc.` out of the packaged `app-update.yml` — left in,
+`NsisUpdater` would run `verifySignature` against it and refuse every update, since our
+installers carry no signature at all. Windows SmartScreen still warns on a manual
+install.
 
 The macOS job uses the same self-signed identity as local fork builds. Export the
 existing PKCS#12 file into these repository secrets once:
@@ -356,9 +358,17 @@ base64 -i ~/.emdash-fork-signing/signing.p12 | gh secret set FORK_MACOS_CERTIFIC
 gh secret set FORK_MACOS_CERTIFICATE_PASSWORD --repo 64ix/emdash
 ```
 
-The second command prompts for the password without printing it. The workflow imports
+The second command prompts for the password without printing it (the PKCS#12 was
+exported with `-passout pass:emdash-fork`, see the setup above). The workflow imports
 the certificate into an ephemeral keychain, trusts it only for code signing, verifies
 the packaged app, and deletes the keychain even when the job fails.
+
+One deliberate difference from the local setup: on the runner the trust setting goes
+into the **admin** domain under `sudo`
+(`security add-trusted-cert -d -k /Library/Keychains/System.keychain`). Writing the user
+domain — the local recipe — needs an authorization the runner has no GUI to grant, so
+the step would hang and then fail. Trust evaluation reads both domains, so `codesign` is
+equally satisfied, and the runner is discarded afterwards either way.
 
 Dispatch a release only from `fork-main`, using a plain version greater than every
 published fork and upstream stable version:
@@ -366,6 +376,14 @@ published fork and upstream stable version:
 ```bash
 gh workflow run release-fork.yml --repo 64ix/emdash --ref fork-main -f version=1.2.8
 ```
+
+Both platform jobs run `scripts/release/verify-fork-feed.ts` against the `app-update.yml`
+inside the bundle they just packaged. That file is written at packaging time and the app
+has no `setFeedURL`, so an artifact built with the upstream config would offer upstream's
+next stable release and replace the fork's features on install, reporting nothing
+anywhere. Asserting on the embedded manifest — not on the config we meant to pass —
+catches a mistyped `--config`, a fork config spread from the wrong base, and a publisher
+name electron-builder resolved on its own.
 
 Required final assets are the arm64 DMG and ZIP with both blockmaps and
 `latest-mac.yml`, plus the x64 NSIS EXE, MSI, EXE blockmap, and `latest.yml`. The

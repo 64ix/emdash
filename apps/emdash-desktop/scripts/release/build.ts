@@ -19,7 +19,6 @@ const { values } = parseArgs({
     targets: { type: 'string' },
     config: { type: 'string', default: 'electron-builder.config.ts' },
     channel: { type: 'string', default: 'stable' },
-    version: { type: 'string' },
   },
   strict: true,
 });
@@ -27,7 +26,7 @@ const { values } = parseArgs({
 const platform = values.platform;
 if (!platform || !['mac', 'linux', 'win'].includes(platform)) {
   fail(
-    'Usage: build.ts --platform mac|linux|win [--arch arm64|x64|both] [--targets dmg,zip] [--config electron-builder.config.ts] [--channel stable|canary] [--version x.y.z]'
+    'Usage: build.ts --platform mac|linux|win [--arch arm64|x64|both] [--targets dmg,zip] [--config electron-builder.config.ts] [--channel stable|canary]'
   );
 }
 
@@ -59,7 +58,7 @@ const archMap: Record<string, Arch> = {
 
 const ebPlatform = platformMap[platform];
 
-const { version: overrideVersion, tag, isCanary } = resolveReleaseVersion(channel, values.version);
+const { version: overrideVersion, tag, isCanary } = resolveReleaseVersion(channel);
 if (isCanary) {
   info(`Canary build: packaging as version ${overrideVersion} (tag ${tag})`);
 }
@@ -103,7 +102,7 @@ try {
       ...structuredClone(baseConfig),
       electronVersion,
       npmRebuild: false,
-      ...(isCanary || values.version ? { extraMetadata: { version: overrideVersion } } : {}),
+      ...(isCanary ? { extraMetadata: { version: overrideVersion } } : {}),
     };
 
     await electronBuild({
