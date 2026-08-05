@@ -1071,4 +1071,69 @@ describe('WorkspaceViewModel.resolveFocusedConversation', () => {
 
     viewModel.dispose();
   });
+
+  // Regression coverage: the seeder's own "first non-empty conversation list"
+  // reaction is subscribed unconditionally in the constructor, before this
+  // method can ever be called — so without an immediate, synchronous
+  // suppression here, a batch conversation-list arrival (the exact
+  // never-provisioned race this method exists for) let the seeder's reaction
+  // win the race and seed the initial conversation *in addition to* the one
+  // requested, since `openConversation` only marked the seeder consumed one
+  // reaction-tick too late.
+  it('opens only the requested conversation, not the initial one too, when both arrive together for a never-provisioned task', async () => {
+    const conversations = conversationRegistry.acquire('task-1', 'project-1', []);
+    const viewModel = makeViewModel();
+
+    // Registered before any conversation data exists — the never-provisioned race.
+    viewModel.resolveFocusedConversation('conversation-2');
+
+    // Both conversations arrive in the same batch, exactly as one
+    // conversations.getForTask response would populate them.
+    runInAction(() => {
+      addConversation(conversations, { id: 'conversation-1', isInitialConversation: true });
+      addConversation(conversations, { id: 'conversation-2', title: 'Conversation 2' });
+    });
+    await Promise.resolve();
+
+    expect(conversationTabIds(viewModel)).toEqual(['conversation-2']);
+
+    viewModel.dispose();
+  });
+
+  it('falls back to seeding the initial conversation when the requested id truly does not resolve, arriving alongside it', async () => {
+    const conversations = conversationRegistry.acquire('task-1', 'project-1', []);
+    const viewModel = makeViewModel();
+
+    viewModel.resolveFocusedConversation('does-not-exist');
+
+    runInAction(() => {
+      addConversation(conversations, { id: 'conversation-1', isInitialConversation: true });
+    });
+    await Promise.resolve();
+
+    // The seeder is not left permanently suppressed by a resolution that
+    // fails — it still opens the task's normal default conversation.
+    expect(conversationTabIds(viewModel)).toEqual(['conversation-1']);
+
+    viewModel.dispose();
+  });
+
+  it('lets the seeder open the initial conversation normally after this resolution is cancelled before data arrives', async () => {
+    const conversations = conversationRegistry.acquire('task-1', 'project-1', []);
+    const viewModel = makeViewModel();
+
+    const cancel = viewModel.resolveFocusedConversation('conversation-2');
+    cancel();
+
+    runInAction(() => {
+      addConversation(conversations, { id: 'conversation-1', isInitialConversation: true });
+    });
+    await Promise.resolve();
+
+    // A cancelled resolution must not leave the seeder permanently
+    // suppressed — the task view still opens its normal default conversation.
+    expect(conversationTabIds(viewModel)).toEqual(['conversation-1']);
+
+    viewModel.dispose();
+  });
 });

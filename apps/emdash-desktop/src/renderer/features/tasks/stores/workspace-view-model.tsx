@@ -422,21 +422,65 @@ export class WorkspaceViewModel implements ILifecycle {
    * React effect whose params changed, or unmounting) should call it so a
    * stale attempt never surfaces later. Also self-registers for cleanup on
    * `dispose()`, so it never outlives this view model either way.
+   *
+   * Suppresses the seeder *synchronously*, before either the wait below or
+   * the seeder's own reaction can run — not merely once `openConversation`
+   * resolves. The seeder subscribes its own one-shot "first non-empty
+   * conversation list" reaction in the constructor, unconditionally, well
+   * before this method can ever be called; when the never-provisioned race
+   * this method exists for actually happens, both reactions watch the exact
+   * same transition and the seeder's — subscribed first — always runs
+   * first. Marking it consumed only inside `openConversation` (i.e. only
+   * once resolution actually happens) is one reaction-tick too late: the
+   * seeder would already have opened the initial conversation *alongside*
+   * the requested one. Marking it consumed up front closes that window; if
+   * the id turns out not to resolve, the seeder is explicitly reset and
+   * re-run (`markConsumed(false)` + `seed()`) so it still opens its normal
+   * default conversation, matching `openConversation`'s own "seeder left
+   * untouched" contract. If this resolution is cancelled before it ever
+   * settles (the returned disposer), the suppression is undone the same
+   * way, so the seeder's own still-pending reaction can seed normally
+   * whenever conversation data does arrive.
    */
   resolveFocusedConversation(conversationId: string): () => void {
+    this._seeder.markConsumed(true);
+    let settled = false;
+
+    const settle = (resolve: () => void): void => {
+      settled = true;
+      resolve();
+    };
+
+    const tryResolve = (): void => {
+      const conversation = conversationRegistry.get(this.taskId)?.conversations.get(conversationId);
+      if (conversation) {
+        settle(() => this.openConversation(conversationId));
+        return;
+      }
+      settle(() => {
+        this._seeder.markConsumed(false);
+        this._seeder.seed();
+      });
+    };
+
     const conversations = conversationRegistry.get(this.taskId);
     if (conversations && conversations.conversations.size > 0) {
-      this.openConversation(conversationId);
+      tryResolve();
       return () => {};
     }
-    const disposer = reaction(
+
+    const disposeReaction = reaction(
       () => conversationRegistry.get(this.taskId)?.conversations.size ?? 0,
       (size) => {
         if (size === 0) return;
-        disposer();
-        this.openConversation(conversationId);
+        disposeReaction();
+        tryResolve();
       }
     );
+    const disposer = (): void => {
+      disposeReaction();
+      if (!settled) this._seeder.markConsumed(false);
+    };
     this._disposers.push(disposer);
     return disposer;
   }
