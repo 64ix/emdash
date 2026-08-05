@@ -23,14 +23,18 @@ describe('Windows command resolution', () => {
   it('excludes extensionless binaries from all results for a bare Windows command', async () => {
     const ctx = executionContext(`${unixCodex}\r\n${windowsCodex}\r\n`);
 
-    await expect(resolveAllCommandPaths('codex', ctx, 'windows')).resolves.toEqual([
-      windowsCodex,
-    ]);
+    await expect(resolveAllCommandPaths('codex', ctx, 'windows')).resolves.toEqual([windowsCodex]);
   });
 
   it('preserves an explicitly requested extensionless path', async () => {
     const ctx = executionContext(`${unixCodex}\r\n`);
 
     await expect(resolveCommandPath(unixCodex, ctx, 'windows')).resolves.toBe(unixCodex);
+  });
+
+  it('preserves an extensionless result when no Windows executable alternative exists', async () => {
+    const ctx = executionContext('/usr/local/bin/codex\n');
+
+    await expect(resolveCommandPath('codex', ctx, 'windows')).resolves.toBe('/usr/local/bin/codex');
   });
 });

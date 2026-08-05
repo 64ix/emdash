@@ -31,9 +31,10 @@ function parseResolvedCommandPaths(command: string, stdout: string, platform: Pl
   // `where` includes exact extensionless matches before PATHEXT matches. Packaged apps may
   // contain Unix binaries alongside their Windows executable, so only retain file types that
   // Node can spawn directly when resolving a bare command name.
-  return paths.filter((path) =>
+  const executablePaths = paths.filter((path) =>
     WINDOWS_EXECUTABLE_EXTENSIONS.has(win32.extname(path).toLowerCase())
   );
+  return executablePaths.length > 0 ? executablePaths : paths;
 }
 
 /**
