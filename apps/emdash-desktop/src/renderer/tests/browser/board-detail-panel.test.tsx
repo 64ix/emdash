@@ -66,6 +66,13 @@ type MockStore = {
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
   setPinned: ReturnType<typeof vi.fn>;
+  // `openTaskView`'s own provision-then-navigate check
+  // (`board-main-panel.tsx`): `state === 'unprovisioned' && phase === 'idle'`.
+  // Defaulted to `'provisioned'`/`null` by `makeStore` below — most tests
+  // exercise an already-provisioned task; the "never-provisioned" round trip
+  // sets these explicitly.
+  state?: 'unregistered' | 'unprovisioned' | 'provisioned';
+  phase?: string | null;
 };
 
 const managerTasks = new Map<string, MockStore>();
@@ -264,7 +271,11 @@ vi.mock('@renderer/lib/ipc', () => ({
 
 import { BoardMainPanel } from '@renderer/features/board/board-main-panel';
 
-function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): MockStore {
+function makeStore(
+  id: string,
+  overrides: Partial<MockStore['data']> = {},
+  storeOverrides: Pick<MockStore, 'state' | 'phase'> = { state: 'provisioned', phase: null }
+): MockStore {
   return {
     data: {
       id,
@@ -278,6 +289,7 @@ function makeStore(id: string, overrides: Partial<MockStore['data']> = {}): Mock
     conversationStats: {},
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
     setPinned: vi.fn().mockResolvedValue(undefined),
+    ...storeOverrides,
   };
 }
 
@@ -916,13 +928,32 @@ describe('Task Detail Panel — Conversations section (ticket #68)', () => {
     });
   });
 
-  // The provision-then-navigate behavior itself (never-provisioned task ->
-  // `provisionTask` call) is not re-tested here: `handleOpenConversation`
-  // delegates to the exact same `openTaskView` helper `handleOpenTask` (the
-  // panel's "Open task" button and the card's hover arrow) already uses —
-  // one implementation, not two — and this file's `MockStore` fixture has no
-  // reason to model `state`/`phase` beyond what those existing call sites
-  // already exercise.
+  it('clicking a row on a never-provisioned task provisions the workspace first, then still navigates to the requested conversation', async () => {
+    const a = makeStore('card-a', {}, { state: 'unprovisioned', phase: 'idle' });
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([makeConversation({ id: 'conv-1' })])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    click(conversationRow('conv-1'));
+    await settle();
+
+    // Same `openTaskView` helper the "Open task" button and the card's hover
+    // arrow already share (`board-main-panel.tsx`): provisioning fires ahead
+    // of navigation, never in place of it.
+    expect(mocks.provisionTask).toHaveBeenCalledWith('card-a');
+    expect(mocks.navigate).toHaveBeenCalledWith('task', {
+      projectId: 'p1',
+      taskId: 'card-a',
+      focusConversationId: 'conv-1',
+    });
+  });
+
   it('a keyboard Enter on a row activates it, same as a click', async () => {
     const a = makeStore('card-a');
     managerTasks.set(a.data.id, a);
