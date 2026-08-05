@@ -53,7 +53,7 @@ export const UpdateCard = observer(function UpdateCard(): React.JSX.Element {
       {update.state.status === 'downloading' && downloadProgress && (
         <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
           <div
-            className="bg-primary h-full transition-all duration-300 ease-out"
+            className="h-full bg-primary transition-all duration-300 ease-out"
             style={{ width: `${downloadProgress.percent || 0}%` }}
           />
         </div>

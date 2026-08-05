@@ -284,7 +284,7 @@ export function GithubDeviceFlowModal({ onSuccess, onClose, onError }: GithubDev
               type="button"
               onClick={() => copyToClipboard(userCode)}
               disabled={!userCode}
-              className="focus-visible:border-ring focus-visible:ring-ring/50 rounded-lg border border-border bg-background/60 p-4 text-left transition-colors hover:border-border-1 hover:bg-background-1 focus-visible:ring-3 focus-visible:outline-none disabled:pointer-events-none"
+              className="rounded-lg border border-border bg-background/60 p-4 text-left transition-colors hover:border-border-1 hover:bg-background-1 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:pointer-events-none"
               aria-label={copied ? 'Code copied' : 'Copy authorization code'}
             >
               {userCode ? (

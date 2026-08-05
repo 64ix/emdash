@@ -162,7 +162,7 @@ const IntegrationRow: React.FC<IntegrationRowProps> = ({
           <button
             type="button"
             onClick={onNameClick}
-            className="group focus-visible:ring-ring flex items-center gap-1 text-sm font-medium text-foreground transition focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
+            className="group flex items-center gap-1 text-sm font-medium text-foreground transition focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
           >
             <span>{name}</span>
             <span className="text-muted-foreground text-xs transition group-hover:text-foreground/80">
