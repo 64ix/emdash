@@ -39,13 +39,6 @@ import { rpc } from '@renderer/lib/ipc';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@renderer/lib/ui/context-menu';
 import { RelativeTime } from '@renderer/lib/ui/relative-time';
 import { MAX_CONVERSATION_TITLE_LENGTH } from '@shared/core/conversations/conversations';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
@@ -114,17 +107,22 @@ function SpecDerivedPrRow({ pr }: { pr: StageHoldingPr }) {
 
 /**
  * A single Conversations section row (ticket #68): provider icon, display
- * title (inline-editable), live agent status/last-active time, and — behind
- * a context menu, mirroring the task view's own conversations sidebar
- * (`SidebarConversationsList`) verbatim — rename, export (ACP only) and
- * delete. Clicking the row (or Enter/Space while focused) calls `onOpen`,
- * which the panel wires to the same provision-then-navigate handler the
- * "Open task" button already uses, carrying this conversation's id. A row
- * whose Conversation was deleted between render and click is not specially
- * handled here: `onOpen` still fires with that (now-stale) id, and the
- * shared navigation/open-conversation machinery (ticket #67) already treats
- * an id that doesn't resolve as a complete, safe no-op — the task view just
- * opens with nothing focused.
+ * title (inline-editable), live agent status/last-active time, and the same
+ * management actions the task view's own conversations sidebar
+ * (`SidebarConversationsList`) offers — rename, delete (behind a
+ * confirmation) and, for ACP conversations, transcript export — exposed here
+ * as small icon buttons (mirroring this panel's own header convention:
+ * `aria-label`led icon buttons, e.g. "Rename task") rather than the
+ * sidebar's right-click context menu, which needs real pointer geometry a
+ * fixed-width inspector row doesn't have room for. Clicking the row body (or
+ * Enter/Space while it is focused) calls `onOpen`, which the panel wires to
+ * the same provision-then-navigate handler the "Open task" button already
+ * uses, carrying this conversation's id. A row whose Conversation was
+ * deleted between render and click is not specially handled here: `onOpen`
+ * still fires with that (now-stale) id, and the shared navigation/open-
+ * conversation machinery (ticket #67) already treats an id that doesn't
+ * resolve as a complete, safe no-op — the task view just opens with nothing
+ * focused.
  */
 const PanelConversationRow = observer(function PanelConversationRow({
   row,
@@ -188,9 +186,10 @@ const PanelConversationRow = observer(function PanelConversationRow({
   // would otherwise have to shadow just to render an inspector panel that
   // never triggers an export — deferring the import to the actual export
   // gesture keeps that weight out of the board's always-loaded module graph.
-  const handleExport = async (kind: 'parsed' | 'raw') => {
-    const { getAcpChatResourceManager } =
-      await import('@renderer/features/conversations/acp/acp-chat-resource-manager');
+  const handleExport = async () => {
+    const { getAcpChatResourceManager } = await import(
+      '@renderer/features/conversations/acp/acp-chat-resource-manager'
+    );
     const store = getAcpChatResourceManager(taskId, projectId).get(row.id);
     if (!store) {
       toast({
@@ -200,89 +199,89 @@ const PanelConversationRow = observer(function PanelConversationRow({
       });
       return;
     }
-    store.exportTranscript(kind);
+    store.exportTranscript('parsed');
   };
 
+  const displayTitle = isEditing ? row.rawTitle : row.displayTitle;
+
   return (
-    <ContextMenu>
-      <ContextMenuTrigger>
-        <div
-          data-conversation-row={row.id}
-          role="button"
-          tabIndex={0}
-          onClick={() => onOpen(row.id)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              onOpen(row.id);
-            }
-          }}
-          className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm text-foreground-muted transition-colors hover:bg-background-1 hover:text-foreground"
-        >
-          <ConversationAgentIcon
-            providerId={row.providerId}
-            isAcp={row.tabKind === 'acp-chat'}
-            size={16}
-            className="size-4"
+    <div className="group flex w-full items-center gap-1 rounded-md px-1.5 py-1 hover:bg-background-1">
+      <div
+        data-conversation-row={row.id}
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen(row.id)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onOpen(row.id);
+          }
+        }}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm text-foreground-muted"
+        title={displayTitle}
+      >
+        <ConversationAgentIcon
+          providerId={row.providerId}
+          isAcp={row.tabKind === 'acp-chat'}
+          size={16}
+          className="size-4 shrink-0"
+        />
+        {isEditing ? (
+          <input
+            ref={handleRenameInputRef}
+            className="min-w-0 flex-1 rounded bg-background-1 px-1.5 py-0.5 text-sm text-foreground ring-1 ring-foreground/20 outline-none focus:ring-foreground/40"
+            defaultValue={row.rawTitle}
+            maxLength={MAX_CONVERSATION_TITLE_LENGTH}
+            onClick={(event) => event.stopPropagation()}
+            onBlur={(event) => commitRename(event.target.value)}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Enter') commitRename(event.currentTarget.value);
+              else if (event.key === 'Escape') {
+                committedRef.current = true;
+                setIsEditing(false);
+              }
+            }}
           />
-          {isEditing ? (
-            <input
-              ref={handleRenameInputRef}
-              className="min-w-0 flex-1 rounded bg-background-1 px-1.5 py-0.5 text-sm text-foreground ring-1 ring-foreground/20 outline-none focus:ring-foreground/40"
-              defaultValue={row.rawTitle}
-              maxLength={MAX_CONVERSATION_TITLE_LENGTH}
-              onClick={(event) => event.stopPropagation()}
-              onBlur={(event) => commitRename(event.target.value)}
-              onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === 'Enter') commitRename(event.currentTarget.value);
-                else if (event.key === 'Escape') {
-                  committedRef.current = true;
-                  setIsEditing(false);
-                }
-              }}
-            />
-          ) : (
-            <span className="min-w-0 flex-1 truncate">{row.displayTitle}</span>
-          )}
-          <span className="shrink-0">
-            {row.indicatorStatus ? (
-              <AgentStatusIndicator status={row.indicatorStatus} disableTooltip />
-            ) : (
-              <RelativeTime
-                value={row.lastInteractedAt ?? ''}
-                className="flex h-full items-center pr-1 font-sans text-xs text-foreground-passive"
-                compact
-              />
-            )}
-          </span>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent finalFocus={false}>
-        <ContextMenuItem onClick={handleRename}>
-          <Pencil className="size-4" />
-          Rename
-        </ContextMenuItem>
-        {row.tabKind === 'acp-chat' && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => void handleExport('parsed')}>
-              <Download className="size-4" />
-              Export transcript
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => void handleExport('raw')}>
-              <Download className="size-4" />
-              Export raw ACP log
-            </ContextMenuItem>
-          </>
+        ) : (
+          <span className="min-w-0 flex-1 truncate">{row.displayTitle}</span>
         )}
-        <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onClick={handleDelete}>
-          <Trash2 className="size-4" />
-          Delete
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+      </div>
+      <span className="shrink-0">
+        {row.indicatorStatus ? (
+          <AgentStatusIndicator status={row.indicatorStatus} disableTooltip />
+        ) : (
+          <RelativeTime
+            value={row.lastInteractedAt ?? ''}
+            className="flex h-full items-center pr-1 font-sans text-xs text-foreground-passive"
+            compact
+          />
+        )}
+      </span>
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
+        {row.tabKind === 'acp-chat' && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Export transcript"
+            onClick={() => void handleExport()}
+          >
+            <Download className="size-3.5" />
+          </Button>
+        )}
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Rename conversation"
+          onClick={handleRename}
+        >
+          <Pencil className="size-3.5" />
+        </Button>
+        <Button size="icon-sm" variant="ghost" aria-label="Delete conversation" onClick={handleDelete}>
+          <Trash2 className="size-3.5" />
+        </Button>
+      </div>
+    </div>
   );
 });
 

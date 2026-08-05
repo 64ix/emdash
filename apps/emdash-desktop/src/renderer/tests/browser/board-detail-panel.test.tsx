@@ -72,6 +72,57 @@ const managerTasks = new Map<string, MockStore>();
 /** Branch names by task id, read by the mocked `getTaskGitWorktreeStore` selector. */
 const branchByTaskId = new Map<string, string>();
 
+// ── Conversations section fixtures (ticket #68) ────────────────────────────
+
+type MockConversation = {
+  data: {
+    id: string;
+    providerId: string;
+    title: string;
+    type?: 'acp' | 'pty';
+    lastInteractedAt: string | null;
+  };
+  indicatorStatus: string | null;
+};
+
+function makeConversation(
+  overrides: Partial<MockConversation['data']> = {},
+  indicatorStatus: string | null = null
+): MockConversation {
+  return {
+    data: {
+      id: 'conv-1',
+      providerId: 'claude',
+      title: 'claude (1)',
+      type: 'acp',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    },
+    indicatorStatus,
+  };
+}
+
+type MockConversationManager = {
+  // A real MobX observable map — plain-Map mutations wouldn't be seen by the
+  // panel's `observer`-wrapped components, so "created/deleted while open"
+  // tests below would never re-render (see `board-focused-navigation-round-
+  // trip.test.tsx`'s `makeLiveStore` for the same reasoning applied to a task).
+  conversations: ReturnType<typeof observable.map<string, MockConversation>>;
+  renameConversation: ReturnType<typeof vi.fn>;
+  deleteConversation: ReturnType<typeof vi.fn>;
+};
+
+function makeConversationManager(conversations: MockConversation[] = []): MockConversationManager {
+  return {
+    conversations: observable.map(conversations.map((c) => [c.data.id, c])),
+    renameConversation: vi.fn().mockResolvedValue(undefined),
+    deleteConversation: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+/** Conversation managers by task id, read by the mocked `getConversationsForTask` selector. */
+const conversationManagersByTaskId = new Map<string, MockConversationManager>();
+
 const DECLARATIVE_AUTHORITY: TaskStageAuthority = {
   holdingPr: null,
   isCurrentStageGithubProven: false,
@@ -137,6 +188,10 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
     const branchName = branchByTaskId.get(taskId);
     return branchName ? { branchName } : undefined;
   },
+  // Ticket #68's Conversations section reads this to build its rows — the
+  // same per-task conversation manager registry `taskAgentStatus` already
+  // reads through in the real app.
+  getConversationsForTask: (taskId: string) => conversationManagersByTaskId.get(taskId),
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
@@ -160,6 +215,18 @@ vi.mock('@renderer/lib/components/agent-status-indicator', () => ({
 // same way `AgentStatusIndicator` already is above.
 vi.mock('@renderer/lib/components/stacked-agent-logos', () => ({
   StackedAgentLogos: () => null,
+}));
+
+// `ConversationAgentIcon` (ticket #68's Conversations section rows) reaches
+// the same heavy theme/store chain `StackedAgentLogos` above is mocked away
+// for — rendered here as a queryable marker (rather than `null`, like
+// `board-card-hierarchy.test.tsx`'s own `StackedAgentLogos` mock) so the
+// row-rendering tests below can assert the panel actually asked it to show
+// the right provider and transport.
+vi.mock('@renderer/features/conversations/conversation-agent-icon', () => ({
+  ConversationAgentIcon: ({ providerId, isAcp }: { providerId: string; isAcp: boolean }) => (
+    <span data-mock="conversation-icon" data-provider-id={providerId} data-is-acp={String(isAcp)} />
+  ),
 }));
 
 // Ticket #49: `board_inspector_opened` — stub the whole client the same way
@@ -342,6 +409,7 @@ function setupDom() {
     style.remove();
     managerTasks.clear();
     branchByTaskId.clear();
+    conversationManagersByTaskId.clear();
     vi.clearAllMocks();
     mocks.focusTaskId = undefined;
   });
@@ -400,6 +468,28 @@ function panelText(): string {
 
 function panelSection(id: string): Element | null {
   return host.querySelector(`[data-panel-section="${id}"]`);
+}
+
+/** A Conversations section row (ticket #68), by conversation id. */
+function conversationRow(conversationId: string): HTMLElement {
+  return host.querySelector(`[data-conversation-row="${conversationId}"]`) as HTMLElement;
+}
+
+/** Every rendered Conversations section row, in DOM order. */
+function conversationRowIds(): string[] {
+  return Array.from(host.querySelectorAll('[data-conversation-row]')).map(
+    (el) => el.getAttribute('data-conversation-row') ?? ''
+  );
+}
+
+/** A row's own management-action icon button (ticket #68), scoped to that
+ * row so same-named buttons on other rows never collide. */
+function conversationRowActionButton(
+  conversationId: string,
+  label: 'Rename conversation' | 'Delete conversation' | 'Export transcript'
+): HTMLElement {
+  const row = conversationRow(conversationId).parentElement as HTMLElement;
+  return row.querySelector(`button[aria-label="${label}"]`) as HTMLElement;
 }
 
 function stageSelect(): HTMLSelectElement {
@@ -704,7 +794,11 @@ describe('Task Detail Panel — vitals (ticket #41)', () => {
     expect(panelText()).not.toContain('Not provisioned yet');
   });
 
-  it('shows the total session count across providers', async () => {
+  // Ticket #68: the session-count line moved out of Vitals entirely — it now
+  // labels the Conversations section header (covered below), not a second,
+  // redundant line here. This assertion is the deliberate edit the spec
+  // calls out, not a regression.
+  it('no longer shows a session-count line in Vitals', async () => {
     const a = makeStore('card-a');
     a.conversationStats = { claude: 2, codex: 1 };
     managerTasks.set(a.data.id, a);
@@ -713,7 +807,307 @@ describe('Task Detail Panel — vitals (ticket #41)', () => {
     click(cardEl('card-a'));
     await settle();
 
-    expect(panelText()).toContain('3 sessions');
+    expect(panelText()).not.toContain('sessions');
+    expect(panelText()).not.toContain('session');
+  });
+});
+
+// Ticket #68: the Conversations section. Reads from the mocked
+// `getConversationsForTask` selector (`conversationManagersByTaskId`) — the
+// same per-task conversation manager registry the task-level status dot
+// already reads through `taskAgentStatus`, never a new RPC. Rename/delete/
+// export delegate to the manager and modal paths already covered where they
+// live (the module's own test file, `SidebarConversationsList`'s own
+// coverage) — these tests only assert the row wires to them.
+describe('Task Detail Panel — Conversations section (ticket #68)', () => {
+  setupDom();
+
+  it('shows an explicit empty state for a task with no conversations, not a hidden section', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelSection('conversations')).not.toBeNull();
+    expect(panelText()).toContain('Conversations (0)');
+    expect(panelText()).toContain('No conversations yet');
+  });
+
+  it('renders one row per conversation with provider icon, title, status and last-active time, and labels the header with the count', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([
+        makeConversation({
+          id: 'conv-1',
+          providerId: 'claude',
+          title: 'Spec writing',
+          type: 'acp',
+        }),
+        makeConversation(
+          { id: 'conv-2', providerId: 'codex', title: 'codex (1)', type: 'pty' },
+          'working'
+        ),
+      ])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelText()).toContain('Conversations (2)');
+    expect(conversationRowIds()).toEqual(['conv-1', 'conv-2']);
+
+    const icon1 = conversationRow('conv-1').querySelector('[data-mock="conversation-icon"]')!;
+    expect(icon1.getAttribute('data-provider-id')).toBe('claude');
+    expect(icon1.getAttribute('data-is-acp')).toBe('true');
+    expect(conversationRow('conv-1').textContent).toContain('Spec writing');
+
+    const icon2 = conversationRow('conv-2').querySelector('[data-mock="conversation-icon"]')!;
+    expect(icon2.getAttribute('data-provider-id')).toBe('codex');
+    expect(icon2.getAttribute('data-is-acp')).toBe('false');
+    // A conversation with a live indicator status shows it (`AgentStatusIndicator`
+    // is mocked to `null`, so its presence is asserted structurally: no
+    // `RelativeTime` rendered for that row instead).
+    expect(conversationRow('conv-2').parentElement?.querySelector('time')).toBeNull();
+  });
+
+  it('falls back to the default provider title for display the same way the sidebar does', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([
+        makeConversation({ id: 'conv-1', providerId: 'claude', title: 'claude (1)' }),
+      ])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    // `formatConversationTitleForDisplay` is real (unmocked) here — the panel
+    // must produce the exact same capitalized "Claude (1)" the sidebar shows.
+    expect(conversationRow('conv-1').textContent).toContain('Claude (1)');
+  });
+
+  it('clicking a row navigates to the task view with that conversation as the focused conversation', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([makeConversation({ id: 'conv-1' })])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    click(conversationRow('conv-1'));
+    await settle();
+
+    expect(mocks.navigate).toHaveBeenCalledWith('task', {
+      projectId: 'p1',
+      taskId: 'card-a',
+      focusConversationId: 'conv-1',
+    });
+  });
+
+  // The provision-then-navigate behavior itself (never-provisioned task ->
+  // `provisionTask` call) is not re-tested here: `handleOpenConversation`
+  // delegates to the exact same `openTaskView` helper `handleOpenTask` (the
+  // panel's "Open task" button and the card's hover arrow) already uses —
+  // one implementation, not two — and this file's `MockStore` fixture has no
+  // reason to model `state`/`phase` beyond what those existing call sites
+  // already exercise.
+  it('a keyboard Enter on a row activates it, same as a click', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([makeConversation({ id: 'conv-1' })])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    conversationRow('conv-1').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(mocks.navigate).toHaveBeenCalledWith('task', {
+      projectId: 'p1',
+      taskId: 'card-a',
+      focusConversationId: 'conv-1',
+    });
+  });
+
+  it('a keyboard Space on a row activates it too', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([makeConversation({ id: 'conv-1' })])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    conversationRow('conv-1').dispatchEvent(
+      new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    );
+    await settle();
+
+    expect(mocks.navigate).toHaveBeenCalledWith('task', {
+      projectId: 'p1',
+      taskId: 'card-a',
+      focusConversationId: 'conv-1',
+    });
+  });
+
+  it('Escape still closes the panel while a conversation row is focused', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([makeConversation({ id: 'conv-1' })])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelHeading()).toBe('card-a');
+
+    conversationRow('conv-1').focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+
+    expect(panelHeading()).toBeNull();
+  });
+
+  it('renames a conversation through the conversation manager, on Enter', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    const manager = makeConversationManager([
+      makeConversation({ id: 'conv-1', title: 'Original title' }),
+    ]);
+    conversationManagersByTaskId.set('card-a', manager);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    click(conversationRowActionButton('conv-1', 'Rename conversation'));
+    await settle(6);
+
+    const input = conversationRow('conv-1').parentElement!.querySelector(
+      'input'
+    ) as HTMLInputElement;
+    expect(input).not.toBeNull();
+    input.value = 'New title';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle();
+
+    expect(manager.renameConversation).toHaveBeenCalledWith('conv-1', 'New title');
+  });
+
+  it('deletes a conversation through the confirm-action modal, and the row disappears', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    const manager = makeConversationManager([makeConversation({ id: 'conv-1' })]);
+    conversationManagersByTaskId.set('card-a', manager);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(conversationRowIds()).toEqual(['conv-1']);
+
+    click(conversationRowActionButton('conv-1', 'Delete conversation'));
+    await settle();
+
+    expect(modalStore.activeModalId).toBe('confirmActionModal');
+    expect(modalStore.activeModalArgs).toMatchObject({ variant: 'destructive' });
+
+    // No `ModalHost` is mounted in this harness (mirrors the existing "Rename
+    // opens the rename modal" test above) — invoking the captured
+    // `onSuccess` directly simulates the user confirming in the real dialog.
+    (modalStore.activeModalArgs!.onSuccess as () => void)();
+    runInAction(() => manager.conversations.delete('conv-1'));
+    await settle();
+
+    expect(manager.deleteConversation).toHaveBeenCalledWith('conv-1');
+    expect(conversationRowIds()).toEqual([]);
+  });
+
+  it('offers transcript export for an ACP conversation, but not for a legacy (pty) one', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([
+        makeConversation({ id: 'conv-acp', type: 'acp' }),
+        makeConversation({ id: 'conv-pty', type: 'pty' }),
+      ])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(conversationRowActionButton('conv-acp', 'Export transcript')).toBeTruthy();
+    expect(conversationRowActionButton('conv-pty', 'Export transcript')).toBeFalsy();
+  });
+
+  it('the section reflects a conversation created while the panel is open', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    const manager = makeConversationManager([makeConversation({ id: 'conv-1' })]);
+    conversationManagersByTaskId.set('card-a', manager);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(conversationRowIds()).toEqual(['conv-1']);
+
+    runInAction(() => manager.conversations.set('conv-2', makeConversation({ id: 'conv-2' })));
+    await settle();
+
+    expect(conversationRowIds().sort()).toEqual(['conv-1', 'conv-2']);
+  });
+
+  it('does not render the Conversations section in ghost mode', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+
+    expect(panelHeading()).toBe(ghostCard.issue.title);
+    expect(panelSection('conversations')).toBeNull();
+  });
+
+  it('opening the panel provisions nothing, on a task with conversations or without', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    conversationManagersByTaskId.set(
+      'card-a',
+      makeConversationManager([makeConversation({ id: 'conv-1' })])
+    );
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(mocks.provisionTask).not.toHaveBeenCalled();
+    expect(mocks.archiveTask).not.toHaveBeenCalled();
   });
 });
 
