@@ -1,4 +1,8 @@
+import type { AgentProviderId } from '@emdash/plugins/agents';
+import { conversationTabKind } from '@renderer/features/conversations/conversation-tab-kind';
+import { formatConversationTitleForDisplay } from '@renderer/features/conversations/conversation-title-utils';
 import type { AgentStatus } from '@shared/core/agents/agentEvents';
+import type { ConversationType } from '@shared/core/conversations/conversations';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssue, LinkedIssueRole, LinkedIssueRoles } from '@shared/core/linked-issue';
 import {
@@ -50,6 +54,95 @@ export function deriveTaskVitals(
     totalSessionCount: Object.values(input.sessionCounts).reduce((a, b) => a + b, 0),
     agentStatus: input.agentStatus,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Conversations (ticket #68)
+// ---------------------------------------------------------------------------
+
+/**
+ * The minimal shape the Conversations section derives a row from — the same
+ * fields already sitting on a task's `ConversationManagerStore` entries (the
+ * registry every task's conversations are preloaded into on project mount;
+ * see `getConversationsForTask`), so the panel component only ever maps live
+ * store data into this shape rather than re-deriving any of it itself.
+ * `indicatorStatus` is the same computed value `ConversationStore` itself
+ * already exposes (working / unseen awaiting-input / unseen error / unseen
+ * completed / null) — the one place "what does this conversation's status
+ * dot show" is decided; this module only sorts and formats from it.
+ */
+export type TaskDetailPanelConversationInput = {
+  id: string;
+  providerId: AgentProviderId;
+  /** The conversation's own stored title — used verbatim for inline rename, never reformatted. */
+  title: string;
+  type?: ConversationType;
+  lastInteractedAt: string | null;
+  indicatorStatus: AgentStatus | null;
+};
+
+export type TaskDetailPanelConversationRow = {
+  id: string;
+  providerId: AgentProviderId;
+  /** The conversation's own stored title, unformatted — the value inline rename edits. */
+  rawTitle: string;
+  /** Display title (CONTEXT.md): falls back the same way `formatConversationTitleForDisplay`
+   * already does for the task view's own conversations sidebar. */
+  displayTitle: string;
+  /** The surface this conversation opens in — 'acp-chat' vs. 'conversation' (terminal),
+   * resolved via the same `conversationTabKind` mapper `WorkspaceViewModel.openConversation`
+   * (ticket #67) and the sidebar already use. Never a second mapper. */
+  tabKind: 'conversation' | 'acp-chat';
+  lastInteractedAt: string | null;
+  indicatorStatus: AgentStatus | null;
+};
+
+function toTimestamp(value: string | null): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+/**
+ * Derives the Conversations section's rows (ticket #68), in display order:
+ * unseen Awaiting Input conversations first (the same predicate
+ * `partitionAwaitingInput`/ADR 0002 elevate a board card with — here, a
+ * conversation whose own `indicatorStatus` is `'awaiting-input'`), then the
+ * rest ordered by descending last-interaction. A missing last-interaction
+ * timestamp sorts last within its partition rather than first (treated as
+ * "never", not "just now"). Ties (including two conversations that have
+ * never interacted) keep their input order — a stable tiebreak, not an
+ * arbitrary reshuffle on equal timestamps. This is a render-time ordering
+ * only: nothing here writes anything back (ADR 0002's rule, applied to
+ * Conversations — see "Further Notes" in the spec).
+ */
+export function deriveConversationRows(
+  conversations: readonly TaskDetailPanelConversationInput[]
+): TaskDetailPanelConversationRow[] {
+  return conversations
+    .map((conversation, sortIndex) => ({
+      sortIndex,
+      isAwaitingInput: conversation.indicatorStatus === 'awaiting-input',
+      time: toTimestamp(conversation.lastInteractedAt),
+      row: {
+        id: conversation.id,
+        providerId: conversation.providerId,
+        rawTitle: conversation.title,
+        displayTitle: formatConversationTitleForDisplay(conversation.providerId, conversation.title),
+        tabKind: conversationTabKind(conversation.type),
+        lastInteractedAt: conversation.lastInteractedAt,
+        indicatorStatus: conversation.indicatorStatus,
+      },
+    }))
+    .sort((a, b) => {
+      if (a.isAwaitingInput !== b.isAwaitingInput) return a.isAwaitingInput ? -1 : 1;
+      if (a.time === null && b.time === null) return a.sortIndex - b.sortIndex;
+      if (a.time === null) return 1;
+      if (b.time === null) return -1;
+      if (a.time !== b.time) return b.time - a.time;
+      return a.sortIndex - b.sortIndex;
+    })
+    .map((entry) => entry.row);
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +278,10 @@ export function deriveGhostDetailViewModel(ghostCard: GhostCard): GhostDetailVie
 
 export type TaskDetailPanelViewModel = {
   vitals: TaskDetailPanelVitals;
+  /** Conversations section rows (ticket #68), already in display order — see
+   * `deriveConversationRows`. Empty for a task with no conversations yet; the
+   * section itself still renders (an explicit empty state), never hidden. */
+  conversations: TaskDetailPanelConversationRow[];
   links: TaskDetailPanelLink[];
   /** The Spec-derived PR (CONTEXT.md), or `null` when none references the Spec yet. */
   pr: StageHoldingPr | null;
@@ -197,6 +294,7 @@ export function buildTaskDetailPanelViewModel(input: {
   sessionCounts: Record<string, number>;
   agentStatus: AgentStatus | null;
   stageAuthority: TaskStageAuthority | null | undefined;
+  conversations?: readonly TaskDetailPanelConversationInput[];
 }): TaskDetailPanelViewModel {
   return {
     vitals: deriveTaskVitals(input.task, {
@@ -204,6 +302,7 @@ export function buildTaskDetailPanelViewModel(input: {
       sessionCounts: input.sessionCounts,
       agentStatus: input.agentStatus,
     }),
+    conversations: deriveConversationRows(input.conversations ?? []),
     links: deriveLinkedIssueSections(input.task.linkedIssues),
     pr: input.stageAuthority?.holdingPr ?? null,
     stage: deriveStageSection(

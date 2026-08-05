@@ -4,10 +4,12 @@ import type { StageHoldingPr, Task, TaskStageAuthority } from '@shared/core/task
 import {
   buildTaskDetailPanelViewModel,
   DECLARATIVE_WORKFLOW_STAGES,
+  deriveConversationRows,
   deriveGhostDetailViewModel,
   deriveLinkedIssueSections,
   deriveStageSection,
   deriveTaskVitals,
+  type TaskDetailPanelConversationInput,
 } from './task-detail-panel-view-model';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -48,6 +50,20 @@ function makeHoldingPr(overrides: Partial<StageHoldingPr> = {}): StageHoldingPr 
   };
 }
 
+function makeConversationInput(
+  overrides: Partial<TaskDetailPanelConversationInput> = {}
+): TaskDetailPanelConversationInput {
+  return {
+    id: 'conv-1',
+    providerId: 'claude',
+    title: 'claude (1)',
+    type: 'acp',
+    lastInteractedAt: '2026-01-01T00:00:00.000Z',
+    indicatorStatus: null,
+    ...overrides,
+  };
+}
+
 describe('deriveTaskVitals', () => {
   it('packages name, branch, creation date, session counts and agent status', () => {
     const task = makeTask({ name: 'My task', createdAt: '2026-02-01T00:00:00.000Z' });
@@ -77,6 +93,94 @@ describe('deriveTaskVitals', () => {
     expect(vitals.branchName).toBeNull();
     expect(vitals.totalSessionCount).toBe(0);
     expect(vitals.agentStatus).toBeNull();
+  });
+});
+
+describe('deriveConversationRows', () => {
+  it('is empty for a conversation-less task rather than throwing or omitting the section', () => {
+    expect(deriveConversationRows([])).toEqual([]);
+  });
+
+  it('elevates an unseen Awaiting Input conversation ahead of a more-recently-active one', () => {
+    const waiting = makeConversationInput({
+      id: 'waiting',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+      indicatorStatus: 'awaiting-input',
+    });
+    const recent = makeConversationInput({
+      id: 'recent',
+      lastInteractedAt: '2026-06-01T00:00:00.000Z',
+      indicatorStatus: 'working',
+    });
+
+    const rows = deriveConversationRows([recent, waiting]);
+
+    expect(rows.map((r) => r.id)).toEqual(['waiting', 'recent']);
+  });
+
+  it('orders the rest by descending last-interaction', () => {
+    const oldest = makeConversationInput({ id: 'oldest', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
+    const newest = makeConversationInput({ id: 'newest', lastInteractedAt: '2026-03-01T00:00:00.000Z' });
+    const middle = makeConversationInput({ id: 'middle', lastInteractedAt: '2026-02-01T00:00:00.000Z' });
+
+    const rows = deriveConversationRows([oldest, newest, middle]);
+
+    expect(rows.map((r) => r.id)).toEqual(['newest', 'middle', 'oldest']);
+  });
+
+  it('keeps a stable tiebreak (input order) for two conversations with an equal timestamp', () => {
+    const first = makeConversationInput({ id: 'first', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
+    const second = makeConversationInput({ id: 'second', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
+
+    expect(deriveConversationRows([first, second]).map((r) => r.id)).toEqual(['first', 'second']);
+    // Re-running with the reverse input order keeps that order too — the
+    // tiebreak follows input position, not an id or other implicit sort.
+    expect(deriveConversationRows([second, first]).map((r) => r.id)).toEqual(['second', 'first']);
+  });
+
+  it('sorts a conversation with no last-interaction timestamp last, not first, and never throws', () => {
+    const never = makeConversationInput({ id: 'never', lastInteractedAt: null });
+    const active = makeConversationInput({ id: 'active', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
+
+    expect(deriveConversationRows([never, active]).map((r) => r.id)).toEqual(['active', 'never']);
+    expect(() => deriveConversationRows([never])).not.toThrow();
+  });
+
+  it('resolves the ACP tab kind for an acp-type conversation', () => {
+    const [row] = deriveConversationRows([makeConversationInput({ type: 'acp' })]);
+    expect(row!.tabKind).toBe('acp-chat');
+  });
+
+  it('resolves the terminal tab kind for a pty-type conversation, and for an untyped (legacy) one', () => {
+    const [ptyRow] = deriveConversationRows([makeConversationInput({ type: 'pty' })]);
+    expect(ptyRow!.tabKind).toBe('conversation');
+
+    const [legacyRow] = deriveConversationRows([makeConversationInput({ type: undefined })]);
+    expect(legacyRow!.tabKind).toBe('conversation');
+  });
+
+  it('formats a default provider title for display the same way the sidebar does, keeping the raw title for rename', () => {
+    const [row] = deriveConversationRows([
+      makeConversationInput({ providerId: 'claude', title: 'claude (2)' }),
+    ]);
+    expect(row!.displayTitle).toBe('Claude (2)');
+    expect(row!.rawTitle).toBe('claude (2)');
+  });
+
+  it('leaves a custom title untouched for display', () => {
+    const [row] = deriveConversationRows([
+      makeConversationInput({ providerId: 'claude', title: 'Investigate flaky test' }),
+    ]);
+    expect(row!.displayTitle).toBe('Investigate flaky test');
+    expect(row!.rawTitle).toBe('Investigate flaky test');
+  });
+
+  it('carries the provider id and indicator status through untouched', () => {
+    const [row] = deriveConversationRows([
+      makeConversationInput({ providerId: 'codex', indicatorStatus: 'error' }),
+    ]);
+    expect(row!.providerId).toBe('codex');
+    expect(row!.indicatorStatus).toBe('error');
   });
 });
 
@@ -384,6 +488,32 @@ describe('buildTaskDetailPanelViewModel', () => {
     expect(vm.pr).toBeNull();
     expect(vm.stage.locked).toBe(false);
     expect(vm.vitals.name).toBe('Local only');
+    // No `conversations` input at all — an empty section, not a crash.
+    expect(vm.conversations).toEqual([]);
+  });
+
+  it('assembles the Conversations section from the raw conversation inputs, in derived order', () => {
+    const task = makeTask();
+    const waiting = makeConversationInput({
+      id: 'waiting',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+      indicatorStatus: 'awaiting-input',
+    });
+    const recent = makeConversationInput({
+      id: 'recent',
+      lastInteractedAt: '2026-06-01T00:00:00.000Z',
+    });
+
+    const vm = buildTaskDetailPanelViewModel({
+      task,
+      branchName: null,
+      sessionCounts: {},
+      agentStatus: null,
+      stageAuthority: undefined,
+      conversations: [recent, waiting],
+    });
+
+    expect(vm.conversations.map((r) => r.id)).toEqual(['waiting', 'recent']);
   });
 
   it('surfaces the holding PR as the Spec-derived PR when the stage is GitHub-proven', () => {
