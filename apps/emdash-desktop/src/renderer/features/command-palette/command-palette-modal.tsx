@@ -250,13 +250,13 @@ export function CommandPaletteModal({
 
   // Focused-conversation navigation (ticket #67): carries the target
   // conversation's id as a navigation parameter rather than opening its tab
-  // directly — `getTaskView(...)` returns `undefined` for a never-provisioned
-  // task (no WorkspaceViewModel to open a tab on yet), and even when it does
-  // exist, provisioning restores the persisted tab snapshot by wiping and
-  // rebuilding the panes, silently discarding a tab opened before navigating.
-  // `ReadyTaskMainPanel` resolves the parameter (via
-  // `WorkspaceViewModel.openConversation`, the shared entry point) once the
-  // task is actually `ready`, on both a fresh and an already-open task view.
+  // directly. Opening it eagerly only works when the task is already
+  // provisioned — provisioning a never-opened task restores the persisted
+  // tab snapshot by wiping and rebuilding the panes, silently discarding a
+  // tab opened before navigating. `ReadyTaskMainPanel` resolves the
+  // parameter (via `WorkspaceViewModel.openConversation`, the shared entry
+  // point) once the task is actually `ready`, on both a fresh and an
+  // already-open task view.
   const handleNavigateToConversation = (item: SearchItem) => {
     if (!item.projectId || !item.taskId) return;
     handleClose();
