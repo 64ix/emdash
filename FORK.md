@@ -185,8 +185,42 @@ The version is injected via `extraMetadata`, never committed — `package.json` 
 upstream's value so rebases stay clean. Rules: plain `x.y.z`, strictly increasing
 (`allowDowngrade` is `false`), no prerelease suffix (`allowPrerelease` is `false` off
 the canary channel), and above upstream's line — upstream lives in `1.1.x`, so `1.2.0`,
-`1.3.0`, … are ours. `--publish` creates the GitHub release *and* the `v<version>` tag
-on the fork, and uploads the dmg, the zip and the `latest-mac.yml` the updater reads.
+`1.3.0`, … are ours.
+
+**How `--publish` sequences a release.** It mirrors the CI pipeline
+(`scripts/release/prepare-release.ts` → build → `finalize-release.ts`): the GitHub
+release is created as a **draft** *before* packaging, the two macOS publishers upload
+the dmg, the zip, their blockmaps and the `latest-mac.yml` the updater reads into it,
+and only then is it published — which is the moment GitHub creates the `v<version>`
+tag, from the exact commit that was packaged. Consequences worth knowing:
+
+- An interrupted or failed build leaves a draft and no tag. Re-running the same
+  `--version` reuses that draft, so recovery is just running the command again.
+- The script refuses to publish from a dirty working tree, or a `HEAD` that is not
+  pushed yet: the tag has to describe what was actually built. `EMDASH_FORK_ALLOW_DIRTY=1`
+  overrides the first.
+- It refuses to touch a version that is already published, so re-releasing is
+  deliberate: pass `--republish` to upload into an existing published release.
+- Before publishing the draft it asserts `latest-mac.yml` is among the assets, and
+  leaves the release as a draft if it is not.
+
+That last guard exists because the failure it prevents is silent. Publishing 1.2.6
+without the draft step produced this, twice over:
+
+```text
+creating GitHub release  reason=release doesn't exist tag=v1.2.6
+creating GitHub release  reason=release doesn't exist tag=v1.2.6
+⨯ HttpError: 422 Unprocessable Entity … "Published releases must have a valid tag"
+```
+
+Both publishers raced to create the same release; one POST won and the others got a
+422 whose message points at the tag, which is not the problem — it is a concurrent
+creation conflict. The release existed, but only one blockmap had uploaded and
+`latest-mac.yml` was never regenerated (the copy left in `release/` still described
+the *previous* version). `electron-updater` resolves such a release as the latest one
+and then 404s on the channel manifest, so the update never happens and nothing in the
+app reports an error. If you ever see a fork release whose asset list is short, that
+is what happened; the fix is to delete the stray assets and re-run with `--republish`.
 
 **Shared state with the official app.** The fork build keeps upstream's identity —
 `Emdash.app`, `com.emdash.stable`, data in `~/Library/Application Support/emdash/`.
