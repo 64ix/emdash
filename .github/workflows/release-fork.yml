@@ -128,9 +128,16 @@ jobs:
       - name: Build workspace
         run: pnpm run build
 
+      # --project-root is not optional here: under pnpm's hoisted linker the native modules are
+      # hoisted out of the app, so @electron/rebuild needs the app's package.json for "which
+      # modules" and the workspace root's node_modules for "where they are". Without it, it
+      # rebuilds nothing, exits 0, and the job ships modules compiled for the runner's system
+      # Node. See the note in rebuild-native.ts.
       - name: Rebuild native modules for macOS arm64
         working-directory: apps/emdash-desktop
-        run: node --experimental-strip-types scripts/release/rebuild-native.ts --arch arm64
+        run: >
+          node --experimental-strip-types scripts/release/rebuild-native.ts
+          --arch arm64 --project-root "$GITHUB_WORKSPACE"
 
       - name: Build and upload signed macOS artifacts
         working-directory: apps/emdash-desktop
@@ -145,15 +152,22 @@ jobs:
         working-directory: apps/emdash-desktop
         run: node --experimental-strip-types scripts/release/verify-mac.ts
 
+      - name: Verify packaged native modules load in the packaged Electron
+        working-directory: apps/emdash-desktop
+        run: node --experimental-strip-types scripts/release/verify-native-abi.ts
+
       - name: Verify the embedded update feed points at the fork
         working-directory: apps/emdash-desktop
         run: node --experimental-strip-types scripts/release/verify-fork-feed.ts
 
-      - name: Remove temporary signing keychain and trust setting
+      # Only the keychain. The admin-domain trust setting is deliberately left behind:
+      # `security remove-trusted-cert -d` wants an authorization the runner has no GUI to
+      # grant and blocks forever waiting for it — and a hang is not something `|| true`
+      # can rescue. It held the v1.2.8 job open at 100% complete until it was cancelled.
+      # GitHub-hosted runners are destroyed after the job, so there is nothing left to clean.
+      - name: Remove temporary signing keychain
         if: always()
-        run: |
-          security delete-keychain "$RUNNER_TEMP/emdash-fork-signing.keychain-db" 2>/dev/null || true
-          sudo security remove-trusted-cert -d "$RUNNER_TEMP/emdash-fork-signing.crt" 2>/dev/null || true
+        run: security delete-keychain "$RUNNER_TEMP/emdash-fork-signing.keychain-db" 2>/dev/null || true
 
   release-win:
     needs: prepare-release
@@ -170,10 +184,13 @@ jobs:
         shell: bash
         run: pnpm run build
 
+      # See the macOS job: without --project-root this silently rebuilds nothing.
       - name: Rebuild native modules for Windows x64
         shell: bash
         working-directory: apps/emdash-desktop
-        run: node --experimental-strip-types scripts/release/rebuild-native.ts --arch x64
+        run: >
+          node --experimental-strip-types scripts/release/rebuild-native.ts
+          --arch x64 --project-root "$GITHUB_WORKSPACE"
 
       - name: Build and upload unsigned Windows artifacts
         shell: bash
@@ -196,6 +213,11 @@ jobs:
               throw "$($file.Name) had unexpected signature status: $($signature.Status)"
             }
           }
+
+      - name: Verify packaged native modules load in the packaged Electron
+        shell: bash
+        working-directory: apps/emdash-desktop
+        run: node --experimental-strip-types scripts/release/verify-native-abi.ts
 
       - name: Verify the embedded update feed points at the fork
         shell: bash
