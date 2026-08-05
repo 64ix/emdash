@@ -139,7 +139,7 @@ function AddAccountCard({
       type="button"
       onClick={integration.onConnect}
       disabled={integration.isMutating}
-      className="focus-visible:ring-ring flex w-full items-center gap-3 rounded-lg border border-dashed border-border/70 p-3 text-left transition-colors hover:border-border hover:bg-background-1 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+      className="flex w-full items-center gap-3 rounded-lg border border-dashed border-border/70 p-3 text-left transition-colors hover:border-border hover:bg-background-1 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
       aria-label={`Add ${integration.name} account`}
     >
       <div className="flex h-9 w-9 shrink-0 items-center justify-center">

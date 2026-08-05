@@ -59,7 +59,7 @@ export function SignInStep({ onComplete }: { onComplete: () => void }) {
                 <User className="h-7 w-7 text-foreground-muted" />
               </div>
             )}
-            <CheckCircle className="text-primary absolute -right-1 -bottom-1 h-5 w-5 fill-background" />
+            <CheckCircle className="absolute -right-1 -bottom-1 h-5 w-5 fill-background text-primary" />
           </div>
           <div className="flex flex-col items-center justify-center gap-1">
             <h1 className="text-center text-xl">Connected as @{user.username}</h1>

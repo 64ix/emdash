@@ -330,7 +330,7 @@ export function RemoteDirectorySelector({
                 <FileCode className="text-muted-foreground h-4 w-4 shrink-0" />
               )}
               <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-              {isSelectedPath && <Check className="text-primary h-4 w-4 shrink-0" />}
+              {isSelectedPath && <Check className="h-4 w-4 shrink-0 text-primary" />}
               {entry.type === 'file' && (
                 <span className="text-muted-foreground text-xs">
                   {(entry.size / 1024).toFixed(1)} KB

@@ -76,7 +76,7 @@ function FieldInfoTooltip({ label, children }: { label: string; children: ReactN
         render={
           <button
             type="button"
-            className="focus-visible:ring-primary/30 relative inline-flex size-4 shrink-0 items-center justify-center rounded-full text-foreground-passive transition-colors before:absolute before:-inset-2.5 before:content-[''] hover:text-foreground focus-visible:ring-2 focus-visible:outline-none"
+            className="relative inline-flex size-4 shrink-0 items-center justify-center rounded-full text-foreground-passive transition-colors before:absolute before:-inset-2.5 before:content-[''] hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
             aria-label={`About ${label}`}
           >
             <InfoIcon className="size-3.5" aria-hidden="true" />

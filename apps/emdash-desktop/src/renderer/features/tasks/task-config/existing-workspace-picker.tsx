@@ -124,7 +124,7 @@ export function ExistingWorkspacePicker({
       }}
       isItemEqualToValue={(a: ProjectWorkspace, b: ProjectWorkspace) => a.id === b.id}
     >
-      <ComboboxTrigger className="data-popup-open:border-ring flex w-full items-center justify-between gap-2 rounded-lg border border-border px-2.5 py-2 text-sm transition-colors outline-none hover:bg-background-2">
+      <ComboboxTrigger className="flex w-full items-center justify-between gap-2 rounded-lg border border-border px-2.5 py-2 text-sm transition-colors outline-none hover:bg-background-2 data-popup-open:border-ring">
         {selected ? (
           <WorkspaceItemContent ws={selected} />
         ) : (

@@ -197,7 +197,7 @@ export const McpModal: React.FC<McpModalProps> = ({
                             disabled={isCatalog}
                             placeholder={'-y\nmy-mcp-server'}
                             rows={3}
-                            className="border-input placeholder:text-muted-foreground focus-visible:ring-ring flex w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                            className="border-input placeholder:text-muted-foreground flex w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                           />
                         </Field>
                       )}
