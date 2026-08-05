@@ -7,6 +7,22 @@ vi.mock('@renderer/lib/hooks/useTheme', () => ({
   useTheme: () => ({ effectiveTheme: 'emlight' }),
 }));
 
+// Importing the renderer transitively constructs the SSH connection store, whose Resources
+// call RPC from their constructor. Without a bridge those calls reject as unhandled errors
+// and fail the file even though every assertion passed, so stub the boundary — the same
+// stub the node-project tests and the other browser suites install.
+vi.mock('@renderer/lib/ipc', () => ({
+  rpc: {
+    app: { openExternal: vi.fn(() => Promise.resolve()) },
+    ssh: {
+      getConnections: async () => [],
+      getConnectionState: async () => ({}),
+      getHealthStates: async () => ({}),
+    },
+  },
+  events: { on: vi.fn(() => () => {}) },
+}));
+
 beforeAll(() => {
   (
     globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }

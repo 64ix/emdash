@@ -2,19 +2,22 @@ import type { RpcRouter } from '@main/rpc';
 import { createEventEmitter, type EmitterAdapter } from '@shared/lib/ipc/events';
 import { createRPCClient } from '@shared/lib/ipc/rpc';
 
-const electronAPI =
-  typeof window !== 'undefined'
-    ? window.electronAPI
-    : {
-        invoke: (channel: string) => {
-          throw new Error(`electronAPI.invoke is unavailable for ${channel}`);
-        },
-        eventSend: (channel: string) => {
-          throw new Error(`electronAPI.eventSend is unavailable for ${channel}`);
-        },
-        eventOn: () => () => {},
-        getPathForFile: () => '',
-      };
+// The bridge is absent whenever renderer code is loaded outside Electron — browser-mode
+// tests, Storybook — and there `window` exists while `window.electronAPI` does not. Guarding
+// on `window` alone left `electronAPI` undefined and the `createRPCClient` call below threw
+// at *import* time, so any module transitively importing this one failed to load at all.
+// Fall back on the bridge itself, so the unavailable-channel errors below are what callers
+// actually get.
+const electronAPI = (typeof window !== 'undefined' ? window.electronAPI : undefined) ?? {
+  invoke: (channel: string) => {
+    throw new Error(`electronAPI.invoke is unavailable for ${channel}`);
+  },
+  eventSend: (channel: string) => {
+    throw new Error(`electronAPI.eventSend is unavailable for ${channel}`);
+  },
+  eventOn: () => () => {},
+  getPathForFile: () => '',
+};
 
 export const rpc = createRPCClient<RpcRouter>(electronAPI.invoke);
 
