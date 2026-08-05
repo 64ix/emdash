@@ -81,8 +81,10 @@ export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
           Could not load file: {tab.externalError}
         </div>
       ) : (
+        // Local and external files can both contain untrusted, agent-authored markdown.
         <MarkdownRenderer
           content={content}
+          trust="untrusted"
           variant="full"
           className="w-full max-w-3xl px-8 py-8"
           resolveImage={tab.isExternal ? undefined : resolveImage}
