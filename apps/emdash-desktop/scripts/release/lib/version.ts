@@ -8,6 +8,23 @@ export interface ReleaseVersion {
   isCanary: boolean;
 }
 
+function parsePlainVersion(version: string): number[] {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    throw new Error(`Version "${version}" must be a plain major.minor.patch`);
+  }
+  return version.split('.').map(Number);
+}
+
+export function comparePlainVersions(left: string, right: string): number {
+  const leftParts = parsePlainVersion(left);
+  const rightParts = parsePlainVersion(right);
+  for (let i = 0; i < 3; i++) {
+    const difference = leftParts[i] - rightParts[i];
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+
 /**
  * Derives the version and git tag for a release.
  *
@@ -21,7 +38,18 @@ export interface ReleaseVersion {
  * GITHUB_RUN_NUMBER is monotonic and identical across all jobs in a workflow run,
  * so build.ts and finalize-release.ts compute the same tag independently.
  */
-export function resolveReleaseVersion(channel: ReleaseChannel): ReleaseVersion {
+export function resolveReleaseVersion(
+  channel: ReleaseChannel,
+  explicitVersion?: string
+): ReleaseVersion {
+  if (explicitVersion !== undefined) {
+    if (channel !== 'stable') {
+      throw new Error('An explicit release version is only supported on the stable channel');
+    }
+    parsePlainVersion(explicitVersion);
+    return { version: explicitVersion, tag: `v${explicitVersion}`, isCanary: false };
+  }
+
   const pkg = JSON.parse(readFileSync('package.json', 'utf-8')) as { version: string };
 
   if (channel === 'canary') {

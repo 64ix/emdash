@@ -3,12 +3,13 @@ import { parseArgs } from 'node:util';
 import { Octokit } from '@octokit/rest';
 import { GITHUB_OWNER, GITHUB_REPO } from './lib/config.ts';
 import { fail, info, step } from './lib/log.ts';
-import { resolveReleaseVersion } from './lib/version.ts';
+import { comparePlainVersions, resolveReleaseVersion } from './lib/version.ts';
 import type { ReleaseChannel } from './lib/version.ts';
 
 const { values } = parseArgs({
   options: {
     channel: { type: 'string', default: 'stable' },
+    version: { type: 'string' },
   },
   strict: true,
 });
@@ -21,7 +22,7 @@ if (!['stable', 'canary'].includes(channel)) {
 const token = process.env.GH_TOKEN;
 if (!token) fail('GH_TOKEN env var is required');
 
-const { tag, isCanary } = resolveReleaseVersion(channel);
+const { tag, isCanary } = resolveReleaseVersion(channel, values.version);
 const octokit = new Octokit({ auth: token });
 
 step(`Ensuring single draft release for ${tag} (channel: ${channel})`);
@@ -31,6 +32,19 @@ const { data: releases } = await octokit.rest.repos.listReleases({
   repo: GITHUB_REPO,
   per_page: 100,
 });
+
+if (values.version) {
+  const publishedVersions = releases
+    .filter((release) => !release.draft)
+    .map((release) => release.tag_name.match(/^v(\d+\.\d+\.\d+)$/)?.[1])
+    .filter((version): version is string => version !== undefined);
+  const newestPublished = publishedVersions.sort(comparePlainVersions).at(-1);
+  if (newestPublished && comparePlainVersions(values.version, newestPublished) <= 0) {
+    fail(
+      `Release version ${values.version} must be newer than published version ${newestPublished}`
+    );
+  }
+}
 
 const sameTag = releases.filter((r) => r.tag_name === tag);
 if (sameTag.some((r) => !r.draft)) {
@@ -49,6 +63,12 @@ if (drafts.length > 1) {
 
 let releaseId: number;
 if (drafts.length === 1) {
+  const sha = process.env.GITHUB_SHA;
+  if (sha && drafts[0].target_commitish !== sha) {
+    fail(
+      `Draft release ${tag} targets ${drafts[0].target_commitish}, not this workflow commit ${sha}`
+    );
+  }
   releaseId = drafts[0].id;
   info(`Reusing existing draft release ${tag} (id: ${releaseId})`);
 } else {

@@ -22,6 +22,10 @@ inputs:
     description: Set to false when the job image already provides a compatible Python
     required: false
     default: 'true'
+  node-version:
+    description: Node.js version passed to actions/setup-node
+    required: false
+    default: '24'
 
 runs:
   using: composite
@@ -32,7 +36,7 @@ runs:
 
     - uses: actions/setup-node@v4
       with:
-        node-version: '24'
+        node-version: ${{ inputs.node-version }}
         cache: pnpm
 
     - if: inputs.setup-python == 'true'
