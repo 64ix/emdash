@@ -6,7 +6,6 @@ import {
   asMounted,
   getProjectManagerStore,
 } from '@renderer/features/projects/stores/project-selectors';
-import { getTaskView } from '@renderer/features/tasks/stores/task-selectors';
 import { isRegistered, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import type { NavigateFnTyped } from '@renderer/lib/layout/navigation-provider';
 import { cn } from '@renderer/utils/utils';
@@ -81,14 +80,18 @@ export function PaletteNotificationsGroup({
               conv={item.conv}
               value={`notif:conversation:${item.conv.data.id}`}
               onSelect={() => {
-                getTaskView(item.projectId, item.taskId)?.paneLayout.open(
-                  'conversation',
-                  { conversationId: item.conv.data.id },
-                  { preview: false }
-                );
-                if (item.projectId !== currentProjectId || item.taskId !== currentTaskId) {
-                  navigate('task', { projectId: item.projectId, taskId: item.taskId });
-                }
+                // Focused-conversation navigation (ticket #67): routes through
+                // the same navigation parameter `handleNavigateToConversation`
+                // (command-palette-modal.tsx) uses, resolved by
+                // `ReadyTaskMainPanel` via the shared
+                // `WorkspaceViewModel.openConversation` entry point — never a
+                // hardcoded 'conversation' tab kind, and never a tab opened
+                // before the task view has navigated.
+                navigate('task', {
+                  projectId: item.projectId,
+                  taskId: item.taskId,
+                  focusConversationId: item.conv.data.id,
+                });
                 onClose();
               }}
             />

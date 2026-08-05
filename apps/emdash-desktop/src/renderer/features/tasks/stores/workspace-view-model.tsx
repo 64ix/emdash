@@ -1,7 +1,9 @@
 import type { ILifecycle } from '@emdash/shared';
 import { computed, makeAutoObservable, observable, reaction, runInAction } from 'mobx';
 import { ChangesRailViewStore } from '@renderer/features/conversations/acp/changes/changes-rail-store';
+import { conversationTabKind } from '@renderer/features/conversations/conversation-tab-kind';
 import { DefaultConversationSeeder } from '@renderer/features/conversations/default-conversation-seeder';
+import { conversationRegistry } from '@renderer/features/conversations/stores/conversation-registry';
 import type { TaskTabContext } from '@renderer/features/tabs/core/task-tab-context';
 import { getDiffTabManager } from '@renderer/features/tasks/diff-view/stores/diff-tab-manager';
 import { DiffViewStore } from '@renderer/features/tasks/diff-view/stores/diff-view-store';
@@ -363,6 +365,40 @@ export class WorkspaceViewModel implements ILifecycle {
   // -------------------------------------------------------------------------
   // Actions
   // -------------------------------------------------------------------------
+
+  /**
+   * Opens a Conversation by id — the one shared entry point for "land on this
+   * Conversation" (ticket #67). Both command-palette jump sites (the search
+   * result and the Notifications-group entry) and the Task Detail Panel's
+   * conversation row (next ticket) route through this rather than each
+   * hardcoding a tab kind or opening the tab before the task view has
+   * actually navigated there — see the focused-conversation navigation
+   * parameter this method backs, which is what survives provisioning.
+   *
+   * Resolves the surface (ACP chat vs. terminal conversation) from the
+   * conversation's own transport type via `conversationTabKind` — the same
+   * mapper `SidebarConversationsList` already uses — never a hardcoded kind
+   * or a second mapper. Marks the default-conversation seeder consumed
+   * *before* opening (only once the conversation is confirmed to exist), so
+   * a fresh task view whose seeder hasn't fired yet opens only the requested
+   * conversation, never the initial one plus this one. `paneLayout.open`'s
+   * existing single-mount dedup (both conversation tab kinds are keyed on
+   * conversation id) activates an already-open tab instead of duplicating it.
+   *
+   * A conversation id that doesn't resolve on this task is a complete no-op —
+   * the seeder is left untouched, so a fresh task view still opens its normal
+   * default conversation.
+   */
+  openConversation(conversationId: string): void {
+    const conversation = conversationRegistry.get(this.taskId)?.conversations.get(conversationId);
+    if (!conversation) return;
+    this._seeder.markConsumed(true);
+    this.paneLayout.open(
+      conversationTabKind(conversation.data.type),
+      { conversationId },
+      { preview: false }
+    );
+  }
 
   activateLastTabOfKind(kind: 'conversation' | 'file' | 'diff' | 'browser' | 'terminal'): void {
     const tabId = [...this.activePane.tabOrder]

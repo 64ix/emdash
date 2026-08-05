@@ -1,6 +1,6 @@
 import { Loader2 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { usePanelRef } from 'react-resizable-panels';
 import {
   getTaskStore,
@@ -11,6 +11,7 @@ import {
   useTaskViewContext,
   useWorkspaceViewModel,
 } from '@renderer/features/tasks/task-view-context';
+import { useParams } from '@renderer/lib/layout/navigation-provider';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@renderer/lib/ui/resizable';
 import { taskTabView } from './task-tab-registry';
 import { TaskMainColumn } from './view/task-main-column';
@@ -101,6 +102,30 @@ const SIDEBAR_COLLAPSED_SIZE = '0px';
 const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
   const taskView = useWorkspaceViewModel();
   const sidebarPanelRef = usePanelRef();
+  const { params, setParams } = useParams('task');
+  // Focused-conversation navigation (ticket #67): the command palette's
+  // conversation jumps (and the Task Detail Panel's conversation row, next
+  // ticket) carry an optional `focusConversationId` back to this view —
+  // resolved here, once the task is `ready` (this component only ever
+  // renders in that state), the direct mirror of the board's own
+  // `focusTaskId` handling (`BoardMainPanel`). A guard ref keyed on the
+  // parameter value ensures a given id is only ever resolved once per
+  // arrival, so a later unrelated re-render can never re-steal the active
+  // tab from the user's own subsequent choice. The parameter is cleared
+  // through the navigation store's existing view-param update API once
+  // resolved — view params are persisted and restored across app restarts,
+  // and a lingering id would re-fire on a cold start and override restored
+  // tab state. `openConversation` itself fails safe: an id that resolves to
+  // no conversation on this task is a no-op — the task view is otherwise
+  // unaffected.
+  const focusHandledRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const focusConversationId = params.focusConversationId;
+    if (!focusConversationId || focusHandledRef.current === focusConversationId) return;
+    focusHandledRef.current = focusConversationId;
+    taskView.openConversation(focusConversationId);
+    setParams({ focusConversationId: undefined });
+  }, [params.focusConversationId, taskView, setParams]);
 
   useEffect(() => {
     if (taskView.isSidebarCollapsed) {
