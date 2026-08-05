@@ -143,6 +143,23 @@ describe('PermissionBand — full-context permission review', () => {
     expect(onResolve).toHaveBeenCalledWith('reject-once');
   });
 
+  it('distinguishes allow and reject decisions by both tone and shape', async () => {
+    const request = requestFor({ kind: 'execute-tool-call', command: 'ls' });
+    await renderBand({ request });
+
+    const primaryTone = host.querySelector('[data-slot="split-button-tone"]');
+    expect(primaryTone?.getAttribute('data-tone')).toBe('accept');
+    expect(primaryTone?.getAttribute('data-shape')).toBe('check');
+
+    const moreOptions = host.querySelector<HTMLButtonElement>('button[aria-label="More options"]');
+    await act(async () => moreOptions!.click());
+
+    const rejectTone = document.body.querySelector(
+      '[data-slot="split-button-tone"][data-tone="reject"]'
+    );
+    expect(rejectTone?.getAttribute('data-shape')).toBe('x');
+  });
+
   // ── Filesystem ────────────────────────────────────────────────────────────────
 
   it('shows both sides of a file modification and the affected path', async () => {

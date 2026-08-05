@@ -13,7 +13,7 @@
 import { DropdownMenu } from '@react/primitives/dropdown-menu';
 import { controlVariants, type ControlVariantProps } from '@styles/recipes/control';
 import { cx } from '@styles/utilities/cx';
-import { ChevronDownIcon } from 'lucide-react';
+import { CheckIcon, ChevronDownIcon, CircleIcon, XIcon } from 'lucide-react';
 import { Button, type ButtonProps } from '../button';
 import * as styles from './split-button.css';
 
@@ -47,6 +47,28 @@ export interface SplitButtonProps {
   variant?: ButtonProps['variant'];
   tone?: ControlVariantProps['tone'];
   className?: string;
+}
+
+const toneShape = {
+  neutral: 'circle',
+  accept: 'check',
+  reject: 'x',
+} as const satisfies Record<SplitButtonOptionTone, string>;
+
+function ToneIndicator({ tone = 'neutral' }: { tone?: SplitButtonOptionTone }) {
+  const Icon = tone === 'accept' ? CheckIcon : tone === 'reject' ? XIcon : CircleIcon;
+
+  return (
+    <span
+      className={styles.toneIndicator[tone]}
+      data-slot="split-button-tone"
+      data-tone={tone}
+      data-shape={toneShape[tone]}
+      aria-hidden
+    >
+      <Icon className={styles.toneIndicatorIcon} />
+    </span>
+  );
 }
 
 // ── SplitButton ───────────────────────────────────────────────────────────────
@@ -84,6 +106,7 @@ export function SplitButton({
           if (selectedOption) onAction(selectedOption.id);
         }}
       >
+        <ToneIndicator tone={selectedOption?.tone} />
         <span className={styles.splitButtonLabel}>{selectedOption?.label ?? ''}</span>
       </Button>
 
@@ -107,6 +130,7 @@ export function SplitButton({
               title={option.label}
               onClick={() => handleMenuSelect(option)}
             >
+              <ToneIndicator tone={option.tone} />
               <span className={styles.splitButtonMenuLabel}>{option.label}</span>
             </DropdownMenu.Item>
           ))}
