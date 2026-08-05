@@ -104,7 +104,7 @@ function makePullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
 }
 
 describe('CommentsList', () => {
-  it('renders HTML image comments from non-bot authors', () => {
+  it('does not load remote HTML images from PR comments', () => {
     const html = renderToStaticMarkup(
       React.createElement(CommentsList, {
         comments: [
@@ -113,12 +113,8 @@ describe('CommentsList', () => {
       })
     );
 
-    expect(html).toContain('src="https://github.com/user/image.png"');
-    expect(html).toContain('alt="Image"');
-    expect(html).toContain('aria-label="Expand image"');
-    expect(html).toContain('max-w-full');
-    expect(html).toContain('max-h-80');
-    expect(html).toContain('object-contain');
+    expect(html).not.toContain('https://github.com/user/image.png');
+    expect(html).not.toContain('<img');
   });
 
   it('renders comments by creation time rather than update time', () => {

@@ -316,8 +316,10 @@ const DiffContentPreview = observer(function DiffContentPreview({
 
   return (
     <div className="relative h-full overflow-y-auto bg-background-secondary-1">
+      {/* Worktree file content may be agent-authored. */}
       <MarkdownRenderer
         content={content}
+        trust="untrusted"
         variant="full"
         className="w-full max-w-3xl px-8 py-8"
         resolveImage={resolveImage}

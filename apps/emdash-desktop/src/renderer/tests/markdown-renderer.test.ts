@@ -60,6 +60,7 @@ describe('MarkdownRenderer', () => {
     const html = renderToStaticMarkup(
       React.createElement(MarkdownRenderer, {
         content: '![Screenshot](https://example.com/screenshot.png)',
+        trust: 'trusted',
         variant: 'compact',
       })
     );
@@ -75,8 +76,8 @@ describe('MarkdownRenderer', () => {
   it('constrains allowed HTML images in compact rendering', () => {
     const html = renderToStaticMarkup(
       React.createElement(MarkdownRenderer, {
-        allowHtml: true,
         content: '<img src="https://example.com/preview.png" alt="Preview">',
+        trust: 'trusted',
         variant: 'compact',
       })
     );
@@ -94,6 +95,7 @@ describe('MarkdownRenderer', () => {
       React.createElement(MarkdownRenderer, {
         content:
           '| Layer | What | How |\n| --- | --- | --- |\n| Primary | Headline | Display size |',
+        trust: 'untrusted',
         variant: 'compact',
       })
     );
@@ -109,6 +111,7 @@ describe('MarkdownRenderer', () => {
     const html = renderToStaticMarkup(
       React.createElement(MarkdownRenderer, {
         content: '- [ ] Pending\n- [x] Complete',
+        trust: 'untrusted',
       })
     );
 
@@ -126,6 +129,7 @@ describe('MarkdownRenderer', () => {
         React.createElement(MarkdownRenderer, {
           content: '[booking.read](packages/trpc/server/routers/viewer/bookings/get.handler.ts)',
           onOpenLink,
+          trust: 'untrusted',
           variant: 'full',
         })
       );
@@ -142,6 +146,85 @@ describe('MarkdownRenderer', () => {
     expect(onOpenLink).toHaveBeenCalledWith(
       'packages/trpc/server/routers/viewer/bookings/get.handler.ts'
     );
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  // The default-deny above must not swallow same-document fragments: they cannot leave the
+  // document or reach the network, and a rendered README's table of contents is only these.
+  it.each(['untrusted', 'trusted'] as const)(
+    'leaves same-document fragment links navigable in %s content',
+    (trust) => {
+      const onOpenLink = vi.fn(() => false);
+
+      act(() => {
+        root.render(
+          React.createElement(MarkdownRenderer, {
+            content: '[Install](#install)',
+            onOpenLink,
+            trust,
+            variant: 'full',
+          })
+        );
+      });
+
+      const link = container.querySelector<HTMLAnchorElement>('a[href]');
+      expect(link).not.toBeNull();
+
+      const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+      act(() => {
+        link?.dispatchEvent(event);
+      });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(onOpenLink).not.toHaveBeenCalled();
+    }
+  );
+
+  it('renders hostile untrusted markdown without active resources or elements', () => {
+    const hostileMarkdown = [
+      '![remote](https://evil.example/beacon.png)',
+      '<img src="https://evil.example/raw.png" onerror="alert(1)">',
+      '<script src="https://evil.example/payload.js">alert(1)</script>',
+      '<iframe src="https://evil.example/frame"></iframe>',
+      '<video src="https://evil.example/video.mp4"></video>',
+      '<div style="background:url(https://evil.example/style.png)" onclick="alert(1)">x</div>',
+      '[bad](javascript:alert(1))',
+    ].join('\n\n');
+
+    act(() => {
+      root.render(
+        React.createElement(MarkdownRenderer, {
+          content: hostileMarkdown,
+          trust: 'untrusted',
+        })
+      );
+    });
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(container.querySelector('video')).toBeNull();
+    expect(container.querySelector('[style]')).toBeNull();
+    expect(container.querySelector('[onclick]')).toBeNull();
+    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+  });
+
+  it('prevents browser navigation when no typed link handler claims the href', () => {
+    act(() => {
+      root.render(
+        React.createElement(MarkdownRenderer, {
+          content: '[relative](unknown/path)',
+          trust: 'untrusted',
+        })
+      );
+    });
+
+    const link = container.querySelector<HTMLAnchorElement>('a[href]');
+    expect(link).not.toBeNull();
+    const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+    act(() => {
+      link?.dispatchEvent(event);
+    });
     expect(event.defaultPrevented).toBe(true);
   });
 });

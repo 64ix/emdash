@@ -17,12 +17,17 @@ import { normalizeLatexDelimiters } from './markdown-latex';
 import { MermaidDiagram } from './mermaid-diagram';
 
 type Variant = 'full' | 'compact';
+type TrustPosture = 'trusted' | 'untrusted';
 
 interface MarkdownRendererProps {
   content: string;
+  /**
+   * Required because markdown reaches this shared renderer from both authored
+   * application content and attacker-controlled sources.
+   */
+  trust: TrustPosture;
   variant?: Variant;
   className?: string;
-  allowHtml?: boolean;
   onOpenLink?: (href: string) => boolean | void;
   /**
    * Optional callback for resolving non-external image src values (e.g. relative
@@ -124,15 +129,30 @@ function handleAnchorClick(
   e: React.MouseEvent
 ) {
   if (!href) return;
+
+  // Same-document fragments keep the browser's default behaviour: they cannot leave the
+  // document, reach the network, or leak anything, and a rendered README's table of
+  // contents is nothing but these. html-renderer.tsx lets them through for the same
+  // reason, and resolveWorkspaceResourcePath already refuses to treat them as paths.
+  if (href.startsWith('#')) return;
+
+  // Everything else is navigation this renderer owns. Default-deny before dispatching:
+  // an unclaimed relative href would otherwise navigate the whole renderer away from the
+  // app, and markdown reaching here is frequently attacker-controlled.
+  e.preventDefault();
   if (onOpenLink?.(href)) {
-    e.preventDefault();
     return;
   }
 
   if (/^https?:\/\//i.test(href)) {
-    e.preventDefault();
     confirmOpenExternalLink(href);
   }
+}
+
+function BlockedImage({ alt }: { alt?: string }) {
+  return (
+    <span className="text-muted-foreground">{alt ? `[Image: ${alt}]` : '[Image blocked]'}</span>
+  );
 }
 
 function getCodeBlock(children: React.ReactNode, className?: string) {
@@ -160,6 +180,7 @@ function isOnlyMermaidDiagramChild(children: React.ReactNode): boolean {
 
 function useFullComponents(
   isDark: boolean,
+  trust: TrustPosture,
   resolveImage?: (src: string) => Promise<string | null>,
   onOpenLink?: MarkdownRendererProps['onOpenLink']
 ) {
@@ -230,7 +251,7 @@ function useFullComponents(
         return (
           <a
             href={href}
-            className="text-primary decoration-primary/50 hover:decoration-primary underline"
+            className="text-primary underline decoration-primary/50 hover:decoration-primary"
             target="_blank"
             rel="noopener noreferrer"
             onClick={handleClick}
@@ -264,6 +285,9 @@ function useFullComponents(
         if (!isExternal && resolveImage && src) {
           return <ResolvedImage src={src} alt={alt || ''} resolveImage={resolveImage} />;
         }
+        if (trust === 'untrusted') {
+          return <BlockedImage alt={alt} />;
+        }
         return (
           <ExpandableImage
             src={src}
@@ -293,11 +317,15 @@ function useFullComponents(
         />
       ),
     }),
-    [isDark, resolveImage, onOpenLink]
+    [isDark, trust, resolveImage, onOpenLink]
   );
 }
 
-function useCompactComponents(isDark: boolean, onOpenLink?: MarkdownRendererProps['onOpenLink']) {
+function useCompactComponents(
+  isDark: boolean,
+  trust: TrustPosture,
+  onOpenLink?: MarkdownRendererProps['onOpenLink']
+) {
   return useMemo(
     () => ({
       h1: ({ children }: WithChildren) => (
@@ -388,36 +416,39 @@ function useCompactComponents(isDark: boolean, onOpenLink?: MarkdownRendererProp
           </a>
         );
       },
-      img: ({ node: _node, src, alt, className, ...props }: ImgProps) => (
-        <ExpandableImage
-          src={src}
-          alt={alt || ''}
-          containerClassName="my-2"
-          className={cn('h-auto max-h-80 max-w-full rounded', className)}
-          {...props}
-        />
-      ),
+      img: ({ node: _node, src, alt, className, ...props }: ImgProps) =>
+        trust === 'untrusted' ? (
+          <BlockedImage alt={alt} />
+        ) : (
+          <ExpandableImage
+            src={src}
+            alt={alt || ''}
+            containerClassName="my-2"
+            className={cn('h-auto max-h-80 max-w-full rounded', className)}
+            {...props}
+          />
+        ),
     }),
-    [isDark, onOpenLink]
+    [isDark, trust, onOpenLink]
   );
 }
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   content,
+  trust,
   variant = 'full',
   className,
-  allowHtml = variant === 'full',
   resolveImage,
   onOpenLink,
 }) => {
   const { effectiveTheme } = useTheme();
   const isDark = effectiveTheme === 'emdark';
 
-  const fullComponents = useFullComponents(isDark, resolveImage, onOpenLink);
-  const compactComponents = useCompactComponents(isDark, onOpenLink);
+  const fullComponents = useFullComponents(isDark, trust, resolveImage, onOpenLink);
+  const compactComponents = useCompactComponents(isDark, trust, onOpenLink);
 
   const components = variant === 'full' ? fullComponents : compactComponents;
-  const rehypePlugins = allowHtml ? FULL_REHYPE_PLUGINS : COMPACT_REHYPE_PLUGINS;
+  const rehypePlugins = trust === 'trusted' ? FULL_REHYPE_PLUGINS : COMPACT_REHYPE_PLUGINS;
   const normalizedContent = useMemo(() => normalizeLatexDelimiters(content), [content]);
 
   return (

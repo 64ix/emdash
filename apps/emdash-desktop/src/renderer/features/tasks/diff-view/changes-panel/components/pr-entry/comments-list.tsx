@@ -68,7 +68,8 @@ function CommentItem({ comment }: { comment: PullRequestConversationItem }) {
             comment.isOutdated && 'text-foreground-passive'
           )}
         >
-          <MarkdownRenderer content={comment.body} variant="compact" allowHtml />
+          {/* Pull request comments are remote user-authored content. */}
+          <MarkdownRenderer content={comment.body} trust="untrusted" variant="compact" />
         </div>
       </div>
       <button

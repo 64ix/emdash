@@ -102,9 +102,11 @@ export const SkillDetailModal: React.FC<SkillDetailModalProps> = ({
             </div>
           )}
 
+          {/* Installed skill instructions are not application-authored content. */}
           {!showLoadingContent && visibleBody && (
             <MarkdownRenderer
               content={visibleBody}
+              trust="untrusted"
               variant="compact"
               className="bg-muted/20 text-muted-foreground rounded-md px-3 py-2 text-xs"
             />
