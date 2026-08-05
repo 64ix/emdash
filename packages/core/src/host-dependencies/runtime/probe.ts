@@ -1,3 +1,4 @@
+import { win32 } from 'node:path';
 import type { IExecutionContext } from '../../exec/execution-context';
 import type { Platform } from '../capability';
 import { toPlatform } from './install-options';
@@ -6,9 +7,34 @@ import type { ProbeResult } from './types';
 const WHICH_TIMEOUT_MS = 5_000;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const REALPATH_TIMEOUT_MS = 5_000;
+const WINDOWS_EXECUTABLE_EXTENSIONS = new Set(['.bat', '.cmd', '.com', '.exe']);
 
 function targetPlatform(platform?: Platform): Platform {
   return platform ?? toPlatform(process.platform);
+}
+
+function parseResolvedCommandPaths(command: string, stdout: string, platform: Platform): string[] {
+  const paths = stdout
+    .trim()
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const isBareExtensionlessWindowsCommand =
+    platform === 'windows' &&
+    !command.includes('/') &&
+    !command.includes('\\') &&
+    win32.extname(command) === '';
+
+  if (!isBareExtensionlessWindowsCommand) return paths;
+
+  // `where` includes exact extensionless matches before PATHEXT matches. Packaged apps may
+  // contain Unix binaries alongside their Windows executable, so only retain file types that
+  // Node can spawn directly when resolving a bare command name.
+  const executablePaths = paths.filter((path) =>
+    WINDOWS_EXECUTABLE_EXTENSIONS.has(win32.extname(path).toLowerCase())
+  );
+  return executablePaths.length > 0 ? executablePaths : paths;
 }
 
 /**
@@ -27,11 +53,7 @@ export async function resolveAllCommandPaths(
   try {
     if (plat === 'windows') {
       const { stdout } = await ctx.exec('where', [command], { timeout: WHICH_TIMEOUT_MS });
-      return stdout
-        .trim()
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean);
+      return parseResolvedCommandPaths(command, stdout, plat);
     }
     const { stdout } = await ctx.exec('which', ['-a', command], { timeout: WHICH_TIMEOUT_MS });
     return stdout
@@ -54,11 +76,11 @@ export async function resolveCommandPath(
   ctx: IExecutionContext,
   platform?: Platform
 ): Promise<string | null> {
-  const resolveCmd = targetPlatform(platform) === 'windows' ? 'where' : 'which';
+  const plat = targetPlatform(platform);
+  const resolveCmd = plat === 'windows' ? 'where' : 'which';
   try {
     const { stdout } = await ctx.exec(resolveCmd, [command], { timeout: WHICH_TIMEOUT_MS });
-    const firstLine = stdout.trim().split('\n')[0]?.trim();
-    return firstLine ?? null;
+    return parseResolvedCommandPaths(command, stdout, plat)[0] ?? null;
   } catch {
     return null;
   }

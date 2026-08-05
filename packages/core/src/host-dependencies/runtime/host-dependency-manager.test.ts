@@ -1,9 +1,18 @@
 import { err, ok } from '@emdash/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { IExecutionContext } from '../../exec/execution-context';
-import { HostDependencyManager } from './host-dependency-manager';
+import {
+  HostDependencyManager as RuntimeHostDependencyManager,
+  type HostDependencyManagerOptions,
+} from './host-dependency-manager';
 import type { InstallMethodDetector } from './method-detection';
 import type { DependencyDescriptor, Provenance } from './types';
+
+class HostDependencyManager extends RuntimeHostDependencyManager {
+  constructor(ctx: IExecutionContext, options: HostDependencyManagerOptions = {}) {
+    super(ctx, { platform: 'linux', ...options });
+  }
+}
 
 const TEST_DEPENDENCIES: DependencyDescriptor[] = [
   {
