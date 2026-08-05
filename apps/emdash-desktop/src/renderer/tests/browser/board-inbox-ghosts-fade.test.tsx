@@ -414,6 +414,39 @@ function buttonWithText(text: string): HTMLElement | undefined {
     | undefined;
 }
 
+function searchInput(): HTMLInputElement {
+  return host.querySelector(
+    'input[aria-label="Search tasks, Linked Issues, and Pull Requests"]'
+  ) as HTMLInputElement;
+}
+
+/** Sets the controlled search `<input>` through React's synthetic event system —
+ * the native setter bypasses React's value-tracker, which would otherwise
+ * swallow the change (same reason as `board-header.test.tsx`'s own helper). */
+function typeIntoSearch(value: string) {
+  const input = searchInput();
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value'
+  )?.set;
+  nativeSetter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function needsAttentionToggle(): HTMLElement {
+  return host.querySelector('[aria-label="Filter to tasks needing attention"]') as HTMLElement;
+}
+
+/** Every Ghost Card currently rendered on the board. */
+function renderedGhostCards(): Element[] {
+  return Array.from(host.querySelectorAll('[data-ghost-card]'));
+}
+
+/** True while the Task Detail Panel is open (its close button exists only then). */
+function panelIsOpen(): boolean {
+  return host.querySelector('[aria-label="Close task details"]') !== null;
+}
+
 describe('Board Inbox — count-bearing summary (ticket #51)', () => {
   setupDom();
 
@@ -637,6 +670,127 @@ describe('Ghost Cards remain excluded from sortable ids (ticket #51)', () => {
     // `column === 'idea' ? ghostCards : undefined` wiring) — still there,
     // never relocated by the attempted drag.
     expect(columnZone('Idea').contains(ghostCardEl(ghostCard.id))).toBe(true);
+  });
+});
+
+/**
+ * Regression: Ghost Cards were rendered straight from `useGhostCards` and so
+ * bypassed the board's own filtering entirely. A query matching nothing hid
+ * every task card while leaving all four candidates on screen, so the board
+ * read as unfiltered even though the header advertised an active filter — and
+ * "Needs Attention" kept showing candidates that can never need attention.
+ * `ghostCardPassesBoardFilters` (board-filters.ts) now gates them; these
+ * assertions drive it through the real header controls.
+ */
+describe('Ghost Cards honour the board search and filters', () => {
+  setupDom();
+
+  it('hides a Ghost Card whose issue does not match the search query, and keeps a matching one', async () => {
+    const matching = makeGhostCard({
+      url: 'https://github.com/acme/repo/issues/58',
+      title: 'SplitButton never renders the tone dot',
+      identifier: '#58',
+    });
+    const other = makeGhostCard({
+      url: 'https://github.com/acme/repo/issues/59',
+      title: 'MarkdownRenderer parses raw HTML',
+      identifier: '#59',
+    });
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([matching, other]));
+    await mount();
+    await settle();
+    expect(renderedGhostCards()).toHaveLength(2);
+
+    typeIntoSearch('splitbutton');
+    await settle();
+
+    expect(ghostCardEl(matching.id)).toBeTruthy();
+    expect(renderedGhostCards()).toHaveLength(1);
+  });
+
+  it("matches a Ghost Card on its candidate issue's display identifier too", async () => {
+    const ghostCard = makeGhostCard({ title: 'Unrelated title', identifier: '#58' });
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    typeIntoSearch('#58');
+    await settle();
+    expect(ghostCardEl(ghostCard.id)).toBeTruthy();
+
+    typeIntoSearch('#59');
+    await settle();
+    expect(renderedGhostCards()).toHaveLength(0);
+  });
+
+  it('hides every Ghost Card when a search query matches nothing at all', async () => {
+    mocks.getGhostCards.mockImplementation(() =>
+      Promise.resolve([
+        makeGhostCard({ url: 'https://github.com/acme/repo/issues/1', title: 'One' }),
+        makeGhostCard({ url: 'https://github.com/acme/repo/issues/2', title: 'Two' }),
+      ])
+    );
+    await mount();
+    await settle();
+    expect(renderedGhostCards()).toHaveLength(2);
+
+    typeIntoSearch('qqqqq-matches-nothing');
+    await settle();
+
+    expect(renderedGhostCards()).toHaveLength(0);
+  });
+
+  it('hides Ghost Cards under Needs Attention — a candidate has no agent to need it', async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+    expect(ghostCardEl(ghostCard.id)).toBeTruthy();
+
+    click(needsAttentionToggle());
+    await settle();
+
+    expect(renderedGhostCards()).toHaveLength(0);
+  });
+
+  it("restores hidden Ghost Cards once the query is cleared — filtering never consumed the project's candidates", async () => {
+    const ghostCard = makeGhostCard();
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    typeIntoSearch('qqqqq-matches-nothing');
+    await settle();
+    expect(renderedGhostCards()).toHaveLength(0);
+
+    typeIntoSearch('');
+    await settle();
+
+    expect(ghostCardEl(ghostCard.id)).toBeTruthy();
+    // The mutation seam: filtering a candidate out of view must never adopt or
+    // reject it — nothing is persisted for a ghost before adoption.
+    expect(mocks.adoptGhostCard).not.toHaveBeenCalled();
+    expect(mocks.rejectGhostCard).not.toHaveBeenCalled();
+  });
+
+  it('keeps an open ghost inspector open while the search hides its card', async () => {
+    const ghostCard = makeGhostCard({ title: 'A candidate idea' });
+    mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
+    await mount();
+    await settle();
+
+    click(ghostCardEl(ghostCard.id));
+    await settle();
+    expect(panelIsOpen()).toBe(true);
+
+    typeIntoSearch('qqqqq-matches-nothing');
+    await settle();
+
+    // The card is gone from the column, but the panel the user deliberately
+    // opened stays: its target resolves against the unfiltered candidate set,
+    // mirroring how `storeById` stays unfiltered for tasks.
+    expect(renderedGhostCards()).toHaveLength(0);
+    expect(panelIsOpen()).toBe(true);
   });
 });
 

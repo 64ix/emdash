@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { LinkedIssueRoles } from '@shared/core/linked-issue';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
+import type { LinkedIssue, LinkedIssueRoles } from '@shared/core/linked-issue';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task, WorkflowStage } from '@shared/core/tasks/tasks';
 import {
   agentStateFilterValue,
   EMPTY_BOARD_FILTERS,
+  ghostCardMatchesSearchQuery,
+  ghostCardPassesBoardFilters,
   hasActiveBoardFilters,
   linkedIssuePresenceFilterValue,
   matchesSearchQuery,
@@ -61,6 +64,20 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
     assignees: [],
     checks: [],
     ...overrides,
+  };
+}
+
+function makeGhostCard(issue: Partial<LinkedIssue> = {}): GhostCard {
+  const url = issue.url ?? 'https://github.com/acme/repo/issues/58';
+  return {
+    id: url,
+    issue: {
+      provider: 'github',
+      url,
+      title: 'A candidate issue nobody linked yet',
+      identifier: '#58',
+      ...issue,
+    },
   };
 }
 
@@ -310,5 +327,100 @@ describe('taskPassesBoardFilters', () => {
     expect(
       taskPassesBoardFilters(makeTask({ prs: [makePr({ status: 'merged' })] }), null, filters)
     ).toBe(false);
+  });
+});
+
+describe('ghostCardMatchesSearchQuery', () => {
+  it('matches everything for an empty (or all-whitespace) query', () => {
+    const ghost = makeGhostCard();
+    expect(ghostCardMatchesSearchQuery(ghost, '')).toBe(true);
+    expect(ghostCardMatchesSearchQuery(ghost, '   ')).toBe(true);
+  });
+
+  it("matches the candidate issue's title, case-insensitively", () => {
+    const ghost = makeGhostCard({ title: 'SplitButton never renders the tone dot' });
+    expect(ghostCardMatchesSearchQuery(ghost, 'splitbutton')).toBe(true);
+    expect(ghostCardMatchesSearchQuery(ghost, 'TONE DOT')).toBe(true);
+    expect(ghostCardMatchesSearchQuery(ghost, 'unrelated')).toBe(false);
+  });
+
+  it("matches the candidate issue's display identifier", () => {
+    const ghost = makeGhostCard({ title: 'Unrelated title', identifier: '#58' });
+    expect(ghostCardMatchesSearchQuery(ghost, '#58')).toBe(true);
+    expect(ghostCardMatchesSearchQuery(ghost, '58')).toBe(true);
+    expect(ghostCardMatchesSearchQuery(ghost, '#59')).toBe(false);
+  });
+
+  it('prefers displayIdentifier over the raw identifier when both are set', () => {
+    const ghost = makeGhostCard({
+      title: 'Unrelated title',
+      identifier: 'raw-id-7',
+      displayIdentifier: 'ACME-7',
+    });
+    expect(ghostCardMatchesSearchQuery(ghost, 'ACME-7')).toBe(true);
+    expect(ghostCardMatchesSearchQuery(ghost, 'raw-id-7')).toBe(false);
+  });
+
+  it('does not throw when the issue suppresses its display identifier', () => {
+    const ghost = makeGhostCard({ title: 'Only a title', displayIdentifier: null });
+    expect(ghostCardMatchesSearchQuery(ghost, 'only a title')).toBe(true);
+    expect(ghostCardMatchesSearchQuery(ghost, 'anything else')).toBe(false);
+  });
+});
+
+describe('ghostCardPassesBoardFilters', () => {
+  it('shows every ghost when no filter is active', () => {
+    expect(ghostCardPassesBoardFilters(makeGhostCard(), EMPTY_BOARD_FILTERS)).toBe(true);
+  });
+
+  // The regression this predicate exists for: before it, a query matching
+  // nothing still left every ghost on screen while the header advertised an
+  // active filter.
+  it('hides a ghost whose issue does not match the active search query', () => {
+    const filters: BoardFilterState = { ...EMPTY_BOARD_FILTERS, query: 'matches-nothing' };
+    expect(ghostCardPassesBoardFilters(makeGhostCard(), filters)).toBe(false);
+  });
+
+  it('keeps a ghost whose issue matches the active search query', () => {
+    const filters: BoardFilterState = { ...EMPTY_BOARD_FILTERS, query: 'splitbutton' };
+    expect(
+      ghostCardPassesBoardFilters(makeGhostCard({ title: 'SplitButton tone dot' }), filters)
+    ).toBe(true);
+  });
+
+  it('hides every ghost under Needs Attention — a candidate has no agent to need it', () => {
+    const filters: BoardFilterState = { ...EMPTY_BOARD_FILTERS, needsAttentionOnly: true };
+    expect(ghostCardPassesBoardFilters(makeGhostCard(), filters)).toBe(false);
+  });
+
+  it('keeps ghosts when the stage filter includes Idea, hides them otherwise', () => {
+    const withIdea: BoardFilterState = { ...EMPTY_BOARD_FILTERS, stages: new Set(['idea']) };
+    const withoutIdea: BoardFilterState = {
+      ...EMPTY_BOARD_FILTERS,
+      stages: new Set(['spec', 'review']),
+    };
+    expect(ghostCardPassesBoardFilters(makeGhostCard(), withIdea)).toBe(true);
+    expect(ghostCardPassesBoardFilters(makeGhostCard(), withoutIdea)).toBe(false);
+  });
+
+  // A ghost has no agent, no Linked Issue Role and no Pull Request, so these
+  // categories hide it rather than inventing an `idle`/`unlinked`/`none`
+  // answer about a task that does not exist yet.
+  it('hides ghosts whenever a task-level fact category is selected', () => {
+    for (const filters of [
+      { ...EMPTY_BOARD_FILTERS, agentStates: new Set(['idle' as const]) },
+      { ...EMPTY_BOARD_FILTERS, linkedIssuePresence: new Set(['unlinked' as const]) },
+      { ...EMPTY_BOARD_FILTERS, prStates: new Set(['none' as const]) },
+    ]) {
+      expect(ghostCardPassesBoardFilters(makeGhostCard(), filters)).toBe(false);
+    }
+  });
+
+  it('never mutates the ghost card or the filter state it reads', () => {
+    const ghost = makeGhostCard();
+    const snapshot = structuredClone(ghost);
+    const filters: BoardFilterState = { ...EMPTY_BOARD_FILTERS, query: 'anything' };
+    ghostCardPassesBoardFilters(ghost, filters);
+    expect(ghost).toEqual(snapshot);
   });
 });

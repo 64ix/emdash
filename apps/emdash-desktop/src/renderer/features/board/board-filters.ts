@@ -1,6 +1,7 @@
 import { agentStatusNeedsAttention } from '@renderer/features/board/agent-attention';
 import { stageOf, type ColumnId } from '@renderer/features/board/board-ordering';
 import type { AgentStatus } from '@shared/core/agents/agentEvents';
+import type { GhostCard } from '@shared/core/issues/ghost-card';
 import {
   linkedIssueDisplayIdentifier,
   linkedIssueRoleSchema,
@@ -125,6 +126,21 @@ export function matchesSearchQuery(task: Task, query: string): boolean {
   return identifiers.some((identifier) => identifier.toLowerCase().includes(trimmed));
 }
 
+/**
+ * The Ghost Card counterpart of `matchesSearchQuery`: a ghost has no task
+ * name, so its candidate issue's title stands in for one, alongside the same
+ * display identifier the real-task search already matches. Both are strings
+ * the ghost card and the Task Detail Panel's ghost mode already show, keeping
+ * this to the same "search only what's on screen" rule.
+ */
+export function ghostCardMatchesSearchQuery(ghostCard: GhostCard, query: string): boolean {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) return true;
+  if (ghostCard.issue.title.toLowerCase().includes(trimmed)) return true;
+  const identifier = linkedIssueDisplayIdentifier(ghostCard.issue);
+  return identifier !== null && identifier.toLowerCase().includes(trimmed);
+}
+
 // ── Combined filter state ───────────────────────────────────────────────────
 
 export type BoardFilterState = {
@@ -193,5 +209,36 @@ export function taskPassesBoardFilters(
     return false;
   }
   if (filters.prStates.size > 0 && !filters.prStates.has(prStateFilterValue(task))) return false;
+  return true;
+}
+
+/**
+ * The Ghost Card counterpart of `taskPassesBoardFilters`. Ghost Cards are
+ * candidates, not tasks (CONTEXT.md "Ghost Card"), so they were previously
+ * rendered straight from `useGhostCards` and escaped filtering entirely: a
+ * query matching nothing still left every ghost on screen, which made the
+ * board read as unfiltered while an active filter chip claimed otherwise.
+ *
+ * A ghost carries exactly two facts a board filter can read — its candidate
+ * issue's title/identifier, and the fact that it only ever renders in Idea.
+ * It has no agent, no workspace, no Pull Request and no Linked Issue Role, so
+ * the three categories that assert such a task-level fact hide it outright
+ * rather than having it pretend to be `idle`, `unlinked` or `none`: inventing
+ * a value would answer a question about a task that does not exist yet.
+ * Needs Attention hides ghosts for the same reason — no agent can need
+ * intervention. Like every predicate in this module, this only ever reads.
+ */
+export function ghostCardPassesBoardFilters(
+  ghostCard: GhostCard,
+  filters: BoardFilterState
+): boolean {
+  if (filters.needsAttentionOnly) return false;
+  if (!ghostCardMatchesSearchQuery(ghostCard, filters.query)) return false;
+  // Ghost Cards only ever live in Idea, so a stage filter that excludes Idea
+  // excludes them too.
+  if (filters.stages.size > 0 && !filters.stages.has('idea')) return false;
+  if (filters.agentStates.size > 0) return false;
+  if (filters.linkedIssuePresence.size > 0) return false;
+  if (filters.prStates.size > 0) return false;
   return true;
 }
