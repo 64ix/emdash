@@ -9,19 +9,35 @@ spec = one PR onto `fork-main`.
 
 - `main` — pristine mirror of `upstream/main`. Never commit here.
 - `fork-main` — default working branch: `main` + our commits. Rebase onto upstream
-  release tags (`git fetch upstream --tags && git rebase <tag>`).
+  release tags (`git fetch upstream --tags && git rebase <tag>`). Every branch is cut
+  from here, and `origin/HEAD` is repointed at it locally (see "Local clone
+  invariants") so tooling that reads the repo's default branch gets `fork-main`.
 
 > [!WARNING]
-> **Every fork PR must target `fork-main`.** Merging onto `main` is a silent failure
-> mode, not a loud one — nothing errors. The PR shows as merged, but the code never
-> reaches the branch the app is built from, so the feature is simply absent at runtime,
-> and the weekly Upstream Sync's `git merge --ff-only upstream/main` starts failing
-> because `main` can no longer fast-forward.
+> **Every fork PR must target `fork-main`, on `64ix/emdash`.** Both halves fail
+> silently — nothing errors either way.
 >
-> Before opening a PR, check the base:
+> *Wrong repo:* `gh` resolves a fork's base repo to the **parent**, so an unqualified
+> `gh pr create` opens the PR on `generalaction/emdash`. That is how **PR #2976**
+> happened: a worktree cut off `main` (the app's project `defaultBranch` was
+> `origin/main` at the time), a fix nobody asked for, written against upstream's
+> version rather than ours, proposed to upstream.
+>
+> *Wrong branch:* the PR shows as merged, but the code never reaches the branch the app
+> is built from, so the feature is simply absent at runtime, and the weekly Upstream
+> Sync's `git merge --ff-only upstream/main` starts failing because `main` can no
+> longer fast-forward.
+>
+> Before you edit, check what you are standing on:
 >
 > ```bash
-> gh pr create --base fork-main   # never rely on the default
+> git merge-base --is-ancestor origin/fork-main HEAD || echo "WRONG BASE — rebase onto origin/fork-main"
+> ```
+>
+> Before opening a PR, name both explicitly; after, read the base back:
+>
+> ```bash
+> gh pr create --repo 64ix/emdash --base fork-main   # never rely on either default
 > gh pr view <n> --json baseRefName -q .baseRefName   # must print: fork-main
 > ```
 >
@@ -42,6 +58,100 @@ spec = one PR onto `fork-main`.
 > **Happened once:** PR #13 ([Spec #11] Auto-generated Conversation Titles) was merged
 > to `main`. The feature was missing from every build for a day with no error anywhere;
 > the fix was a cherry-pick onto `fork-main` plus restoring `main` to the upstream sha.
+
+## Local clone invariants
+
+The repo carries the guard script, its Claude Code registration and these docs. The
+invariants below live in `.git/config`, in `~/.codex/` and in the emdash app's database,
+so **they do not travel with the repo** — that gap is what produced PR #2976. One
+idempotent command applies them per clone, and reports what only you can do:
+
+```bash
+sh scripts/fork-setup.sh
+```
+
+It refuses to run against a checkout whose `origin` is not `64ix/emdash`. What it does,
+should you want it by hand:
+
+```bash
+git remote set-head origin fork-main            # origin/HEAD -> fork-main, not main
+git remote set-url --push upstream DISABLED     # `git push upstream` fails loudly; fetch still works
+git config remote.origin.gh-resolved base       # what `gh repo set-default 64ix/emdash` writes
+```
+
+plus the Codex registration below, `chmod +x` on the guard, and a read-only check of the
+app's `defaultBranch`. Verify:
+
+```bash
+git symbolic-ref refs/remotes/origin/HEAD       # refs/remotes/origin/fork-main
+git remote -v | grep upstream                   # push URL must read DISABLED
+git config --get remote.origin.gh-resolved      # base
+sh scripts/fork-setup.sh --check-codex          # trust status of the Codex hook
+```
+
+GitHub's default branch for the fork is already `fork-main`, so a clone made today gets
+`origin/HEAD` right on its own; `set-head` is there to repair checkouts predating that,
+and this one had drifted. It matters more than it looks: agent harnesses derive "the
+repo's main branch" from `origin/HEAD` and state it in their session preamble, so a stale
+ref tells every agent to target `main` before it has read a line of these docs. The
+`--repo` risk is the one no default fixes — `gh` resolves a fork's base repo to the
+**parent** regardless.
+
+**In the emdash app**, the project's `defaultBranch` must be `fork-main` and its
+`baseRemote` `origin` (Project settings; stored in
+`project_settings.base_project_settings_json`, not in `.emdash.json`). The app cuts
+every task worktree from `getDefaultBranch()`, so a stale value here silently starts
+every agent on upstream's code — no doc can compensate. The older
+`projects.base_ref` column is only the fallback when `defaultBranch` is unset.
+
+**Agent guard.** `.claude/hooks/guard-fork-remote.sh` is one `PreToolUse` script shared
+by both agents. It blocks pushes to `upstream`, gh writes aimed at
+`generalaction/emdash`, and any `gh pr create` that does not pass
+`--repo 64ix/emdash --base fork-main`, explaining the correct form on stderr. Reads of
+upstream stay allowed, and so does merely mentioning the strings — rules are anchored at
+command position within each `;`/`&`/`|` segment. It accepts `tool_input.command` as a
+string or as an argv array, and no-ops unless the session's cwd resolves to a checkout
+whose `origin` is `64ix/emdash` (matching the remote, not a path, covers every worktree).
+Test it without an agent:
+
+```bash
+printf '{"cwd":"%s","tool_input":{"command":"gh pr create --title x"}}' "$PWD" |
+  .claude/hooks/guard-fork-remote.sh; echo "exit=$?"   # expect 2 + the guidance
+```
+
+*Claude Code* registers it per project in `.claude/settings.json`. Both files are
+tracked (the script force-added past the `.claude/` ignore rule), so they reach every
+worktree — nothing to redo per clone.
+
+*Codex* (verified on codex-cli 0.146.0) has **no project-scoped hook source**: neither
+`.codex/hooks.json`, nor `.codex/config.toml`, nor a root `hooks.json` is read. The only
+non-plugin surface is `~/.codex/hooks.json`, whose format matches Claude Code's:
+
+```json
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash|shell|exec_command|local_shell",
+  "hooks": [ { "type": "command",
+    "command": "/absolute/path/to/emdash/.claude/hooks/guard-fork-remote.sh" } ] } ] } }
+```
+
+That registration is global, which is exactly why the script gates on `origin` — in any
+other repo it exits 0 before looking at the command. Being outside the repo, it is a
+per-machine invariant like the git config above.
+
+> [!IMPORTANT]
+> A Codex hook does not run until it is **trusted**: it starts as
+> `trustStatus: untrusted`, and an untrusted hook is skipped **silently** — the command
+> runs unguarded and nothing is logged. Approve it in the `codex` TUI's startup hook
+> review; the decision is recorded as `hook_trust` in `~/.codex/config.toml`. Trust is
+> keyed by a hash of the hook, so **editing the script drops it back to `modified` and
+> it must be re-approved.** Check the live state at any time with:
+>
+> ```bash
+> { printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"p","version":"0"}}}\n'
+>   printf '{"jsonrpc":"2.0","id":2,"method":"hooks/list","params":{"cwds":["%s"]}}\n' "$PWD"
+>   perl -e 'select undef,undef,undef,6'
+> } | codex app-server 2>/dev/null | grep '"id":2' |
+>   jq -r '.result.data[0].hooks[] | "\(.trustStatus)\t\(.command)"'
+> ```
 
 ## Automation
 
@@ -78,9 +188,12 @@ Keep this list current — everything else we write must stay additive.
 | test DDL fixtures (`legacy-port/**/relational.test.ts`, `service.test.ts`, `createTask.test.ts`, `renameTask.test.ts`) | mirror the `tasks` DDL / row shape |
 | `apps/emdash-desktop/vitest.config.ts` | `FORK_CI` exclude for PTY integration tests |
 | `apps/emdash-desktop/package.json` | `package:fork` script (see "Personal macOS builds") |
+| `.claude/settings.json` | `hooks.PreToolUse` → `guard-fork-remote.sh` (upstream write guard) |
 
 Additive (no conflict risk): `features/board/`, `operations/updateTaskWorkflowStage.ts`,
-`drizzle/0020_*.sql`.
+`drizzle/0020_*.sql`, `scripts/fork-setup.sh`, `.claude/hooks/guard-fork-remote.sh`
+(force-added: `.claude/` is gitignored, but tracking it is what puts the guard in every
+worktree).
 
 ⚠️ Migration numbering: upstream also generates `drizzle/00NN_*.sql`. On every rebase,
 check for a collision with our migrations and renumber ours (regenerate with

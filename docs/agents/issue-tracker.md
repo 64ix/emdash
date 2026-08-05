@@ -18,6 +18,23 @@ This clone has two remotes (`origin` = fork, `upstream` = original project). Nev
 create or edit issues on `generalaction/emdash`; all skill-driven issue work stays
 on the fork.
 
+**The same ban covers pull requests, and there it has actually been broken.** `gh`
+resolves a fork's base repo to the **parent**, so an unqualified `gh pr create` opens
+the PR on `generalaction/emdash` — that is how PR #2976 was filed upstream. Name the
+fork and the base branch every time, then read the base back:
+
+```bash
+gh pr create --repo 64ix/emdash --base fork-main --title "..." --body "..."
+gh pr view <n> --json baseRefName -q .baseRefName   # must print: fork-main
+```
+
+Reading upstream is fine and often useful (`gh pr view|list|diff`, `gh issue view|list`
+with `--repo generalaction/emdash`). Writing to it is not — `.claude/hooks/guard-fork-remote.sh`
+blocks the write verbs. `gh repo set-default 64ix/emdash` pins the default for bare
+`gh issue ...` commands, but it is per-clone local config: never rely on it in a
+worktree or a fresh clone you did not configure yourself. See `FORK.md` →
+"Local clone invariants".
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_

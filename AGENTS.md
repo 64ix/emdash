@@ -1,3 +1,58 @@
+# READ FIRST — this checkout is a fork
+
+Not a section for one skill: this applies to **every** task in this repo, however
+small. The rules below exist because each was violated once, with the incident noted.
+
+| Remote | Repo | Rule |
+|--------|------|------|
+| `origin` | `64ix/emdash` | **ours** — branches, PRs, issues, releases all live here |
+| `upstream` | `generalaction/emdash` | **read-only** — `git fetch` for rebases, `gh ... view/list/diff` to look. Never push, never open a PR or issue, never comment. |
+
+| Branch | Rule |
+|--------|------|
+| `fork-main` | **the working branch.** Cut every branch from it, open every PR onto it. |
+| `main` | pristine mirror of `upstream/main`. Never commit, never merge onto it. |
+
+**Check your base before you edit.** A worktree cut from `main` carries none of our
+features, so anything you "fix" there is upstream code our version may already handle
+differently — and the diff is unmergeable as-is:
+
+```bash
+git merge-base --is-ancestor origin/fork-main HEAD && echo OK || echo "WRONG BASE — stop, rebase onto origin/fork-main"
+```
+
+**Opening a PR — always both flags.** `gh` resolves a fork's base repo to the
+**parent** by default, so an unqualified `gh pr create` opens the PR on
+`generalaction/emdash`:
+
+```bash
+gh pr create --repo 64ix/emdash --base fork-main --title ... --body ...
+gh pr view <n> --json baseRefName -q .baseRefName     # must print: fork-main
+```
+
+> [!WARNING]
+> Both halves of this have already gone wrong, and both failed **silently**:
+>
+> - **PR #2976** was opened on `generalaction/emdash` from a worktree cut off `main`,
+>   fixing behaviour that was never the task, against a version that was not ours.
+>   Nothing errored — `gh` simply used its default base repo.
+> - **PR #13** ([Spec #11] Auto-generated Conversation Titles) was merged onto `main`.
+>   The PR read as merged, but the code never reached the branch the app is built
+>   from: the feature was absent from every build for a day, and the weekly Upstream
+>   Sync's `git merge --ff-only upstream/main` started failing.
+>
+> Enforcement, none of which replaces the checks above: `upstream`'s push URL is
+> `DISABLED`, `.claude/hooks/guard-fork-remote.sh` (a `PreToolUse` hook) refuses
+> upstream writes and unqualified `gh pr create`, and
+> `.github/workflows/main-mirror-guard.yml` re-checks `main` daily. The workflow is a
+> safety net, not a merge-time gate — it cannot run on push to `main`, because that
+> branch never carries our workflow files.
+
+The enforcement listed above is per-machine, not part of the repo: on a fresh clone apply
+it with `sh scripts/fork-setup.sh` (idempotent, refuses any checkout that is not the fork).
+
+Full rationale, branch model, rebase hotspots and local-clone setup: [FORK.md](FORK.md).
+
 # Project Overview
 
 Emdash is a local-first, cross-platform Electron app for running multiple AI coding
@@ -456,29 +511,17 @@ Single-context layout: one root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/
 
 ### Spec implementation runner
 
-Base branch **`fork-main`** — not `main`. `origin/HEAD` points at `main`, but that
-branch is a pristine mirror of `upstream/main` (see `FORK.md`); all fork work and
-PRs target `fork-main`.
+Base branch **`fork-main`**, repo **`64ix/emdash`** — see "READ FIRST" at the top of
+this file for the remote/branch rules and the two incidents behind them. They are
+repo-wide, not specific to this runner. One check the runner owes on top of them:
 
-> [!WARNING]
-> **Always pass the base explicitly and verify it after merge.** Merging a fork PR
-> onto `main` fails silently — the PR reads as merged, but the code never reaches the
-> branch the app is built from, so the feature is absent at runtime with no error
-> anywhere, and the weekly Upstream Sync breaks because `main` can no longer
-> fast-forward from upstream.
->
-> ```bash
-> gh pr create --base fork-main ...                    # never rely on the default
-> gh pr view <n> --json baseRefName -q .baseRefName    # must print: fork-main
-> git fetch origin && git log --oneline origin/fork-main..origin/main   # MUST be empty
-> ```
->
-> `.github/workflows/main-mirror-guard.yml` re-checks this daily and opens an issue on
-> drift, but it is a safety net, not a merge-time gate (it cannot run on push to `main`
-> — that branch never carries our workflow files). **The checks above are still yours.**
->
-> **Happened once:** PR #13 ([Spec #11] Auto-generated Conversation Titles) landed on
-> `main`; the feature was missing from every build for a day before anyone noticed.
+```bash
+git fetch origin && git log --oneline origin/fork-main..origin/main   # after merge: MUST be empty
+```
+
+Never repair a PR that landed on `main` by force-pushing `main` first: cherry-pick the
+commit onto `fork-main` and push that, and only then restore `main` to the upstream
+sha — otherwise the only copy of the work is destroyed.
 
 Validate a change from the worktree root with:
 

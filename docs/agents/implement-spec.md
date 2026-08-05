@@ -15,24 +15,31 @@ reliably infer on its own.
 The gate and base branch are stated in the `### Spec implementation runner`
 sub-section of `AGENTS.md`. Facts the runner cannot infer from git alone:
 
-- **Base branch is `fork-main`, not `main`.** `origin/HEAD` points at `main`,
-  which is a pristine mirror of `upstream/main` and must never receive commits
-  (see `FORK.md`). Cut branches from and open PRs onto `fork-main`.
+- **Base branch is `fork-main`, and the repo is `64ix/emdash`.** `main` is a
+  pristine mirror of `upstream/main` and must never receive commits; `upstream`
+  is read-only (see `FORK.md`). `origin/HEAD` is repointed at `fork-main` in a
+  correctly configured clone — but that is local config, so never infer the base
+  from it: state it explicitly.
 
   > [!WARNING]
   > This rule was already documented here when PR #13 ([Spec #11] Auto-generated
-  > Conversation Titles) was still merged onto `main` — so **stating the rule is not
-  > enough; the runner must verify it.** The failure is silent: nothing errors, the PR
-  > reads as merged, and the feature is simply absent from every build.
+  > Conversation Titles) was still merged onto `main`, and again when PR #2976 was
+  > opened on `generalaction/emdash` from a worktree cut off `main` — so **stating the
+  > rule is not enough; the runner must verify it.** Both failures are silent: nothing
+  > errors, the PR reads as filed/merged, and the work is simply not where it belongs.
   >
-  > Two checks the runner owes on every spec:
+  > Three checks the runner owes on every spec:
   >
   > ```bash
-  > # 1. Before opening the PR — pass the base explicitly, then read it back.
-  > gh pr create --base fork-main ...
+  > # 1. Before touching a file — is this worktree even on our code?
+  > git merge-base --is-ancestor origin/fork-main HEAD || echo "WRONG BASE — rebase first"
+  >
+  > # 2. Before opening the PR — name repo and base, then read the base back.
+  > #    gh defaults a fork's base repo to the PARENT; --repo is not optional.
+  > gh pr create --repo 64ix/emdash --base fork-main ...
   > gh pr view <n> --json baseRefName -q .baseRefName     # must print: fork-main
   >
-  > # 2. After the PR merges — prove the content reached the working branch.
+  > # 3. After the PR merges — prove the content reached the working branch.
   > git fetch origin
   > git log --oneline origin/fork-main..origin/main       # MUST be empty
   > ```
