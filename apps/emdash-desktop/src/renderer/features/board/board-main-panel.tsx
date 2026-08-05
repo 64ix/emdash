@@ -477,17 +477,26 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
   }
 
   // Direct navigation (CONTEXT.md "Task Detail Panel"): the hover arrow on a
-  // card and the panel's "Open task" button both land here. Mirrors
-  // `SidebarTaskItem`'s open gesture — provision first when the task has
-  // never been provisioned and isn't already busy, then navigate straight to
-  // the full task view.
-  const handleOpenTask = (taskId: string) => {
+  // card, the panel's "Open task" button, and — carrying a target
+  // conversation id too — the panel's Conversations section rows (ticket
+  // #68) all land here. Mirrors `SidebarTaskItem`'s open gesture — provision
+  // first when the task has never been provisioned and isn't already busy,
+  // then navigate straight to the full task view, optionally carrying the
+  // conversation id as the `focusConversationId` navigation parameter ticket
+  // #67 built (`ReadyTaskMainPanel` resolves it via
+  // `WorkspaceViewModel.resolveFocusedConversation` once the task view is
+  // ready). One provision-then-navigate implementation for every
+  // direct-navigation gesture the board offers, not a second one per gesture.
+  const openTaskView = (taskId: string, focusConversationId?: string) => {
     const store = storeById.get(taskId);
     if (store?.state === 'unprovisioned' && store.phase === 'idle') {
       void manager.provisionTask(taskId);
     }
-    navigate('task', { projectId, taskId });
+    navigate('task', { projectId, taskId, focusConversationId });
   };
+  const handleOpenTask = (taskId: string) => openTaskView(taskId);
+  const handleOpenConversation = (taskId: string, conversationId: string) =>
+    openTaskView(taskId, conversationId);
 
   // Adopting a Ghost Card creates the real task and switches the panel to it
   // (CONTEXT.md "Task Detail Panel", "Ghost Card") so management can continue
@@ -937,6 +946,7 @@ export const BoardMainPanel = observer(function BoardMainPanel() {
             target={panelTarget}
             onClose={() => setPanelTarget(null)}
             onOpenTask={handleOpenTask}
+            onOpenConversation={handleOpenConversation}
             onAdoptGhostCard={handleAdoptGhostCard}
             onRejectGhostCard={rejectGhostCard}
           />
