@@ -129,6 +129,16 @@ function handleAnchorClick(
   e: React.MouseEvent
 ) {
   if (!href) return;
+
+  // Same-document fragments keep the browser's default behaviour: they cannot leave the
+  // document, reach the network, or leak anything, and a rendered README's table of
+  // contents is nothing but these. html-renderer.tsx lets them through for the same
+  // reason, and resolveWorkspaceResourcePath already refuses to treat them as paths.
+  if (href.startsWith('#')) return;
+
+  // Everything else is navigation this renderer owns. Default-deny before dispatching:
+  // an unclaimed relative href would otherwise navigate the whole renderer away from the
+  // app, and markdown reaching here is frequently attacker-controlled.
   e.preventDefault();
   if (onOpenLink?.(href)) {
     return;

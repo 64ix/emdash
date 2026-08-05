@@ -149,6 +149,37 @@ describe('MarkdownRenderer', () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  // The default-deny above must not swallow same-document fragments: they cannot leave the
+  // document or reach the network, and a rendered README's table of contents is only these.
+  it.each(['untrusted', 'trusted'] as const)(
+    'leaves same-document fragment links navigable in %s content',
+    (trust) => {
+      const onOpenLink = vi.fn(() => false);
+
+      act(() => {
+        root.render(
+          React.createElement(MarkdownRenderer, {
+            content: '[Install](#install)',
+            onOpenLink,
+            trust,
+            variant: 'full',
+          })
+        );
+      });
+
+      const link = container.querySelector<HTMLAnchorElement>('a[href]');
+      expect(link).not.toBeNull();
+
+      const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+      act(() => {
+        link?.dispatchEvent(event);
+      });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(onOpenLink).not.toHaveBeenCalled();
+    }
+  );
+
   it('renders hostile untrusted markdown without active resources or elements', () => {
     const hostileMarkdown = [
       '![remote](https://evil.example/beacon.png)',
