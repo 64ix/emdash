@@ -232,6 +232,10 @@ export class IssuesSyncEngine {
         facts.specFact?.state === 'closed'
           ? findSpecMatchingPrs(mergedPrFacts, {
               specIssueNumber: facts.specIssueNumber,
+              // This pass is already per-repository and the Spec issue came from
+              // that same repository; stated explicitly so the scoping does not
+              // depend on the query staying that way.
+              specRepositoryUrl: repository.data.repositoryUrl,
               taskBranch: facts.branchName,
             }).length > 0
           : false;
@@ -330,6 +334,7 @@ export class IssuesSyncEngine {
   private async _mergedPrFactsForRepository(repositoryUrl: string): Promise<PrWorkflowFact[]> {
     const rows = await db
       .select({
+        repositoryUrl: pullRequests.repositoryUrl,
         headRefName: pullRequests.headRefName,
         status: pullRequests.status,
         description: pullRequests.description,
@@ -337,6 +342,7 @@ export class IssuesSyncEngine {
       .from(pullRequests)
       .where(and(eq(pullRequests.repositoryUrl, repositoryUrl), eq(pullRequests.status, 'merged')));
     return rows.map((row) => ({
+      repositoryUrl: row.repositoryUrl,
       headRefName: row.headRefName,
       status: row.status as PrWorkflowFact['status'],
       description: row.description ?? null,

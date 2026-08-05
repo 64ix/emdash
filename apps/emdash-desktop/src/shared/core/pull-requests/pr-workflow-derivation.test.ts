@@ -9,8 +9,13 @@ import {
   type PrWorkflowFact,
 } from './pr-workflow-derivation';
 
+/** The repository a Spec issue lives in, and a second one whose PRs are synced alongside it. */
+const SPEC_REPO = 'https://github.com/acme/app';
+const OTHER_REPO = 'https://github.com/upstream/app';
+
 function pr(overrides: Partial<PrWorkflowFact> = {}): PrWorkflowFact {
   return {
+    repositoryUrl: SPEC_REPO,
     headRefName: 'feature/default',
     status: 'open',
     description: null,
@@ -72,6 +77,103 @@ describe('findSpecMatchingPrs', () => {
 
   it('returns no matches when there is neither a spec number nor a task branch', () => {
     expect(findSpecMatchingPrs([pr()], { specIssueNumber: null })).toEqual([]);
+  });
+
+  it('matches a repository-qualified reference to the spec issue', () => {
+    const prs = [pr({ description: 'Part of acme/app#42.' })];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual(prs);
+  });
+
+  it('matches a body that references the spec issue by its full URL', () => {
+    const prs = [pr({ description: 'Spec: https://github.com/acme/app/issues/42' })];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual(prs);
+  });
+
+  it('does not match a longer issue number in a URL reference', () => {
+    const prs = [pr({ description: 'See https://github.com/acme/app/issues/420' })];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual([]);
+  });
+
+  // Regression: a merged PR quoting the commit `66de91d76` in its body proved
+  // `shipped` for the open Spec #66, because the digits sat between a backtick
+  // and a `d` — the old predicate needed no `#` sigil at all.
+  it('does not match a commit SHA that merely starts with the spec issue number', () => {
+    const prs = [
+      pr({
+        status: 'merged',
+        headRefName: 'spec/18-acp-chat',
+        description: '- `66de91d76` — consumers now import from the source module.',
+      }),
+    ];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 66 })).toEqual([]);
+  });
+
+  it('does not match the spec issue number buried in a URL slug', () => {
+    const prs = [
+      pr({ description: 'Report: https://gist.github.com/x/2a66ec12763630b06e1e696974338ca7' }),
+    ];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 66 })).toEqual([]);
+  });
+
+  it('does not match plain prose that happens to contain the number', () => {
+    const prs = [pr({ description: 'Cuts the bundle by 66 KB and touches 66 files.' })];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 66 })).toEqual([]);
+  });
+
+  it('ignores a PR from another repository referencing the same number', () => {
+    const foreign = pr({ repositoryUrl: OTHER_REPO, description: 'Closes #42' });
+    expect(
+      findSpecMatchingPrs([foreign], { specIssueNumber: 42, specRepositoryUrl: SPEC_REPO })
+    ).toEqual([]);
+  });
+
+  it('keeps matching a PR in the spec issue own repository when scoped', () => {
+    const own = pr({ description: 'Closes #42' });
+    const foreign = pr({ repositoryUrl: OTHER_REPO, description: 'Closes #42' });
+    expect(
+      findSpecMatchingPrs([foreign, own], { specIssueNumber: 42, specRepositoryUrl: SPEC_REPO })
+    ).toEqual([own]);
+  });
+
+  it('scopes the task branch fallback to the spec issue repository too', () => {
+    const foreign = pr({ repositoryUrl: OTHER_REPO, headRefName: 'main', status: 'closed' });
+    expect(
+      findSpecMatchingPrs([foreign], {
+        specIssueNumber: 42,
+        specRepositoryUrl: SPEC_REPO,
+        taskBranch: 'main',
+      })
+    ).toEqual([]);
+  });
+
+  it('stays unscoped when the spec issue repository is unknown', () => {
+    const foreign = pr({ repositoryUrl: OTHER_REPO, description: 'Closes #42' });
+    expect(findSpecMatchingPrs([foreign], { specIssueNumber: 42 })).toEqual([foreign]);
+    expect(
+      findSpecMatchingPrs([foreign], { specIssueNumber: 42, specRepositoryUrl: null })
+    ).toEqual([foreign]);
+  });
+
+  // The end-to-end shape of the reported bug: an open Spec, no PR referencing it,
+  // and the board must leave the card exactly where the Spec fact put it.
+  it('derives no stage for an open spec whose only near-match is a SHA-quoting merged PR', () => {
+    const merged = pr({
+      status: 'merged',
+      headRefName: 'spec/18-acp-chat',
+      description: '- `66de91d76` — consumers now import from the source module.',
+    });
+    const foreignClosed = pr({
+      repositoryUrl: OTHER_REPO,
+      status: 'closed',
+      description: 'Report: https://gist.github.com/x/2a66ec12763630b06e1e696974338ca7',
+    });
+    const matches = findSpecMatchingPrs([merged, foreignClosed], {
+      specIssueNumber: 66,
+      specRepositoryUrl: SPEC_REPO,
+      taskBranch: 'fork-main',
+    });
+    expect(matches).toEqual([]);
+    expect(derivePrStage(matches)).toBeNull();
   });
 });
 
@@ -191,6 +293,19 @@ describe('deriveTaskStageAuthorityFact', () => {
       prFacts: [closedOther, open],
     });
     expect(holdingPr).toBe(open);
+  });
+
+  it('holds no PR when the only candidate lives in another repository', () => {
+    const foreign = pr({ repositoryUrl: OTHER_REPO, status: 'merged', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'spec',
+        specIssueNumber: 42,
+        specRepositoryUrl: SPEC_REPO,
+        taskBranch: null,
+        prFacts: [foreign],
+      })
+    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
   });
 
   it('is never github-proven while the task currently sits in triage, even with a holding PR', () => {

@@ -1,5 +1,6 @@
 import type { IDisposable, IInitializable } from '@emdash/shared';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { parseGitHubIssueUrl } from '@main/core/issues/inbound-sync/github-issue-url';
 import { pullRequestRepositoryScope } from '@main/core/pull-requests/pr-utils';
 import { taskSessionManager } from '@main/core/tasks/task-session-manager';
 import { db } from '@main/db/client';
@@ -33,8 +34,24 @@ type SpecLinkedTaskRow = {
   projectId: string;
   workflowStage: string | null;
   specIssueNumber: number | null;
+  specRepositoryUrl: string | null;
   workspaceId: string | null;
 };
+
+/**
+ * The repository a task's Spec issue lives in, in the same normalized shape as
+ * `pull_requests.repository_url` and `project_remotes.remote_url`. Scopes PR
+ * matching to that one repository — a fork syncs PRs from every remote but reads
+ * issues from one (CONTEXT.md "Issue Tracker Repository"), so without it an
+ * upstream PR's `#66` would answer for the fork's Spec #66. Null when the Spec
+ * link carries no parseable issue URL, which `findSpecMatchingPrs` treats as
+ * "unknown, stay unscoped" rather than "matches nothing".
+ */
+function specRepositoryUrlOf(linkedIssues: { spec?: { url?: string } } | null): string | null {
+  const url = linkedIssues?.spec?.url;
+  if (!url) return null;
+  return parseGitHubIssueUrl(url)?.repository.repositoryUrl ?? null;
+}
 
 /**
  * Derives a task's Workflow Stage from PR facts already synced into `pullRequests`
@@ -123,6 +140,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
       const taskBranch = task.workspaceId ? branchByWorkspace.get(task.workspaceId) : undefined;
       const matches = findSpecMatchingPrs(prFacts, {
         specIssueNumber: task.specIssueNumber,
+        specRepositoryUrl: task.specRepositoryUrl,
         taskBranch,
       });
       const derived = derivePrStage(matches);
@@ -167,7 +185,11 @@ export class BoardSyncService implements IInitializable, IDisposable {
 
     const prFacts =
       repositoryUrls.length > 0 ? await this._prFactsForRepositories(repositoryUrls) : [];
-    const matches = findSpecMatchingPrs(prFacts, { specIssueNumber, taskBranch });
+    const matches = findSpecMatchingPrs(prFacts, {
+      specIssueNumber,
+      specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
+      taskBranch,
+    });
     const derived = derivePrStage(matches);
 
     // A current `review`/`shipped` stage is a GitHub-proven fact; the transient
@@ -222,6 +244,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
     const { holdingPr, isCurrentStageGithubProven } = deriveTaskStageAuthorityFact({
       currentStage: (row.workflowStage as WorkflowStage | null) ?? null,
       specIssueNumber,
+      specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
       taskBranch,
       prFacts,
     });
@@ -269,6 +292,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
           projectId: row.projectId,
           workflowStage: row.workflowStage,
           specIssueNumber,
+          specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
           workspaceId: row.workspaceId,
         },
       ];
@@ -295,6 +319,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
 
     const rows = await db
       .select({
+        repositoryUrl: pullRequests.repositoryUrl,
         headRefName: pullRequests.headRefName,
         status: pullRequests.status,
         description: pullRequests.description,
@@ -303,6 +328,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
       .where(pullRequestRepositoryScope(repositoryUrls));
 
     return rows.map((row) => ({
+      repositoryUrl: row.repositoryUrl,
       headRefName: row.headRefName,
       status: row.status as PrWorkflowFact['status'],
       description: row.description ?? null,
@@ -320,6 +346,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
         title: pullRequests.title,
         identifier: pullRequests.identifier,
         isDraft: pullRequests.isDraft,
+        repositoryUrl: pullRequests.repositoryUrl,
         headRefName: pullRequests.headRefName,
         status: pullRequests.status,
         description: pullRequests.description,
@@ -332,6 +359,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
       title: row.title,
       identifier: row.identifier ?? null,
       isDraft: Boolean(row.isDraft),
+      repositoryUrl: row.repositoryUrl,
       headRefName: row.headRefName,
       status: row.status as PullRequestStatus,
       description: row.description ?? null,

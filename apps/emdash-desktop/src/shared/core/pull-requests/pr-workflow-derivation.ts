@@ -10,6 +10,15 @@ import type { PullRequestStatus } from './pull-requests';
 
 /** The subset of a synced PR row needed to match it to a task and derive a stage. */
 export type PrWorkflowFact = {
+  /**
+   * The repository the PR itself lives in (`pull_requests.repository_url`).
+   * Load-bearing for matching, not just display: PRs are synced across *every*
+   * remote while issues come from the Issue Tracker Repository alone (CONTEXT.md),
+   * so a `#66` written in an upstream PR references upstream's issue 66 — never a
+   * Spec that happens to be numbered 66 in the fork. Issue and PR numbering is
+   * per-repository, so a number match is only meaningful within one repository.
+   */
+  repositoryUrl: string;
   headRefName: string;
   status: PullRequestStatus;
   description: string | null;
@@ -32,32 +41,74 @@ export function parseIssueNumberFromIdentifier(
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** True when `text` mentions `issueNumber` as a standalone number (not part of a longer one). */
-function referencesIssueNumber(text: string, issueNumber: number): boolean {
-  return new RegExp(`(?:^|[^\\d])${issueNumber}(?:[^\\d]|$)`).test(text);
+/**
+ * True when a PR body references `issueNumber` the way GitHub itself means it:
+ * the `#N` sigil (bare `#66`, or repo-qualified `owner/repo#66`) or an issue URL
+ * ending in `/issues/N`.
+ *
+ * The sigil is load-bearing. Matching the bare digits with only a
+ * "not adjacent to another digit" boundary made every hex commit SHA, gist id
+ * and URL slug carrying those digits a reference: a merged PR whose body quoted
+ * the commit `66de91d76` proved `shipped` for an open Spec #66, because `6`,`6`
+ * sat between a backtick and a `d`. Prose is full of numbers that are not issue
+ * references, so the reference has to be marked as one.
+ */
+function bodyReferencesIssueNumber(text: string, issueNumber: number): boolean {
+  return new RegExp(`(?:#|/issues/)${issueNumber}(?!\\d)`).test(text);
+}
+
+/**
+ * True when a branch name carries `issueNumber` as a token of its own —
+ * `spec/42-board-sync`, `42-fix-thing` — rather than as part of a longer number
+ * (`420-unrelated`). Branch names are structured slugs rather than prose, and
+ * carry no `#`, so the digits alone stay a usable signal here; a PR *body* gets
+ * the stricter `bodyReferencesIssueNumber` treatment instead.
+ */
+function branchReferencesIssueNumber(headRefName: string, issueNumber: number): boolean {
+  return new RegExp(`(?:^|[^\\d])${issueNumber}(?:[^\\d]|$)`).test(headRefName);
 }
 
 /**
  * Finds the PRs that count as "referencing the Spec" for a task.
  *
- * Primary match: the PR's body or branch references the Spec issue's number.
+ * Candidates are first narrowed to the repository the Spec issue lives in when
+ * the caller knows it (`specRepositoryUrl`) — see `PrWorkflowFact.repositoryUrl`
+ * for why a cross-repository number match is meaningless. Then:
+ *
+ * Primary match: the PR's body references the Spec issue (`#N`, `/issues/N`), or
+ * its branch carries the Spec number as a token.
  * Fallback (only when the primary match finds nothing): the PR's branch is exactly
  * the task's own provisioned branch — the existing headRefName<->task-branch match.
  */
 export function findSpecMatchingPrs<T extends PrWorkflowFact>(
   prs: readonly T[],
-  task: { specIssueNumber: number | null; taskBranch?: string | null }
+  task: {
+    specIssueNumber: number | null;
+    /**
+     * The repository the Spec issue lives in. When set, only PRs in that same
+     * repository can match the task at all. Optional so a caller that cannot
+     * resolve it keeps the previous, unscoped behaviour rather than matching
+     * nothing.
+     */
+    specRepositoryUrl?: string | null;
+    taskBranch?: string | null;
+  }
 ): T[] {
+  const candidates = task.specRepositoryUrl
+    ? prs.filter((pr) => pr.repositoryUrl === task.specRepositoryUrl)
+    : prs;
+
   if (task.specIssueNumber != null) {
-    const bySpec = prs.filter(
+    const bySpec = candidates.filter(
       (pr) =>
-        (pr.description != null && referencesIssueNumber(pr.description, task.specIssueNumber!)) ||
-        referencesIssueNumber(pr.headRefName, task.specIssueNumber!)
+        (pr.description != null &&
+          bodyReferencesIssueNumber(pr.description, task.specIssueNumber!)) ||
+        branchReferencesIssueNumber(pr.headRefName, task.specIssueNumber!)
     );
     if (bySpec.length > 0) return bySpec;
   }
   if (task.taskBranch) {
-    return prs.filter((pr) => pr.headRefName === task.taskBranch);
+    return candidates.filter((pr) => pr.headRefName === task.taskBranch);
   }
   return [];
 }
@@ -120,6 +171,8 @@ export type TaskStageAuthorityFact<T extends PrWorkflowFact> = {
 export function deriveTaskStageAuthorityFact<T extends PrWorkflowFact>(input: {
   currentStage: WorkflowStage | null;
   specIssueNumber: number | null;
+  /** The repository the Spec issue lives in — see `findSpecMatchingPrs`. */
+  specRepositoryUrl?: string | null;
   taskBranch?: string | null;
   prFacts: readonly T[];
 }): TaskStageAuthorityFact<T> {
@@ -129,6 +182,7 @@ export function deriveTaskStageAuthorityFact<T extends PrWorkflowFact>(input: {
 
   const matches = findSpecMatchingPrs(input.prFacts, {
     specIssueNumber: input.specIssueNumber,
+    specRepositoryUrl: input.specRepositoryUrl,
     taskBranch: input.taskBranch,
   });
   const derivedStage = derivePrStage(matches);
