@@ -1,0 +1,206 @@
+name: Release (Personal Fork)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version to publish (plain x.y.z, for example 1.2.8)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  EMDASH_RELEASE_GITHUB_OWNER: 64ix
+  EMDASH_RELEASE_GITHUB_REPO: emdash
+  RELEASE_VERSION: ${{ inputs.version }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate fork release request
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.FORK_MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.FORK_MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          test "$GITHUB_REPOSITORY" = '64ix/emdash' || fail 'This workflow only runs on 64ix/emdash'
+          test "$GITHUB_REF" = 'refs/heads/fork-main' || fail 'Dispatch this workflow from fork-main'
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Version must be plain x.y.z'
+          test -n "$MACOS_CERTIFICATE_P12" || fail 'Missing FORK_MACOS_CERTIFICATE_P12 secret'
+          test -n "$MACOS_CERTIFICATE_PASSWORD" || fail 'Missing FORK_MACOS_CERTIFICATE_PASSWORD secret'
+
+  prepare-release:
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.prepare.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+          cache: pnpm
+
+      - name: Install release script dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Create or reuse draft release
+        id: prepare
+        working-directory: apps/emdash-desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          node --experimental-strip-types scripts/release/prepare-release.ts
+          --version "$RELEASE_VERSION"
+
+  release-mac:
+    needs: prepare-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          node-version: '24.14.0'
+
+      - name: Import fork macOS signing identity
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.FORK_MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.FORK_MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/emdash-fork-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          P12_PATH="$RUNNER_TEMP/emdash-fork-signing.p12"
+          CERT_PATH="$RUNNER_TEMP/emdash-fork-signing.crt"
+
+          export P12_PATH CERTIFICATE_P12_BASE64
+          python3 -c 'import base64, os, pathlib; pathlib.Path(os.environ["P12_PATH"]).write_bytes(base64.b64decode(os.environ["CERTIFICATE_P12_BASE64"]))'
+          openssl pkcs12 -in "$P12_PATH" -clcerts -nokeys \
+            -passin env:CERTIFICATE_PASSWORD -out "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN_PATH" "$CERT_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s \
+            "$KEYCHAIN_PATH" "$HOME/Library/Keychains/login.keychain-db"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F 'Emdash Fork Signing'
+
+          echo "CSC_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo 'CSC_NAME=Emdash Fork Signing' >> "$GITHUB_ENV"
+          echo 'CSC_IDENTITY_AUTO_DISCOVERY=true' >> "$GITHUB_ENV"
+
+      - name: Build workspace
+        run: pnpm run build
+
+      - name: Rebuild native modules for macOS arm64
+        working-directory: apps/emdash-desktop
+        run: node --experimental-strip-types scripts/release/rebuild-native.ts --arch arm64
+
+      - name: Build and upload signed macOS artifacts
+        working-directory: apps/emdash-desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          pnpm exec electron-builder --mac dmg zip --arm64 --publish always
+          --config=electron-builder.fork.config.ts
+          --config.extraMetadata.version="$RELEASE_VERSION"
+
+      - name: Verify macOS bundle
+        working-directory: apps/emdash-desktop
+        run: node --experimental-strip-types scripts/release/verify-mac.ts
+
+      - name: Remove temporary signing keychain
+        if: always()
+        run: security delete-keychain "$CSC_KEYCHAIN" 2>/dev/null || true
+
+  release-win:
+    needs: prepare-release
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          node-version: '24.14.0'
+          windows-native: 'true'
+
+      - name: Build workspace
+        shell: bash
+        run: pnpm run build
+
+      - name: Rebuild native modules for Windows x64
+        shell: bash
+        working-directory: apps/emdash-desktop
+        run: node --experimental-strip-types scripts/release/rebuild-native.ts --arch x64
+
+      - name: Build and upload unsigned Windows artifacts
+        shell: bash
+        working-directory: apps/emdash-desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          pnpm exec electron-builder --win nsis msi --x64 --publish always
+          --config=electron-builder.fork.windows.config.ts
+          --config.extraMetadata.version="$RELEASE_VERSION"
+
+      - name: Verify Windows artifacts are unsigned
+        shell: pwsh
+        working-directory: apps/emdash-desktop
+        run: |
+          $files = Get-ChildItem release/emdash-x64.exe, release/emdash-x64.msi -ErrorAction Stop
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'NotSigned') {
+              throw "$($file.Name) had unexpected signature status: $($signature.Status)"
+            }
+          }
+
+  finalize-release:
+    needs: [release-mac, release-win]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+          cache: pnpm
+
+      - name: Install release script dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify assets and publish GitHub release
+        working-directory: apps/emdash-desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRED_ASSETS: >-
+            emdash-arm64.dmg,emdash-arm64.dmg.blockmap,emdash-arm64.zip,
+            emdash-arm64.zip.blockmap,latest-mac.yml,emdash-x64.exe,
+            emdash-x64.exe.blockmap,emdash-x64.msi,latest.yml
+        run: >
+          node --experimental-strip-types scripts/release/finalize-release.ts
+          --version "$RELEASE_VERSION"
+          --required-assets "$REQUIRED_ASSETS"

@@ -29,6 +29,11 @@ export function findArtifacts(patterns: string[]): string[] {
   return matchFiles(combined);
 }
 
+export function findMissingAssetNames(required: string[], uploaded: string[]): string[] {
+  const uploadedNames = new Set(uploaded);
+  return required.filter((name) => !uploadedNames.has(name));
+}
+
 /**
  * Copies each `${sourceChannel}*.yml` in `dir` to a `${targetChannel}*.yml` sibling,
  * returning the paths of the newly created files. No-op when the channels are equal.

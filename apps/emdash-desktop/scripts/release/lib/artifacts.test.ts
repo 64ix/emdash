@@ -1,8 +1,24 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { duplicateChannelManifests, findManifests, resolvePublishChannels } from './artifacts.ts';
+import {
+  duplicateChannelManifests,
+  findManifests,
+  findMissingAssetNames,
+  resolvePublishChannels,
+} from './artifacts.ts';
+
+describe('findMissingAssetNames', () => {
+  it('returns only required assets that were not uploaded', () => {
+    expect(
+      findMissingAssetNames(
+        ['latest-mac.yml', 'latest.yml', 'emdash-x64.exe'],
+        ['latest-mac.yml', 'emdash-x64.exe', 'unrelated.txt']
+      )
+    ).toEqual(['latest.yml']);
+  });
+});
 
 describe('duplicateChannelManifests', () => {
   let dir: string;
@@ -24,9 +40,7 @@ describe('duplicateChannelManifests', () => {
     const created = duplicateChannelManifests('latest', 'v1-stable', dir);
 
     expect(created).toHaveLength(3);
-    const names = created
-      .map((f) => f.split('/').pop())
-      .sort((a, b) => (a ?? '').localeCompare(b ?? ''));
+    const names = created.map((f) => basename(f)).sort((a, b) => (a ?? '').localeCompare(b ?? ''));
     expect(names).toEqual(['v1-stable-linux.yml', 'v1-stable-mac.yml', 'v1-stable.yml']);
   });
 
@@ -68,9 +82,7 @@ describe('duplicateChannelManifests', () => {
     const created = duplicateChannelManifests('canary', 'v1-canary', dir);
 
     expect(created).toHaveLength(3);
-    const names = created
-      .map((f) => f.split('/').pop())
-      .sort((a, b) => (a ?? '').localeCompare(b ?? ''));
+    const names = created.map((f) => basename(f)).sort((a, b) => (a ?? '').localeCompare(b ?? ''));
     expect(names).toEqual(['v1-canary-linux.yml', 'v1-canary-mac.yml', 'v1-canary.yml']);
   });
 });

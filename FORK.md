@@ -335,6 +335,43 @@ and then 404s on the channel manifest, so the update never happens and nothing i
 app reports an error. If you ever see a fork release whose asset list is short, that
 is what happened; the fix is to delete the stray assets and re-run with `--republish`.
 
+## Fork releases in CI (macOS + Windows)
+
+`.github/workflows/release-fork.yml` builds the personal fork for macOS arm64 and
+Windows x64 in parallel. It creates a draft release first, uploads both platforms to
+that draft, checks the complete asset list, and only then publishes it. A failed job
+therefore leaves an updater-invisible draft that can be inspected or retried.
+
+The Windows artifacts are intentionally unsigned until the fork owns a Windows
+code-signing certificate. `electron-builder.fork.windows.config.ts` removes the
+upstream Azure identity as well as its `General Action, Inc.` publisher requirement,
+so the unsigned fork can update itself; Windows SmartScreen will still warn on a
+manual install.
+
+The macOS job uses the same self-signed identity as local fork builds. Export the
+existing PKCS#12 file into these repository secrets once:
+
+```bash
+base64 -i ~/.emdash-fork-signing/signing.p12 | gh secret set FORK_MACOS_CERTIFICATE_P12 --repo 64ix/emdash
+gh secret set FORK_MACOS_CERTIFICATE_PASSWORD --repo 64ix/emdash
+```
+
+The second command prompts for the password without printing it. The workflow imports
+the certificate into an ephemeral keychain, trusts it only for code signing, verifies
+the packaged app, and deletes the keychain even when the job fails.
+
+Dispatch a release only from `fork-main`, using a plain version greater than every
+published fork and upstream stable version:
+
+```bash
+gh workflow run release-fork.yml --repo 64ix/emdash --ref fork-main -f version=1.2.8
+```
+
+Required final assets are the arm64 DMG and ZIP with both blockmaps and
+`latest-mac.yml`, plus the x64 NSIS EXE, MSI, EXE blockmap, and `latest.yml`. The
+finalize job refuses to publish if any one is absent. The workflow never publishes to
+upstream or Cloudflare R2 and does not mutate the version in `package.json`.
+
 **Shared state with the official app.** The fork build keeps upstream's identity —
 `Emdash.app`, `com.emdash.stable`, data in `~/Library/Application Support/emdash/`.
 So it replaces a `/Applications/Emdash.app` installed from emdash.sh and shares its
