@@ -1,4 +1,5 @@
-import { style } from '@vanilla-extract/css';
+import { style, styleVariants } from '@vanilla-extract/css';
+import { vars } from '@theme/core/contract/contract.css';
 
 export const splitButtonRoot = style({
   display: 'inline-flex',
@@ -30,6 +31,27 @@ export const splitButtonMenuLabel = style({
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+});
+
+const toneIndicatorBase = style({
+  display: 'inline-flex',
+  flexShrink: 0,
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '0.75rem',
+  height: '0.75rem',
+});
+
+export const toneIndicatorIcon = style({
+  width: '0.75rem',
+  height: '0.75rem',
+  strokeWidth: 2.5,
+});
+
+export const toneIndicator = styleVariants({
+  neutral: [toneIndicatorBase, { color: vars.foregroundMuted }],
+  accept: [toneIndicatorBase, { color: vars.foregroundSuccess }],
+  reject: [toneIndicatorBase, { color: vars.foregroundDestructive }],
 });
 
 /** Chevron face: left side rounded corners removed to butt against primary face. */
