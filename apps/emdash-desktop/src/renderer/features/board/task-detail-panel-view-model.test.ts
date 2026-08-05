@@ -119,9 +119,18 @@ describe('deriveConversationRows', () => {
   });
 
   it('orders the rest by descending last-interaction', () => {
-    const oldest = makeConversationInput({ id: 'oldest', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
-    const newest = makeConversationInput({ id: 'newest', lastInteractedAt: '2026-03-01T00:00:00.000Z' });
-    const middle = makeConversationInput({ id: 'middle', lastInteractedAt: '2026-02-01T00:00:00.000Z' });
+    const oldest = makeConversationInput({
+      id: 'oldest',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const newest = makeConversationInput({
+      id: 'newest',
+      lastInteractedAt: '2026-03-01T00:00:00.000Z',
+    });
+    const middle = makeConversationInput({
+      id: 'middle',
+      lastInteractedAt: '2026-02-01T00:00:00.000Z',
+    });
 
     const rows = deriveConversationRows([oldest, newest, middle]);
 
@@ -129,8 +138,14 @@ describe('deriveConversationRows', () => {
   });
 
   it('keeps a stable tiebreak (input order) for two conversations with an equal timestamp', () => {
-    const first = makeConversationInput({ id: 'first', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
-    const second = makeConversationInput({ id: 'second', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
+    const first = makeConversationInput({
+      id: 'first',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const second = makeConversationInput({
+      id: 'second',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+    });
 
     expect(deriveConversationRows([first, second]).map((r) => r.id)).toEqual(['first', 'second']);
     // Re-running with the reverse input order keeps that order too — the
@@ -140,7 +155,10 @@ describe('deriveConversationRows', () => {
 
   it('sorts a conversation with no last-interaction timestamp last, not first, and never throws', () => {
     const never = makeConversationInput({ id: 'never', lastInteractedAt: null });
-    const active = makeConversationInput({ id: 'active', lastInteractedAt: '2026-01-01T00:00:00.000Z' });
+    const active = makeConversationInput({
+      id: 'active',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+    });
 
     expect(deriveConversationRows([never, active]).map((r) => r.id)).toEqual(['active', 'never']);
     expect(() => deriveConversationRows([never])).not.toThrow();

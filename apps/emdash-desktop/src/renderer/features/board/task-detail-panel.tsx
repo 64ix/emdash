@@ -1,24 +1,30 @@
 import {
   Archive,
   ArrowUpRight,
+  Download,
   ExternalLink,
   GitBranch,
-  MessageSquare,
   Pencil,
   Pin,
   PinOff,
+  Trash2,
   X,
 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { STAGE_LABELS } from '@renderer/features/board/board-columns';
 import {
   buildTaskDetailPanelViewModel,
   deriveGhostDetailViewModel,
+  type TaskDetailPanelConversationInput,
+  type TaskDetailPanelConversationRow,
   type TaskDetailPanelLink,
 } from '@renderer/features/board/task-detail-panel-view-model';
+import { ConversationAgentIcon } from '@renderer/features/conversations/conversation-agent-icon';
+import type { ConversationManagerStore } from '@renderer/features/conversations/conversation-manager';
 import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
 import {
+  getConversationsForTask,
   getTaskGitWorktreeStore,
   getTaskManagerStore,
   getTaskStore,
@@ -28,11 +34,20 @@ import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
 import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { StatusIcon } from '@renderer/lib/components/pr-status-icon';
 import { StackedAgentLogos } from '@renderer/lib/components/stacked-agent-logos';
+import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { Badge } from '@renderer/lib/ui/badge';
 import { Button } from '@renderer/lib/ui/button';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@renderer/lib/ui/context-menu';
 import { RelativeTime } from '@renderer/lib/ui/relative-time';
+import { MAX_CONVERSATION_TITLE_LENGTH } from '@shared/core/conversations/conversations';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import { linkedIssueRoleLabels } from '@shared/core/linked-issue';
 import type { StageHoldingPr, TaskStageAuthority, WorkflowStage } from '@shared/core/tasks/tasks';
@@ -97,6 +112,224 @@ function SpecDerivedPrRow({ pr }: { pr: StageHoldingPr }) {
   );
 }
 
+/**
+ * A single Conversations section row (ticket #68): provider icon, display
+ * title (inline-editable), live agent status/last-active time, and — behind
+ * a context menu, mirroring the task view's own conversations sidebar
+ * (`SidebarConversationsList`) verbatim — rename, export (ACP only) and
+ * delete. Clicking the row (or Enter/Space while focused) calls `onOpen`,
+ * which the panel wires to the same provision-then-navigate handler the
+ * "Open task" button already uses, carrying this conversation's id. A row
+ * whose Conversation was deleted between render and click is not specially
+ * handled here: `onOpen` still fires with that (now-stale) id, and the
+ * shared navigation/open-conversation machinery (ticket #67) already treats
+ * an id that doesn't resolve as a complete, safe no-op — the task view just
+ * opens with nothing focused.
+ */
+const PanelConversationRow = observer(function PanelConversationRow({
+  row,
+  projectId,
+  taskId,
+  manager,
+  onOpen,
+}: {
+  row: TaskDetailPanelConversationRow;
+  projectId: string;
+  taskId: string;
+  manager: ConversationManagerStore | undefined;
+  onOpen: (conversationId: string) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const committedRef = useRef(false);
+  const showConfirm = useShowModal('confirmActionModal');
+
+  const handleRenameInputRef = useCallback((input: HTMLInputElement | null) => {
+    input?.focus();
+    input?.select();
+  }, []);
+
+  const handleRename = () => {
+    committedRef.current = false;
+    window.setTimeout(() => setIsEditing(true), 0);
+  };
+
+  // Exact commit semantics as the sidebar's own rename (ticket #68's
+  // criterion): Enter commits, Escape cancels, blur commits, capped at the
+  // shared maximum title length, and an empty or unchanged value is a no-op
+  // that just closes the input rather than writing anything.
+  const commitRename = (value: string) => {
+    if (committedRef.current) return;
+    committedRef.current = true;
+    const trimmed = value.trim().slice(0, MAX_CONVERSATION_TITLE_LENGTH);
+    setIsEditing(false);
+    if (trimmed && trimmed !== row.rawTitle) {
+      void manager?.renameConversation(row.id, trimmed);
+    }
+  };
+
+  const handleDelete = () => {
+    showConfirm({
+      title: 'Delete conversation',
+      description: `"${row.displayTitle}" will be permanently deleted. This action cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'destructive',
+      onSuccess: () => {
+        void manager?.deleteConversation(row.id);
+      },
+    });
+  };
+
+  // Export (ACP only): delegates to the exact same resource lookup and
+  // not-loaded toast the sidebar's own export uses — the board is not where
+  // the ACP chat transcript store gets loaded (that only happens once the
+  // task view mounts the chat), so this toast is the expected outcome from
+  // here, not an edge case. Dynamically imported: `AcpChatStore`'s module
+  // pulls in the full ACP/chat-ui runtime, which every board browser test
+  // would otherwise have to shadow just to render an inspector panel that
+  // never triggers an export — deferring the import to the actual export
+  // gesture keeps that weight out of the board's always-loaded module graph.
+  const handleExport = async (kind: 'parsed' | 'raw') => {
+    const { getAcpChatResourceManager } =
+      await import('@renderer/features/conversations/acp/acp-chat-resource-manager');
+    const store = getAcpChatResourceManager(taskId, projectId).get(row.id);
+    if (!store) {
+      toast({
+        title: 'Failed to export transcript',
+        description: 'Open the chat before exporting it.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    store.exportTranscript(kind);
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger>
+        <div
+          data-conversation-row={row.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => onOpen(row.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onOpen(row.id);
+            }
+          }}
+          className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm text-foreground-muted transition-colors hover:bg-background-1 hover:text-foreground"
+        >
+          <ConversationAgentIcon
+            providerId={row.providerId}
+            isAcp={row.tabKind === 'acp-chat'}
+            size={16}
+            className="size-4"
+          />
+          {isEditing ? (
+            <input
+              ref={handleRenameInputRef}
+              className="min-w-0 flex-1 rounded bg-background-1 px-1.5 py-0.5 text-sm text-foreground ring-1 ring-foreground/20 outline-none focus:ring-foreground/40"
+              defaultValue={row.rawTitle}
+              maxLength={MAX_CONVERSATION_TITLE_LENGTH}
+              onClick={(event) => event.stopPropagation()}
+              onBlur={(event) => commitRename(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === 'Enter') commitRename(event.currentTarget.value);
+                else if (event.key === 'Escape') {
+                  committedRef.current = true;
+                  setIsEditing(false);
+                }
+              }}
+            />
+          ) : (
+            <span className="min-w-0 flex-1 truncate">{row.displayTitle}</span>
+          )}
+          <span className="shrink-0">
+            {row.indicatorStatus ? (
+              <AgentStatusIndicator status={row.indicatorStatus} disableTooltip />
+            ) : (
+              <RelativeTime
+                value={row.lastInteractedAt ?? ''}
+                className="flex h-full items-center pr-1 font-sans text-xs text-foreground-passive"
+                compact
+              />
+            )}
+          </span>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent finalFocus={false}>
+        <ContextMenuItem onClick={handleRename}>
+          <Pencil className="size-4" />
+          Rename
+        </ContextMenuItem>
+        {row.tabKind === 'acp-chat' && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => void handleExport('parsed')}>
+              <Download className="size-4" />
+              Export transcript
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => void handleExport('raw')}>
+              <Download className="size-4" />
+              Export raw ACP log
+            </ContextMenuItem>
+          </>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onClick={handleDelete}>
+          <Trash2 className="size-4" />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+});
+
+/**
+ * The Conversations section (ticket #68): one row per Conversation on the
+ * task, in the pure view model's already-derived order (Awaiting Input
+ * first, then most-recent activity — never re-sorted here). Always renders,
+ * even with zero rows — an explicit empty state, not a hidden section or a
+ * loading-like blank. The header names the exact count, replacing Vitals'
+ * former "N sessions" line (ticket #68: the count now labels an actual
+ * list instead of being repeated in both places).
+ */
+function ConversationsSection({
+  rows,
+  projectId,
+  taskId,
+  manager,
+  onOpenConversation,
+}: {
+  rows: TaskDetailPanelConversationRow[];
+  projectId: string;
+  taskId: string;
+  manager: ConversationManagerStore | undefined;
+  onOpenConversation: (conversationId: string) => void;
+}) {
+  return (
+    <PanelSection id="conversations" title={`Conversations (${String(rows.length)})`}>
+      {rows.length === 0 ? (
+        <p className="text-xs text-foreground-passive">No conversations yet.</p>
+      ) : (
+        <div className="flex flex-col gap-0.5">
+          {rows.map((row) => (
+            <PanelConversationRow
+              key={row.id}
+              row={row}
+              projectId={projectId}
+              taskId={taskId}
+              manager={manager}
+              onOpen={onOpenConversation}
+            />
+          ))}
+        </div>
+      )}
+    </PanelSection>
+  );
+}
+
 /** Which task or ghost card the panel is currently showing (CONTEXT.md "Task Detail Panel"). */
 export type TaskDetailPanelTarget =
   | { kind: 'task'; taskId: string }
@@ -117,6 +350,7 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
   target,
   onClose,
   onOpenTask,
+  onOpenConversation,
   onAdoptGhostCard,
   onRejectGhostCard,
 }: {
@@ -128,6 +362,12 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
    * built for the card's hover arrow, so provision-then-navigate has one
    * implementation, not two. */
   onOpenTask: (taskId: string) => void;
+  /** Direct navigation to one Conversation (ticket #68): the Conversations
+   * section's rows delegate to the same provision-then-navigate handler as
+   * `onOpenTask`, carrying the target conversation's id as the navigation
+   * parameter ticket #67 built (`focusConversationId`) rather than a second
+   * navigation path. */
+  onOpenConversation: (taskId: string, conversationId: string) => void;
   onAdoptGhostCard: (ghostCard: GhostCard) => void;
   onRejectGhostCard: (ghostCard: GhostCard) => void;
 }) {
@@ -148,6 +388,7 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
       taskId={target.taskId}
       onClose={onClose}
       onOpenTask={onOpenTask}
+      onOpenConversation={onOpenConversation}
     />
   );
 });
@@ -164,11 +405,13 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
   taskId,
   onClose,
   onOpenTask,
+  onOpenConversation,
 }: {
   projectId: string;
   taskId: string;
   onClose: () => void;
   onOpenTask: (taskId: string) => void;
+  onOpenConversation: (taskId: string, conversationId: string) => void;
 }) {
   const showRenameTask = useShowModal('renameTaskModal');
   const store = getTaskStore(projectId, taskId);
@@ -197,12 +440,30 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
 
   const manager = getTaskManagerStore(projectId);
   const branchName = getTaskGitWorktreeStore(projectId, taskId)?.branchName ?? null;
+  // Conversations section (ticket #68): reads the same per-task conversation
+  // manager registry the task-level status dot already reads through
+  // `taskAgentStatus` — populated for every task, provisioned or not, when
+  // the project mounts (see `TaskManagerStore`'s own preload). Never a new
+  // RPC, and never a read that could provision a workspace or mount a
+  // worktree just to display this section.
+  const conversationManager = getConversationsForTask(taskId);
+  const conversationInputs: TaskDetailPanelConversationInput[] = conversationManager
+    ? Array.from(conversationManager.conversations.values()).map((conversation) => ({
+        id: conversation.data.id,
+        providerId: conversation.data.providerId,
+        title: conversation.data.title,
+        type: conversation.data.type,
+        lastInteractedAt: conversation.data.lastInteractedAt,
+        indicatorStatus: conversation.indicatorStatus,
+      }))
+    : [];
   const vm = buildTaskDetailPanelViewModel({
     task,
     branchName,
     sessionCounts: store.conversationStats,
     agentStatus: taskAgentStatus(store),
     stageAuthority,
+    conversations: conversationInputs,
   });
 
   const handleStageChange = (next: string) => {
@@ -224,6 +485,15 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
   // the same handler the card's hover arrow uses — one provision-then-navigate
   // implementation for both direct-navigation gestures, not two.
   const handleOpenTask = () => onOpenTask(taskId);
+
+  // Direct navigation to one Conversation (ticket #68): delegates to
+  // `BoardMainPanel.handleOpenConversation` (passed down as
+  // `onOpenConversation`) — the same provision-then-navigate implementation
+  // as `handleOpenTask` above, carrying the conversation's id so the task
+  // view lands on it via the focused-conversation navigation parameter
+  // ticket #67 built.
+  const handleOpenConversation = (conversationId: string) =>
+    onOpenConversation(taskId, conversationId);
 
   // The current stage stays selectable even when it falls outside the
   // declarative set (e.g. a stage this ticket's authority can't currently
@@ -294,24 +564,26 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
           <span>Created</span>
           <RelativeTime value={task.createdAt} />
         </div>
-        {/* Agent and conversation state (ticket #49): the same per-provider
-            session counts (`StackedAgentLogos`) and status indicator the
-            card already shows — reused, not re-derived. */}
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1 text-xs text-foreground-muted">
-            <MessageSquare className="size-3" />
-            {vm.vitals.totalSessionCount === 1
-              ? '1 session'
-              : `${String(vm.vitals.totalSessionCount)} sessions`}
-          </span>
-          <div className="flex items-center gap-1.5">
-            {Object.keys(vm.vitals.sessionCounts).length > 0 && (
-              <StackedAgentLogos stats={vm.vitals.sessionCounts} />
-            )}
-            <AgentStatusIndicator status={vm.vitals.agentStatus} />
-          </div>
+        {/* Agent state (ticket #49; count moved to the Conversations section
+            below in ticket #68 — a 400px inspector no longer says "N
+            sessions" in two places). The stacked per-provider logos and the
+            task-level status indicator stay here as the task-level summary;
+            reused, not re-derived. */}
+        <div className="flex items-center justify-end gap-1.5">
+          {Object.keys(vm.vitals.sessionCounts).length > 0 && (
+            <StackedAgentLogos stats={vm.vitals.sessionCounts} />
+          )}
+          <AgentStatusIndicator status={vm.vitals.agentStatus} />
         </div>
       </PanelSection>
+
+      <ConversationsSection
+        rows={vm.conversations}
+        projectId={projectId}
+        taskId={taskId}
+        manager={conversationManager}
+        onOpenConversation={handleOpenConversation}
+      />
 
       <PanelSection id="workflow-stage" title="Workflow stage">
         <select

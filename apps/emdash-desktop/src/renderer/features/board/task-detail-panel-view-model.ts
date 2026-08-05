@@ -128,7 +128,10 @@ export function deriveConversationRows(
         id: conversation.id,
         providerId: conversation.providerId,
         rawTitle: conversation.title,
-        displayTitle: formatConversationTitleForDisplay(conversation.providerId, conversation.title),
+        displayTitle: formatConversationTitleForDisplay(
+          conversation.providerId,
+          conversation.title
+        ),
         tabKind: conversationTabKind(conversation.type),
         lastInteractedAt: conversation.lastInteractedAt,
         indicatorStatus: conversation.indicatorStatus,
