@@ -6,16 +6,18 @@ import {
   sortColumn,
   type ColumnId,
 } from '@renderer/features/board/board-ordering';
+import type { LinkedIssueRoles } from '@shared/core/linked-issue';
 import {
   deriveTaskStageAuthorityFact,
   parseIssueNumberFromIdentifier,
+  type PrWorkflowFact,
 } from '@shared/core/pull-requests/pr-workflow-derivation';
 import {
   deriveStageAuthority,
   describeStageAuthorityFact,
   isStageDestinationSafe,
 } from '@shared/core/tasks/stage-authority';
-import { workflowStages, type Task, type WorkflowStage } from '@shared/core/tasks/tasks';
+import { workflowStages, type StageHoldingPr, type WorkflowStage } from '@shared/core/tasks/tasks';
 
 /**
  * The sidebar's grouped row model (spec #85, ticket #86): the pure,
@@ -283,6 +285,21 @@ export type SidebarStageMoveOptions = {
 };
 
 /**
+ * Minimal task shape the stage-move decision reads — the fields the board's
+ * own `authorityForTask` (`board-main-panel.tsx`) reads, widened so the pure
+ * seam accepts light fixtures. A real `Task` satisfies it (`prs` are
+ * `PullRequest`s, which carry every `PrWorkflowFact` and `StageHoldingPr`
+ * field); `prs` is optional here only because the board guards older test
+ * doubles the same way.
+ */
+export type SidebarStageMoveTask = {
+  workflowStage?: WorkflowStage | null;
+  linkedIssues?: LinkedIssueRoles | null;
+  prs?: readonly (PrWorkflowFact & StageHoldingPr)[] | null;
+  workspaceId?: string | null;
+};
+
+/**
  * Computes the "Move to stage…" options for a task, reusing the board's
  * exact authority computation (`board-main-panel.tsx`'s `authorityForTask`:
  * `deriveTaskStageAuthorityFact` for the Spec-referencing PR half,
@@ -295,7 +312,7 @@ export type SidebarStageMoveOptions = {
  * store.
  */
 export function sidebarStageMoveOptions(
-  task: Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId'>,
+  task: SidebarStageMoveTask,
   branchName: string | null
 ): SidebarStageMoveOptions {
   const currentStage = task.workflowStage ?? null;

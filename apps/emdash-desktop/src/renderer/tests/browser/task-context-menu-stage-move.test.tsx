@@ -15,7 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import type { SidebarStageMoveOption } from '@renderer/features/sidebar/stage-group-row-model';
 import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
-import type { WorkflowStage } from '@shared/core/tasks/tasks';
 
 const mocks = vi.hoisted(() => ({
   onMoveToStage: vi.fn(),

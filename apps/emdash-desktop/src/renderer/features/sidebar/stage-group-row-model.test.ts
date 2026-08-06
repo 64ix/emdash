@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LinkedIssue } from '@shared/core/linked-issue';
 import type { PrWorkflowFact } from '@shared/core/pull-requests/pr-workflow-derivation';
-import type { Task } from '@shared/core/tasks/tasks';
+import type { StageHoldingPr } from '@shared/core/tasks/tasks';
 import { rankBetween } from '@shared/lib/board-rank';
 import {
   buildStageGroupedRows,
@@ -9,6 +9,7 @@ import {
   sidebarStageMoveOptions,
   taskRowVariants,
   type SidebarRow,
+  type SidebarStageMoveTask,
   type StageGroupableTask,
   type StageGroupRowsInput,
 } from './stage-group-row-model';
@@ -307,8 +308,6 @@ describe('computeSidebarDropPosition', () => {
   });
 });
 
-type StageMoveTask = Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId'>;
-
 function issue(overrides: Partial<LinkedIssue> = {}): LinkedIssue {
   return {
     provider: 'github',
@@ -320,9 +319,10 @@ function issue(overrides: Partial<LinkedIssue> = {}): LinkedIssue {
 }
 
 /** A Spec-referencing PR like the ones stored on the task (`PullRequest`'s
- * `PrWorkflowFact` subset plus the `identifier`/`title` the authority
+ * `PrWorkflowFact` subset plus the `StageHoldingPr` fields the authority
  * explanation labels it with). */
-type StageMovePr = PrWorkflowFact & { identifier: string | null; title: string };
+type StageMovePr = PrWorkflowFact &
+  Pick<StageHoldingPr, 'url' | 'title' | 'identifier' | 'isDraft'>;
 
 function pr(overrides: Partial<StageMovePr> = {}): StageMovePr {
   return {
@@ -330,13 +330,15 @@ function pr(overrides: Partial<StageMovePr> = {}): StageMovePr {
     headRefName: 'spec/1-something',
     status: 'open',
     description: null,
+    url: 'https://github.com/acme/repo/pull/1',
     identifier: '#1',
     title: 'Example PR',
+    isDraft: false,
     ...overrides,
   };
 }
 
-function stageTask(overrides: Partial<StageMoveTask> = {}): StageMoveTask {
+function stageTask(overrides: Partial<SidebarStageMoveTask> = {}): SidebarStageMoveTask {
   return { workflowStage: 'idea', prs: [], ...overrides };
 }
 
