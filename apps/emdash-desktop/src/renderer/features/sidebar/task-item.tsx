@@ -8,10 +8,7 @@ import {
   getTaskStore,
   getWorkspaceForTask,
 } from '@renderer/features/tasks/stores/task-selectors';
-import {
-  registeredTaskData,
-  type TaskStore,
-} from '@renderer/features/tasks/stores/task-store';
+import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import {
   useNavigate,
   useParams,

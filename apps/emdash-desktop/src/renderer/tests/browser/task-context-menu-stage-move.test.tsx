@@ -13,8 +13,8 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
-import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
 import type { SidebarStageMoveOption } from '@renderer/features/sidebar/stage-group-row-model';
+import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 
 const mocks = vi.hoisted(() => ({
@@ -95,7 +95,12 @@ async function openStageSubmenu() {
   const sub = subTrigger();
   if (!sub) throw new Error('no stage submenu trigger');
   sub.dispatchEvent(
-    new PointerEvent('pointerenter', { bubbles: true, pointerType: 'mouse', clientX: 120, clientY: 120 })
+    new PointerEvent('pointerenter', {
+      bubbles: true,
+      pointerType: 'mouse',
+      clientX: 120,
+      clientY: 120,
+    })
   );
   sub.dispatchEvent(
     new MouseEvent('mouseenter', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 })

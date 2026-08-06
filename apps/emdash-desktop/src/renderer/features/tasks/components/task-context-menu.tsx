@@ -1,4 +1,14 @@
-import { Archive, Copy, MessageSquare, Pencil, Pin, PinOff, RotateCcw, Trash2, Workflow } from 'lucide-react';
+import {
+  Archive,
+  Copy,
+  MessageSquare,
+  Pencil,
+  Pin,
+  PinOff,
+  RotateCcw,
+  Trash2,
+  Workflow,
+} from 'lucide-react';
 import React from 'react';
 import { type SidebarStageMoveOption } from '@renderer/features/sidebar/stage-group-row-model';
 import { toast } from '@renderer/lib/hooks/use-toast';

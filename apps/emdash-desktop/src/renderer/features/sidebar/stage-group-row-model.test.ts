@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { rankBetween } from '@shared/lib/board-rank';
 import type { LinkedIssue } from '@shared/core/linked-issue';
 import type { PrWorkflowFact } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { Task } from '@shared/core/tasks/tasks';
+import { rankBetween } from '@shared/lib/board-rank';
 import {
   buildStageGroupedRows,
   computeSidebarDropPosition,
