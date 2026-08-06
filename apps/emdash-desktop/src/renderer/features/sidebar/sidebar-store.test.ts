@@ -1,4 +1,6 @@
+import { runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { SidebarStore } from './sidebar-store';
 
 type SidebarProjectManager = ConstructorParameters<typeof SidebarStore>[0];
@@ -26,27 +28,58 @@ vi.mock('@renderer/features/conversations/acp/acp-chat-panel', () => ({
   AcpChatPanel: () => null,
 }));
 
+/**
+ * Controllable conversation statuses for the real `taskAgentStatus` selector:
+ * the store reads Awaiting Input status through `conversationRegistry`, so
+ * tests seed per-task statuses here instead of constructing real
+ * ConversationManagerStores.
+ */
+const registryMocks = vi.hoisted(() => {
+  const statusByTaskId = new Map<string, string | null>();
+  return { statusByTaskId };
+});
+
+vi.mock('@renderer/features/conversations/stores/conversation-registry', () => ({
+  conversationRegistry: {
+    get: (taskId: string) => {
+      const status = registryMocks.statusByTaskId.get(taskId) ?? null;
+      return { get taskStatus() {
+        return status;
+      } };
+    },
+  },
+}));
+
 function projectManager(projects: { id: string; createdAt: string }[]): SidebarProjectManager {
   return {
     projects: new Map(projects.map((p) => [p.id, { ...p, mountedProject: null }])),
   } as unknown as SidebarProjectManager;
 }
 
-function task(id: string, createdAt: string) {
+type TaskFixture = {
+  id: string;
+  createdAt: string;
+  workflowStage?: WorkflowStage;
+  boardRank?: string;
+  isPinned?: boolean;
+};
+
+function task(taskId: string, createdAt: string, overrides: Partial<TaskFixture> = {}) {
   return {
     state: 'provisioned',
     data: {
-      id,
+      id: taskId,
       type: 'coding-agent',
       isPinned: false,
       createdAt,
       updatedAt: createdAt,
+      ...overrides,
     },
   };
 }
 
 function projectManagerWithTasks(
-  projects: { id: string; createdAt: string; taskIds: string[] }[]
+  projects: { id: string; createdAt: string; tasks: TaskFixture[] }[]
 ): SidebarProjectManager {
   return {
     projects: new Map(
@@ -58,9 +91,9 @@ function projectManagerWithTasks(
           mountedProject: {
             taskManager: {
               tasks: new Map(
-                project.taskIds.map((taskId, index) => [
-                  taskId,
-                  task(taskId, `2026-01-01T00:00:0${index}.000Z`),
+                project.tasks.map((fixture) => [
+                  fixture.id,
+                  task(fixture.id, fixture.createdAt, fixture),
                 ])
               ),
             },
@@ -69,6 +102,22 @@ function projectManagerWithTasks(
       ])
     ),
   } as unknown as SidebarProjectManager;
+}
+
+/** Rows collapsed to `kind[:detail]` strings for readable assertions. */
+function shape(rows: SidebarStore['sidebarRows']): string[] {
+  return rows.map((row) => {
+    switch (row.kind) {
+      case 'project':
+        return `project:${row.projectId}`;
+      case 'board':
+        return `board:${row.projectId}`;
+      case 'task':
+        return `task:${row.taskId}`;
+      case 'stage-group':
+        return `group:${row.label}:${row.count}`;
+    }
+  });
 }
 
 describe('SidebarStore project ordering', () => {
@@ -96,43 +145,324 @@ describe('SidebarStore project ordering', () => {
 
     expect(store.orderedProjects.map((project) => project.id)).toEqual(['new', 'manual', 'old']);
   });
+});
 
-  it('places a board row before task rows for each expanded, mounted project', () => {
+describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
+  it('renders one collapsible Stage Group per non-empty stage, in board column order', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([
         {
           id: 'project-1',
           createdAt: '2026-01-01T00:00:00.000Z',
-          taskIds: ['task-1a', 'task-1b'],
-        },
-        {
-          id: 'project-2',
-          createdAt: '2026-01-02T00:00:00.000Z',
-          taskIds: ['task-2a'],
+          tasks: [
+            { id: 'shipped-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'shipped' },
+            { id: 'idea-1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea' },
+            { id: 'spec-1', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'spec' },
+            { id: 'idea-2', createdAt: '2026-01-01T00:00:04.000Z', workflowStage: 'idea' },
+          ],
         },
       ])
     );
 
-    store.setProjectOrder(['project-1', 'project-2']);
     store.ensureProjectExpanded('project-1');
-    store.ensureProjectExpanded('project-2');
-    store.setTaskOrder('project-1', ['task-1a', 'task-1b']);
 
-    expect(store.sidebarRows).toEqual([
-      { kind: 'project', projectId: 'project-1' },
-      { kind: 'board', projectId: 'project-1' },
-      { kind: 'task', projectId: 'project-1', taskId: 'task-1a' },
-      { kind: 'task', projectId: 'project-1', taskId: 'task-1b' },
-      { kind: 'project', projectId: 'project-2' },
-      { kind: 'board', projectId: 'project-2' },
-      { kind: 'task', projectId: 'project-2', taskId: 'task-2a' },
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Idea:2',
+      'task:idea-1',
+      'task:idea-2',
+      'group:Spec:1',
+      'task:spec-1',
+      'group:Shipped:1',
+      'task:shipped-1',
+    ]);
+  });
+
+  it('keeps Unstaged tasks as loose rows between the Board row and the first group', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 'spec-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'unstaged-1', createdAt: '2026-01-01T00:00:02.000Z' },
+            { id: 'unstaged-2', createdAt: '2026-01-01T00:00:03.000Z', boardRank: 'a' },
+          ],
+        },
+      ])
+    );
+
+    store.ensureProjectExpanded('project-1');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'task:unstaged-2',
+      'task:unstaged-1',
+      'group:Spec:1',
+      'task:spec-1',
+    ]);
+  });
+
+  it('orders a group by Board Rank, unranked after, with Awaiting Input elevated', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 'unranked-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'ranked-z', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec', boardRank: 'z' },
+            { id: 'awaiting', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'spec', boardRank: 'm' },
+            { id: 'ranked-a', createdAt: '2026-01-01T00:00:04.000Z', workflowStage: 'spec', boardRank: 'a' },
+          ],
+        },
+      ])
+    );
+    registryMocks.statusByTaskId.set('awaiting', 'awaiting-input');
+
+    store.ensureProjectExpanded('project-1');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Spec:4',
+      'task:awaiting',
+      'task:ranked-a',
+      'task:ranked-z',
+      'task:unranked-1',
+    ]);
+  });
+
+  it('shows the visible-task count on each group header', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 's2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+
+    expect(store.sidebarRows).toContainEqual({
+      kind: 'stage-group',
+      projectId: 'project-1',
+      stage: 'spec',
+      label: 'Spec',
+      count: 2,
+    });
+  });
+
+  it('keeps a collapsed group header and count while omitting its task rows', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 's2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+            { id: 'i1', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'idea' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Idea:1',
+      'task:i1',
+      'group:Spec:2',
+    ]);
+    expect(store.isStageGroupCollapsed('project-1', 'spec')).toBe(true);
+  });
+
+  it('expands a collapsed group again on toggle', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [{ id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' }],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+
+    expect(store.isStageGroupCollapsed('project-1', 'spec')).toBe(false);
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Spec:1',
+      'task:s1',
+    ]);
+  });
+
+  it('persists collapsed groups in the snapshot and restores them', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'i1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+
+    const restored = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'i1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea' },
+          ],
+        },
+      ])
+    );
+    restored.restoreSnapshot(store.snapshot);
+
+    expect(restored.collapsedStageGroupIdsByProject).toEqual({ 'project-1': ['spec'] });
+    expect(restored.isStageGroupCollapsed('project-1', 'spec')).toBe(true);
+    restored.ensureProjectExpanded('project-1');
+    expect(shape(restored.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Idea:1',
+      'task:i1',
+      'group:Spec:1',
+    ]);
+  });
+
+  it('ignores unknown stage ids when restoring a snapshot', () => {
+    const store = new SidebarStore(projectManager([]));
+    store.restoreSnapshot({
+      collapsedStageGroupIdsByProject: {
+        'project-1': ['spec', 'not-a-stage' as WorkflowStage],
+      },
+    });
+    expect(store.collapsedStageGroupIdsByProject).toEqual({ 'project-1': ['spec'] });
+  });
+
+  it('prunes stale collapsed ids so a newly non-empty group appears expanded', () => {
+    const projectManager = projectManagerWithTasks([
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [{ id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' }],
+      },
+    ]);
+    const store = new SidebarStore(projectManager);
+    store.ensureProjectExpanded('project-1');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+    expect(store.sidebarRows.some((row) => row.kind === 'stage-group')).toBe(true);
+
+    // The group empties (task deleted elsewhere, e.g. on the board) — the
+    // stale collapsed id must be pruned.
+    const taskManager =
+      projectManager.projects.get('project-1')!.mountedProject!.taskManager;
+    taskManager.tasks.delete('s1');
+    runInAction(() => {
+      store.toggleProjectExpanded('project-1');
+      store.toggleProjectExpanded('project-1');
+    });
+    expect(store.collapsedStageGroupIdsByProject['project-1']).toBeUndefined();
+
+    // A new task in the same stage must appear expanded, not collapsed.
+    taskManager.tasks.set(
+      's2',
+      task('s2', '2026-01-02T00:00:01.000Z', { workflowStage: 'spec' })
+    );
+    runInAction(() => {
+      store.toggleProjectExpanded('project-1');
+      store.toggleProjectExpanded('project-1');
+    });
+    expect(store.isStageGroupCollapsed('project-1', 'spec')).toBe(false);
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Spec:1',
+      'task:s2',
+    ]);
+  });
+
+  it('leaves the pinned strip unchanged and keeps pinned tasks out of the rows', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 'pinned-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec', isPinned: true },
+            { id: 'regular-1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Spec:1',
+      'task:regular-1',
+    ]);
+    expect(store.pinnedSidebarEntries).toEqual([
+      { projectId: 'project-1', taskId: 'pinned-1' },
+    ]);
+  });
+
+  it('makes the manual task order inert in grouped mode without migrating it', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 'spec-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec', boardRank: 'a' },
+            { id: 'spec-2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec', boardRank: 'b' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.setTaskOrder('project-1', ['spec-2', 'spec-1']);
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Spec:2',
+      'task:spec-1',
+      'task:spec-2',
     ]);
   });
 
   it('omits the board row for a collapsed project', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([
-        { id: 'project-1', createdAt: '2026-01-01T00:00:00.000Z', taskIds: ['task-1a'] },
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [{ id: 'task-1a', createdAt: '2026-01-01T00:00:01.000Z' }],
+        },
       ])
     );
 
@@ -154,12 +484,15 @@ describe('SidebarStore project ordering', () => {
         {
           id: 'project-1',
           createdAt: '2026-01-01T00:00:00.000Z',
-          taskIds: ['task-1a', 'task-1b'],
+          tasks: [
+            { id: 'idea-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'idea' },
+            { id: 'unstaged-1', createdAt: '2026-01-01T00:00:02.000Z' },
+          ],
         },
         {
           id: 'project-2',
           createdAt: '2026-01-02T00:00:00.000Z',
-          taskIds: ['task-2a'],
+          tasks: [{ id: 'task-2a', createdAt: '2026-01-02T00:00:01.000Z' }],
         },
       ])
     );
@@ -167,12 +500,30 @@ describe('SidebarStore project ordering', () => {
     store.setProjectOrder(['project-1', 'project-2']);
     store.ensureProjectExpanded('project-1');
     store.ensureProjectExpanded('project-2');
-    store.setTaskOrder('project-1', ['task-1a', 'task-1b']);
 
     expect(store.visibleTaskEntries).toEqual([
-      { projectId: 'project-1', taskId: 'task-1a' },
-      { projectId: 'project-1', taskId: 'task-1b' },
+      { projectId: 'project-1', taskId: 'unstaged-1' },
+      { projectId: 'project-1', taskId: 'idea-1' },
       { projectId: 'project-2', taskId: 'task-2a' },
     ]);
+  });
+
+  it('returns visible task ids in row order, excluding tasks of collapsed groups', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'i1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+
+    expect(store.visibleTaskIdsForProject('project-1')).toEqual(['i1']);
   });
 });

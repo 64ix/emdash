@@ -1,5 +1,6 @@
 import type { GitChangeStatus, GitObjectRef } from '@emdash/core/git';
 import type { BrowserSessionSnapshot } from '@shared/browser';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 
 export type TabViewSnapshot = {
   tabOrder: string[];
@@ -160,4 +161,13 @@ export type SidebarSnapshot = {
   projectOrder?: string[];
   taskOrderByProject?: Record<string, string[]>;
   taskSortBy?: SidebarTaskSortBy;
+  /**
+   * Collapsed Stage Group ids (Workflow Stages) per project (spec #85):
+   * a collapsed group hides its task rows in the sidebar until the header
+   * is clicked again. Pure view state — tasks are never touched. A group
+   * that has no visible tasks is not rendered and cannot be collapsed, so
+   * stale ids are pruned by the SidebarStore and a newly non-empty group
+   * always appears expanded.
+   */
+  collapsedStageGroupIdsByProject?: Record<string, WorkflowStage[]>;
 };

@@ -14,7 +14,7 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
-import type { SidebarRow } from '@renderer/features/sidebar/sidebar-store';
+import type { SidebarRow } from '@renderer/features/sidebar/stage-group-row-model';
 
 type MockTaskStatus = 'idle' | 'working' | 'awaiting-input' | 'error' | 'completed' | null;
 

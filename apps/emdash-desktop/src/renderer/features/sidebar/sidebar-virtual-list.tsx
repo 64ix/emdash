@@ -25,13 +25,14 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { type SidebarRow } from '@renderer/features/sidebar/sidebar-store';
+import { type SidebarRow } from '@renderer/features/sidebar/stage-group-row-model';
 import { getTaskStore } from '@renderer/features/tasks/stores/task-selectors';
 import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import { useParams, useWorkspaceSlots } from '@renderer/lib/layout/navigation-provider';
 import { sidebarStore } from '@renderer/lib/stores/app-state';
 import { SidebarBoardItem } from './board-item';
 import { SidebarProjectItem } from './project-item';
+import { SidebarStageGroupItem } from './stage-group-item';
 import { SidebarTaskItem } from './task-item';
 
 const ROW_HEIGHT = 32;
@@ -240,6 +241,20 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
                   </div>
                 );
               }
+              if (row.kind === 'stage-group') {
+                // Stage Group headers (spec #85) are fixed anchors like the
+                // Board row: never draggable, never part of the sortable set.
+                return (
+                  <div key={`stage-group:${row.projectId}:${row.stage}`} style={vStyle}>
+                    <SidebarStageGroupItem
+                      projectId={row.projectId}
+                      stage={row.stage}
+                      label={row.label}
+                      count={row.count}
+                    />
+                  </div>
+                );
+              }
               const dndId = rowToDndId(row);
               if (row.kind === 'project') {
                 return (
@@ -248,9 +263,18 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
                   </SortableRow>
                 );
               }
+              // Task rows inside a Stage Group render with the indented
+              // `grouped` variant; Unstaged loose rows keep the under-project
+              // indent (spec #85 Implementation Decisions).
+              const prevRow = rows[vItem.index - 1];
+              const rowVariant = prevRow?.kind === 'stage-group' ? 'grouped' : 'underProject';
               return (
                 <SortableRow key={`${row.projectId}:${row.taskId}`} dndId={dndId} style={vStyle}>
-                  <SidebarTaskItem projectId={row.projectId} taskId={row.taskId} />
+                  <SidebarTaskItem
+                    projectId={row.projectId}
+                    taskId={row.taskId}
+                    rowVariant={rowVariant}
+                  />
                 </SortableRow>
               );
             })}
@@ -272,12 +296,14 @@ type SidebarDndId =
   | { kind: 'project'; projectId: string }
   | { kind: 'task'; projectId: string; taskId: string };
 
-/** Board rows (ticket #43) never enter dnd-kit's sortable id list. */
-function isSortableRow(row: SidebarRow): row is Exclude<SidebarRow, { kind: 'board' }> {
-  return row.kind !== 'board';
+/** Board rows and Stage Group headers (spec #85) never enter dnd-kit's sortable id list. */
+function isSortableRow(
+  row: SidebarRow
+): row is Exclude<SidebarRow, { kind: 'board' | 'stage-group' }> {
+  return row.kind !== 'board' && row.kind !== 'stage-group';
 }
 
-function rowToDndId(row: Exclude<SidebarRow, { kind: 'board' }>): string {
+function rowToDndId(row: Exclude<SidebarRow, { kind: 'board' | 'stage-group' }>): string {
   if (row.kind === 'project') return toProjectDndId(row.projectId);
   return toTaskDndId(row.projectId, row.taskId);
 }

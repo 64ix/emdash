@@ -24,8 +24,12 @@ import { SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
 interface SidebarTaskItemProps {
   taskId: string;
   projectId: string;
-  /** Pinned strip uses tighter padding than tasks nested under a project. */
-  rowVariant?: 'underProject' | 'pinned';
+  /**
+   * Pinned strip uses tighter padding than tasks nested under a project;
+   * tasks inside a Stage Group (spec #85) are indented one level deeper
+   * than Unstaged loose rows.
+   */
+  rowVariant?: 'underProject' | 'pinned' | 'grouped';
 }
 
 export const SidebarTaskItem = observer(function SidebarTaskItem({
@@ -103,7 +107,11 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
       <SidebarMenuRow
         className={cn(
           'group/row flex items-center justify-between px-1 py-1.5 h-8 gap-1',
-          rowVariant === 'pinned' ? 'pl-2' : 'pl-8'
+          rowVariant === 'pinned'
+            ? 'pl-2'
+            : rowVariant === 'grouped'
+              ? 'pl-12'
+              : 'pl-8'
         )}
         isActive={isActive}
         onMouseDown={(e) => e.preventDefault()}

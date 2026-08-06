@@ -1,13 +1,19 @@
 import { computed, makeAutoObservable, observable, reaction, runInAction } from 'mobx';
 import { type ProjectStore } from '@renderer/features/projects/stores/project';
 import type { ProjectManagerStore } from '@renderer/features/projects/stores/project-manager';
+import { taskAgentStatus } from '@renderer/features/tasks/stores/task-selectors';
 import {
   registeredTaskData,
   unregisteredTaskData,
   type TaskStore,
 } from '@renderer/features/tasks/stores/task-store';
 import type { Snapshottable } from '@renderer/lib/stores/snapshottable';
+import { workflowStages, type WorkflowStage } from '@shared/core/tasks/tasks';
 import type { SidebarSnapshot, SidebarTaskSortBy } from '@shared/view-state';
+import { buildStageGroupedRows, type SidebarRow } from './stage-group-row-model';
+
+/** Every known Workflow Stage id — used to sanitize persisted snapshot blobs. */
+const WORKFLOW_STAGE_VALUES: ReadonlySet<string> = new Set(workflowStages.options);
 
 function parseSidebarTaskSortBy(value: unknown): SidebarTaskSortBy | undefined {
   return value === 'created-at' || value === 'updated-at' ? value : undefined;
@@ -33,23 +39,34 @@ export function getSortInstant(task: TaskStore, kind: TaskSortKind): string | un
   return undefined;
 }
 
-export type SidebarRow =
-  | { kind: 'project'; projectId: string }
-  /**
-   * The project's Feature Board destination (ticket #43): rendered right
-   * after its project row and before its task rows, so it reads as a
-   * project-level view rather than an individual task. Never sortable —
-   * unlike project and task rows it never participates in manual drag
-   * reordering.
-   */
-  | { kind: 'board'; projectId: string }
-  | { kind: 'task'; projectId: string; taskId: string };
+/**
+ * Keeps only known Workflow Stage ids from a persisted snapshot blob —
+ * snapshots from an older or newer app version must not corrupt the field.
+ */
+function sanitizeCollapsedStageGroups(
+  value: Record<string, WorkflowStage[]>
+): Record<string, WorkflowStage[]> {
+  const result: Record<string, WorkflowStage[]> = {};
+  for (const [projectId, stages] of Object.entries(value)) {
+    const valid = stages.filter((stage) => WORKFLOW_STAGE_VALUES.has(stage));
+    if (valid.length > 0) result[projectId] = valid;
+  }
+  return result;
+}
 
 export class SidebarStore implements Snapshottable<SidebarSnapshot> {
   projectOrder: string[] = [];
   taskOrderByProject: Record<string, string[]> = {};
   expandedProjectIds = observable.set<string>();
   taskSortBy: SidebarTaskSortBy = 'created-at';
+  /**
+   * Collapsed Stage Group ids per project (spec #85, ticket #86): a stage
+   * whose group is collapsed keeps its header row but omits its task rows.
+   * Persisted in the sidebar snapshot; stale ids for stages with no
+   * visible tasks are pruned by the reaction below, so a newly non-empty
+   * group always appears expanded.
+   */
+  collapsedStageGroupIdsByProject: Record<string, WorkflowStage[]> = {};
 
   constructor(private readonly projectManager: ProjectManagerStore) {
     makeAutoObservable(this, {
@@ -82,6 +99,46 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
         });
       }
     );
+
+    // Prune stale collapsed Stage Group ids (spec #85): a group with no
+    // visible tasks is not rendered, so it cannot be collapsed — and a stale
+    // id must not collapse the group when a task later moves back in ("a
+    // newly non-empty group appears expanded"). Tracks the row model so the
+    // prune runs on any task/expansion/collapse change, but derives each
+    // project's non-empty stages from the tasks themselves (a project whose
+    // rows show no groups at all must still prune). Idempotent: once pruned,
+    // no further write happens, so the reaction settles.
+    reaction(
+      () => this.sidebarRows,
+      () => {
+        runInAction(() => {
+          for (const [projectId, project] of this.projectManager.projects) {
+            const mounted = project.mountedProject;
+            if (!mounted) continue;
+            const nonEmpty = new Set<WorkflowStage>();
+            for (const task of mounted.taskManager.tasks.values()) {
+              if (task.data.type === 'automation-run' || task.data.isPinned) continue;
+              if (
+                task.state !== 'unregistered' &&
+                'archivedAt' in task.data &&
+                task.data.archivedAt
+              ) {
+                continue;
+              }
+              const stage = 'workflowStage' in task.data ? task.data.workflowStage : undefined;
+              if (stage) nonEmpty.add(stage);
+            }
+            const stored = this.collapsedStageGroupIdsByProject[projectId] ?? [];
+            const pruned = stored.filter((stage) => nonEmpty.has(stage));
+            if (pruned.length === stored.length) continue;
+            this.collapsedStageGroupIdsByProject = {
+              ...this.collapsedStageGroupIdsByProject,
+              [projectId]: pruned,
+            };
+          }
+        });
+      }
+    );
   }
 
   get orderedProjects(): ProjectStore[] {
@@ -101,25 +158,46 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
     const rows: SidebarRow[] = [];
     for (const project of this.orderedProjects) {
       const projectId = project.id;
-      rows.push({ kind: 'project', projectId });
       if (this.expandedProjectIds.has(projectId) && project.mountedProject) {
-        rows.push({ kind: 'board', projectId });
-        const tasks = Array.from(project.mountedProject.taskManager.tasks.values()).filter(
-          (t) =>
-            t.data.type !== 'automation-run' &&
-            (t.state === 'unregistered' || !('archivedAt' in t.data && t.data.archivedAt))
-        );
-        const manualOrder = this.taskOrderByProject[projectId];
-        const ordered = manualOrder?.length
-          ? this.mergeTaskOrder(projectId, tasks)
-          : this.sortTasksForSidebar(tasks);
-        for (const task of ordered) {
-          if (task.data.isPinned) continue;
-          rows.push({ kind: 'task', projectId, taskId: task.data.id });
-        }
+        // Grouped rows replace the flat task list (spec #85, ticket #86):
+        // project row, Board row, Unstaged loose rows, then one header row
+        // per non-empty stage in board column order, each followed by its
+        // task rows (omitted for collapsed groups).
+        rows.push(...this.groupedRowsForProject(projectId));
+      } else {
+        rows.push({ kind: 'project', projectId });
       }
     }
     return rows;
+  }
+
+  /**
+   * The stage-grouped rows for one project, independent of expand state.
+   * The row-model builder (stage-group-row-model.ts) emits the project and
+   * Board rows plus the grouped content; it never writes stages or ranks —
+   * read-only ordering only (ADR 0006).
+   */
+  private groupedRowsForProject(projectId: string): SidebarRow[] {
+    const mounted = this.projectManager.projects.get(projectId)?.mountedProject;
+    if (!mounted) return [];
+    const tasks = Array.from(mounted.taskManager.tasks.values()).filter(
+      (t) =>
+        t.data.type !== 'automation-run' &&
+        !t.data.isPinned &&
+        (t.state === 'unregistered' || !('archivedAt' in t.data && t.data.archivedAt))
+    );
+    // Awaiting Input elevation is render-time only (ADR 0002): the same
+    // status the board reads, never persisted.
+    const awaitingInputIds = new Set<string>();
+    for (const task of tasks) {
+      if (taskAgentStatus(task) === 'awaiting-input') awaitingInputIds.add(task.data.id);
+    }
+    return buildStageGroupedRows({
+      projectId,
+      tasks: tasks.map((t) => t.data),
+      collapsedStages: new Set(this.collapsedStageGroupIdsByProject[projectId] ?? []),
+      awaitingInputIds,
+    });
   }
 
   /** Visible unpinned tasks in the same order they are rendered in the project tree. */
@@ -147,24 +225,20 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
   }
 
   /**
-   * Visible unpinned task IDs for a project in sidebar order. Archived tasks are
-   * and automation tasks are excluded. Independent of expand state so Next/Previous
-   * Task navigation works even when the project is collapsed.
+   * Visible unpinned task IDs for a project in sidebar row order (spec #85):
+   * the grouped model's order — Board Rank first, unranked after, Awaiting
+   * Input elevated — with the tasks of collapsed groups excluded, so
+   * navigation never lands on a task whose row is not rendered. Archived,
+   * pinned and automation tasks are excluded. Independent of expand state so
+   * Next/Previous Task navigation works even when the project is collapsed.
+   * `taskSortBy` and the per-project manual orders are inert in grouped mode
+   * (spec: no data migration).
    */
   visibleTaskIdsForProject(projectId: string): string[] {
-    const project = this.projectManager.projects.get(projectId);
-    if (!project?.mountedProject) return [];
-    const tasks = Array.from(project.mountedProject.taskManager.tasks.values()).filter(
-      (t) =>
-        t.data.type !== 'automation-run' &&
-        !t.data.isPinned &&
-        (t.state === 'unregistered' || !('archivedAt' in t.data && t.data.archivedAt))
-    );
-    const manualOrder = this.taskOrderByProject[projectId];
-    const ordered = manualOrder?.length
-      ? this.mergeTaskOrder(projectId, tasks)
-      : this.sortTasksForSidebar(tasks);
-    return ordered.map((t) => t.data.id);
+    if (!this.projectManager.projects.get(projectId)?.mountedProject) return [];
+    return this.groupedRowsForProject(projectId)
+      .filter((row): row is Extract<SidebarRow, { kind: 'task' }> => row.kind === 'task')
+      .map((row) => row.taskId);
   }
 
   get isEmpty(): boolean {
@@ -177,6 +251,7 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
       projectOrder: [...this.projectOrder],
       taskOrderByProject: { ...this.taskOrderByProject },
       taskSortBy: this.taskSortBy,
+      collapsedStageGroupIdsByProject: { ...this.collapsedStageGroupIdsByProject },
     };
   }
 
@@ -193,6 +268,14 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
     if (snapshot.taskSortBy !== undefined) {
       const v = parseSidebarTaskSortBy(snapshot.taskSortBy);
       if (v !== undefined) this.taskSortBy = v;
+    }
+    if (snapshot.collapsedStageGroupIdsByProject !== undefined) {
+      // Only known stage ids are kept; stale ids for stages that end up
+      // empty are pruned by the reaction as rows render, so a group that
+      // gains its first task appears expanded.
+      this.collapsedStageGroupIdsByProject = sanitizeCollapsedStageGroups(
+        snapshot.collapsedStageGroupIdsByProject
+      );
     }
   }
 
@@ -213,6 +296,22 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
 
   ensureProjectExpanded(projectId: string): void {
     this.expandedProjectIds.add(projectId);
+  }
+
+  /** Collapses an expanded Stage Group, or expands a collapsed one (spec #85). */
+  toggleStageGroupCollapsed(projectId: string, stage: WorkflowStage): void {
+    const current = this.collapsedStageGroupIdsByProject[projectId] ?? [];
+    const next = current.includes(stage)
+      ? current.filter((s) => s !== stage)
+      : [...current, stage];
+    this.collapsedStageGroupIdsByProject = {
+      ...this.collapsedStageGroupIdsByProject,
+      [projectId]: next,
+    };
+  }
+
+  isStageGroupCollapsed(projectId: string, stage: WorkflowStage): boolean {
+    return (this.collapsedStageGroupIdsByProject[projectId] ?? []).includes(stage);
   }
 
   setTaskSortBy(sortBy: SidebarTaskSortBy): void {
@@ -266,9 +365,5 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
     const d = b.createdAt.localeCompare(a.createdAt);
     if (d !== 0) return d;
     return a.id.localeCompare(b.id);
-  }
-
-  private sortTasksForSidebar(tasks: TaskStore[]): TaskStore[] {
-    return [...tasks].sort((a, b) => this.compareSidebarTasks(a, b));
   }
 }
