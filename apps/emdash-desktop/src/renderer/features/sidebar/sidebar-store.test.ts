@@ -740,9 +740,7 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
     store.ensureProjectExpanded('project-2');
     store.hideTaskFromSidebar('project-2', 't2');
 
-    expect(store.visibleTaskEntries).toEqual([
-      { projectId: 'project-1', taskId: 't1' },
-    ]);
+    expect(store.visibleTaskEntries).toEqual([{ projectId: 'project-1', taskId: 't1' }]);
   });
 
   it('keeps the hidden set while the project is collapsed and restores rows on expand', () => {

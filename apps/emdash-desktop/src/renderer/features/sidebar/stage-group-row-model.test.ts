@@ -215,7 +215,12 @@ describe('buildStageGroupedRows', () => {
       isVisible: (t) => t.id !== 'faded',
     });
     const group = rows.find((row) => row.kind === 'stage-group');
-    expect(group).toMatchObject({ kind: 'stage-group', stage: 'shipped', label: 'Shipped', count: 2 });
+    expect(group).toMatchObject({
+      kind: 'stage-group',
+      stage: 'shipped',
+      label: 'Shipped',
+      count: 2,
+    });
     expect(shape(rows)).toEqual([
       'project:p1',
       'board:p1',

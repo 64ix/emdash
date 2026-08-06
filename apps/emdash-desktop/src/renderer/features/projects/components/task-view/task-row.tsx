@@ -1,5 +1,5 @@
-import { observer } from 'mobx-react-lite';
 import { EyeOff } from 'lucide-react';
+import { observer } from 'mobx-react-lite';
 import { useRef } from 'react';
 import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
 import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';

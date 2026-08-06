@@ -1,4 +1,15 @@
-import { Archive, Copy, Eye, EyeOff, MessageSquare, Pencil, Pin, PinOff, RotateCcw, Trash2 } from 'lucide-react';
+import {
+  Archive,
+  Copy,
+  Eye,
+  EyeOff,
+  MessageSquare,
+  Pencil,
+  Pin,
+  PinOff,
+  RotateCcw,
+  Trash2,
+} from 'lucide-react';
 import React from 'react';
 import { toast } from '@renderer/lib/hooks/use-toast';
 import {

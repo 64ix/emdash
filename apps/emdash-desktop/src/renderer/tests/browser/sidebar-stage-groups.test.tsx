@@ -16,7 +16,10 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
-import { SHIPPED_FADE_DISCLOSURE, SHIPPED_FADE_WINDOW_DAYS } from '@renderer/features/board/board-columns';
+import {
+  SHIPPED_FADE_DISCLOSURE,
+  SHIPPED_FADE_WINDOW_DAYS,
+} from '@renderer/features/board/board-columns';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -91,8 +94,8 @@ vi.mock('@renderer/lib/ui/relative-time', () => ({
   RelativeTime: () => null,
 }));
 
-import { SidebarStageGroupItem } from '@renderer/features/sidebar/stage-group-item';
 import { TaskRow } from '@renderer/features/projects/components/task-view/task-row';
+import { SidebarStageGroupItem } from '@renderer/features/sidebar/stage-group-item';
 
 const TASK = {
   id: 't1',
@@ -241,9 +244,9 @@ describe('TaskRow Hidden Task badge and actions (spec #85, ticket #87)', () => {
     const content = menuContent();
     expect(content?.textContent).toContain('Hide from sidebar');
 
-    const item = Array.from(content?.querySelectorAll('[data-slot="context-menu-item"]') ?? []).find(
-      (el) => el.textContent?.includes('Hide from sidebar')
-    ) as HTMLElement | undefined;
+    const item = Array.from(
+      content?.querySelectorAll('[data-slot="context-menu-item"]') ?? []
+    ).find((el) => el.textContent?.includes('Hide from sidebar')) as HTMLElement | undefined;
     item?.click();
     expect(mocks.hideTaskFromSidebar).toHaveBeenCalledWith('p1', 't1');
   });
@@ -262,9 +265,9 @@ describe('TaskRow Hidden Task badge and actions (spec #85, ticket #87)', () => {
     expect(content?.textContent).toContain('Show in sidebar');
     expect(content?.textContent).not.toContain('Hide from sidebar');
 
-    const item = Array.from(content?.querySelectorAll('[data-slot="context-menu-item"]') ?? []).find(
-      (el) => el.textContent?.includes('Show in sidebar')
-    ) as HTMLElement | undefined;
+    const item = Array.from(
+      content?.querySelectorAll('[data-slot="context-menu-item"]') ?? []
+    ).find((el) => el.textContent?.includes('Show in sidebar')) as HTMLElement | undefined;
     item?.click();
     expect(mocks.showTaskInSidebar).toHaveBeenCalledWith('p1', 't1');
   });
