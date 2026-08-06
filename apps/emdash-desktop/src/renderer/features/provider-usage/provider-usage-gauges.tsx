@@ -1,7 +1,13 @@
 import { AlertCircle, Gauge, RefreshCw, X } from 'lucide-react';
 import { useSyncExternalStore } from 'react';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@renderer/lib/ui/popover';
+import {
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@renderer/lib/ui/popover';
 import { cn } from '@renderer/utils/utils';
 import type { ProviderUsageProvider, ProviderUsageSnapshot } from '@shared/core/provider-usage';
 import {
@@ -20,7 +26,7 @@ const PROVIDER_LABELS: Record<ProviderUsageProvider, string> = {
 
 export function ProviderUsageGauges() {
   const state = useSyncExternalStore(providerUsageStore.subscribe, providerUsageStore.getSnapshot);
-  const { value: settings, update } = useAppSettingsKey('interface');
+  const { value: settings } = useAppSettingsKey('interface');
   const visible = state.snapshots.filter(
     (snapshot) =>
       (snapshot.provider === 'claude'
@@ -37,29 +43,20 @@ export function ProviderUsageGauges() {
           snapshot={snapshot}
           refreshing={state.refreshing.has(snapshot.provider)}
           onRefresh={() => providerUsageStore.refresh(snapshot.provider)}
-          onHide={() =>
-            update(
-              snapshot.provider === 'claude'
-                ? { showClaudeUsageGauge: false }
-                : { showCodexUsageGauge: false }
-            )
-          }
         />
       ))}
     </div>
   );
 }
 
-function ProviderUsageGauge({
+export function ProviderUsageGauge({
   snapshot,
   refreshing,
   onRefresh,
-  onHide,
 }: {
   snapshot: ProviderUsageSnapshot;
   refreshing: boolean;
   onRefresh: () => Promise<void>;
-  onHide: () => void;
 }) {
   const primary = getPrimaryUsageWindow(snapshot);
   const warning = primary ? isUsageWarning(primary.utilization) : false;
@@ -117,14 +114,12 @@ function ProviderUsageGauge({
             >
               <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
             </button>
-            <button
-              type="button"
+            <PopoverClose
               className="rounded p-1 text-foreground-muted hover:bg-background-tertiary hover:text-foreground"
-              onClick={onHide}
-              aria-label={`Hide ${PROVIDER_LABELS[snapshot.provider]} usage gauge`}
+              aria-label={`Close ${PROVIDER_LABELS[snapshot.provider]} usage details`}
             >
               <X className="size-3.5" />
-            </button>
+            </PopoverClose>
           </div>
         </div>
         {snapshot.windows.map((window) => {
