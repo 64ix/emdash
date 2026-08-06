@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { win32 } from 'node:path';
 import type {
   AcpFs,
   AcpProcessHandle,
@@ -8,6 +9,60 @@ import type {
   AcpTerminalProcess,
 } from '@emdash/core/acp';
 import type { AcpRuntimeProcessHost } from '../runtime/types';
+
+type ChildProcessSpawnSpec = {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+};
+
+function getEnvValue(env: Record<string, string | undefined>, key: string): string | undefined {
+  const normalizedKey = key.toLowerCase();
+  const entry = Object.entries(env).find(
+    ([candidate]) => candidate.toLowerCase() === normalizedKey
+  );
+  return entry?.[1];
+}
+
+function quoteForCmdExe(input: string): string {
+  if (input.length === 0) return '""';
+  if (!/[\s"^&|<>()%!]/.test(input)) return input;
+  return `"${input
+    .replace(/%/g, '%%')
+    .replace(/!/g, '^!')
+    .replace(/(["^&|<>()])/g, '^$1')}"`;
+}
+
+function wrapCmdExeCommandLine(commandLine: string): string {
+  return commandLine.startsWith('"') ? `"${commandLine}"` : commandLine;
+}
+
+/**
+ * Node cannot spawn Windows .cmd/.bat shims directly. Route only those files through
+ * cmd.exe and quote each argv token explicitly instead of enabling `shell: true`.
+ */
+export function resolveChildProcessSpawnSpec(
+  spec: ChildProcessSpawnSpec,
+  platform: NodeJS.Platform = process.platform
+): Pick<ChildProcessSpawnSpec, 'command' | 'args'> {
+  if (platform !== 'win32') return { command: spec.command, args: spec.args };
+
+  const extension = win32.extname(spec.command).toLowerCase();
+  if (extension !== '.cmd' && extension !== '.bat') {
+    return { command: spec.command, args: spec.args };
+  }
+
+  const commandLine = [spec.command, ...spec.args].map(quoteForCmdExe).join(' ');
+  const command =
+    getEnvValue(spec.env, 'ComSpec') ??
+    getEnvValue(process.env, 'ComSpec') ??
+    'C:\\Windows\\System32\\cmd.exe';
+  return {
+    command,
+    args: ['/d', '/s', '/c', wrapCmdExeCommandLine(commandLine)],
+  };
+}
 
 class ChildProcessHandle implements AcpProcessHandle {
   constructor(private readonly child: ReturnType<typeof spawn>) {}
@@ -96,7 +151,8 @@ export class ChildAcpProcessHost implements AcpRuntimeProcessHost {
     env: Record<string, string>;
     cwd: string;
   }): Promise<AcpProcessHandle> {
-    const child = spawn(spec.command, spec.args, {
+    const resolved = resolveChildProcessSpawnSpec(spec);
+    const child = spawn(resolved.command, resolved.args, {
       cwd: spec.cwd,
       env: spec.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -113,7 +169,8 @@ export class ChildAcpProcessHost implements AcpRuntimeProcessHost {
     env: Record<string, string>;
     cwd: string;
   }): Promise<AcpTerminalProcess> {
-    const child = spawn(spec.command, spec.args, {
+    const resolved = resolveChildProcessSpawnSpec(spec);
+    const child = spawn(resolved.command, resolved.args, {
       cwd: spec.cwd,
       env: spec.env,
       stdio: ['ignore', 'pipe', 'pipe'],
