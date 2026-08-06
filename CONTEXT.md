@@ -41,23 +41,27 @@ pushes cards in; only the user or an agent moves a card back out.
 ## Shipped Fade
 
 A display rule, not a stage: `shipped` cards whose PR merged more than a
-fixed window ago are hidden from the Feature Board. The task keeps its
-stage forever. The Shipped column discloses this window so older cards
-never appear to vanish arbitrarily.
+fixed window ago are hidden from the Feature Board and from the sidebar's
+Shipped Stage Group. The task keeps its stage forever and is never
+archived or otherwise altered. The Shipped column (and group) disclose the
+window so older cards never appear to vanish arbitrarily. A faded task
+remains reachable in the project view's task list, where it can be
+archived or restored.
 
 ## Awaiting Input
 
 The state of a task on the Feature Board when at least one of its sessions
 has an unseen `awaiting-input` conversation — an agent is waiting on the
 user. A display state, not a position: awaiting-input cards float to the
-top of their column at render time and fall back to their manual place
-once handled.
+top of their Feature Board column (and of their sidebar Stage Group) at
+render time and fall back to their manual place once handled.
 
 ## Board Rank
 
-A task's manually chosen position within a Feature Board column. Only ever
-set by an explicit user gesture (a drop); never written by the system.
-Tasks without a Board Rank sort after ranked ones, in their existing order.
+A task's manually chosen position within a Feature Board column or sidebar
+Stage Group. Only ever set by an explicit user gesture (a drop, in the
+board or the sidebar); never written by the system. Tasks without a Board
+Rank sort after ranked ones, in their existing order.
 
 ## Ghost Card
 
@@ -121,7 +125,32 @@ always derived from the Spec.
 ## Unstaged
 
 The state of a task whose Workflow Stage is unset. Displayed as the first
-column of the Feature Board; not itself a Workflow Stage.
+column of the Feature Board, and as ungrouped rows at the top of the
+project's sidebar task list (below the Board row, above the Stage Groups);
+not itself a Workflow Stage.
+
+## Stage Group
+
+A collapsible sidebar folder containing a project's tasks that share a
+Workflow Stage, replacing the project's flat task list. Only non-empty
+stages appear, in Feature Board column order, and each group orders its
+tasks like its board column (Board Rank first, then unranked, Awaiting
+Input elevated at render time). Unstaged tasks are not in a group — they
+sit as ungrouped rows above the groups. A group shows only visible tasks:
+Shipped Fade hides `shipped` cards past the window, and Hidden Tasks are
+absent. A drop inside the sidebar writes the same stage and Board Rank
+fields as the board — the sidebar never changes a stage the board would
+not honor (ADR 0006).
+
+## Hidden Task
+
+A task the user hid from the sidebar with the context menu's "Hide from
+sidebar" action — any task, any stage. Sidebar view state, not task state:
+the task is unchanged everywhere else (still a Feature Board card, still in
+the project view's task list and search) and is unhidden from the project
+view's task list. Distinct from Unstaged (a stage state), from Shipped Fade
+(automatic, time-based, applies to the board too), and from archiving (a
+task-level state change).
 
 ## Task Detail Panel
 
