@@ -6,7 +6,16 @@ import {
   sortColumn,
   type ColumnId,
 } from '@renderer/features/board/board-ordering';
-import type { WorkflowStage } from '@shared/core/tasks/tasks';
+import {
+  deriveTaskStageAuthorityFact,
+  parseIssueNumberFromIdentifier,
+} from '@shared/core/pull-requests/pr-workflow-derivation';
+import {
+  deriveStageAuthority,
+  describeStageAuthorityFact,
+  isStageDestinationSafe,
+} from '@shared/core/tasks/stage-authority';
+import { workflowStages, type Task, type WorkflowStage } from '@shared/core/tasks/tasks';
 
 /**
  * The sidebar's grouped row model (spec #85, ticket #86): the pure,
@@ -245,4 +254,88 @@ export function computeSidebarDropPosition(
     stage: destinationColumn === 'unstaged' ? null : destinationColumn,
     rank: dropIndex === null ? null : computeDropRank(destinationEntries, dropIndex, trueEntries),
   };
+}
+
+/**
+ * One "Move to stage…" entry (spec #85, ticket #88): a Workflow Stage or
+ * Unstaged (`stage: null`), labelled through the board's `STAGE_LABELS`
+ * (never a second label set), and `blocked` when a governing GitHub fact
+ * would overwrite the move — the board's own `isStageDestinationSafe`
+ * answer, so the sidebar never accepts a move the next sync pass would
+ * silently revert (ADR 0006).
+ */
+export type SidebarStageMoveOption = {
+  stage: WorkflowStage | null;
+  label: string;
+  blocked: boolean;
+};
+
+/**
+ * The "Move to stage…" submenu contents for one task (ticket #88): every
+ * Workflow Stage plus Unstaged, each gated through the board's authority
+ * contract, plus the governing-fact explanation to surface as feedback when
+ * anything is blocked — the same `fact + action` composition as the board's
+ * blocked-drop explanation, so the block never reads as arbitrary.
+ */
+export type SidebarStageMoveOptions = {
+  options: readonly SidebarStageMoveOption[];
+  explanation: string | null;
+};
+
+/**
+ * Computes the "Move to stage…" options for a task, reusing the board's
+ * exact authority computation (`board-main-panel.tsx`'s `authorityForTask`:
+ * `deriveTaskStageAuthorityFact` for the Spec-referencing PR half,
+ * `deriveStageAuthority` for the whole fact) and gating every destination
+ * through the shared `isStageDestinationSafe` — never a second gating
+ * implementation (ticket #88, ADR 0006). A destination is blocked when the
+ * governing fact would be reasserted over it by the next sync pass;
+ * `explanation` names that fact and what must change, composed exactly like
+ * the board's blocked-drop feedback. Pure: never writes, never reads the
+ * store.
+ */
+export function sidebarStageMoveOptions(
+  task: Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId'>,
+  branchName: string | null
+): SidebarStageMoveOptions {
+  const currentStage = task.workflowStage ?? null;
+  const specIssueNumber = parseIssueNumberFromIdentifier(task.linkedIssues?.spec?.identifier);
+  const authority = deriveStageAuthority({
+    currentStage,
+    linkedIssues: task.linkedIssues,
+    prAuthority: deriveTaskStageAuthorityFact({
+      currentStage,
+      specIssueNumber,
+      taskBranch: branchName,
+      // Defensive: `task.prs` is non-optional on `Task`, but lighter test
+      // doubles across the board test suites omit it — same guard as the
+      // board's own `authorityForTask`.
+      prFacts: task.prs ?? [],
+    }),
+    hasWorkspace: task.workspaceId != null,
+  });
+
+  const options: SidebarStageMoveOption[] = [
+    ...workflowStages.options.map((stage) => ({
+      stage,
+      label: STAGE_LABELS[stage],
+      blocked: authority.governs && !isStageDestinationSafe(authority.fact, stage),
+    })),
+    {
+      stage: null,
+      label: STAGE_LABELS.unstaged,
+      blocked: authority.governs && !isStageDestinationSafe(authority.fact, null),
+    },
+  ];
+
+  // Feedback: only a governing fact ever blocks anything, and every
+  // governing fact blocks at least one destination, so `some(blocked)` is
+  // exactly "the submenu has disabled entries to explain".
+  let explanation: string | null = null;
+  if (options.some((option) => option.blocked)) {
+    const description = describeStageAuthorityFact(authority.fact);
+    explanation = `${description.fact} ${description.action}`;
+  }
+
+  return { options, explanation };
 }
