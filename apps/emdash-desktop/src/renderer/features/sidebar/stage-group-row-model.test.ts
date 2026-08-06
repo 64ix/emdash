@@ -3,6 +3,7 @@ import { rankBetween } from '@shared/lib/board-rank';
 import {
   buildStageGroupedRows,
   computeSidebarDropPosition,
+  taskRowVariants,
   type SidebarRow,
   type StageGroupableTask,
   type StageGroupRowsInput,
@@ -196,6 +197,49 @@ describe('buildStageGroupedRows', () => {
     build({ tasks });
     expect(tasks[0]).toEqual({ id: 'a', workflowStage: 'spec', boardRank: 'z' });
     expect(tasks[1]).toEqual({ id: 'b', workflowStage: 'spec' });
+  });
+});
+
+describe('taskRowVariants', () => {
+  it('marks every task of a group as grouped, Unstaged rows as underProject', () => {
+    const rows = build({
+      tasks: [
+        task('u1'),
+        task('s1', { workflowStage: 'spec' }),
+        task('s2', { workflowStage: 'spec' }),
+        task('i1', { workflowStage: 'idea' }),
+      ],
+    });
+    const variants = taskRowVariants(rows);
+    expect(variants.get('p1:u1')).toBe('underProject');
+    expect(variants.get('p1:s1')).toBe('grouped');
+    expect(variants.get('p1:s2')).toBe('grouped');
+    expect(variants.get('p1:i1')).toBe('grouped');
+  });
+
+  it('keeps grouping after a collapsed group, and resets across projects', () => {
+    const rows = build({
+      tasks: [
+        task('s1', { workflowStage: 'spec' }),
+        task('i1', { workflowStage: 'idea' }),
+        task('i2', { workflowStage: 'idea' }),
+      ],
+      collapsedStages: new Set(['spec']),
+    });
+    const variants = taskRowVariants(rows);
+    expect(variants.get('p1:s1')).toBeUndefined(); // collapsed — no row
+    expect(variants.get('p1:i1')).toBe('grouped');
+    expect(variants.get('p1:i2')).toBe('grouped');
+
+    // A following project's loose rows must not inherit the previous
+    // project's group.
+    const nextProject = buildStageGroupedRows({
+      projectId: 'p2',
+      tasks: [task('u2'), task('s2', { workflowStage: 'spec' })],
+    });
+    const nextVariants = taskRowVariants(nextProject);
+    expect(nextVariants.get('p2:u2')).toBe('underProject');
+    expect(nextVariants.get('p2:s2')).toBe('grouped');
   });
 });
 

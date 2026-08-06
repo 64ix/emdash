@@ -25,7 +25,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { type SidebarRow } from '@renderer/features/sidebar/stage-group-row-model';
+import { type SidebarRow, taskRowVariants } from '@renderer/features/sidebar/stage-group-row-model';
 import { getTaskStore } from '@renderer/features/tasks/stores/task-selectors';
 import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import { useParams, useWorkspaceSlots } from '@renderer/lib/layout/navigation-provider';
@@ -59,6 +59,10 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
   // Board rows (ticket #43) are a fixed anchor, never sortable — dnd-kit's
   // sortable id list only ever contains project and task rows.
   const allDndIds = useMemo(() => rows.filter(isSortableRow).map(rowToDndId), [rows]);
+
+  // Per-task render indent: `grouped` inside a Stage Group, `underProject`
+  // for Unstaged loose rows (spec #85 Implementation Decisions).
+  const taskVariants = useMemo(() => taskRowVariants(rows), [rows]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -265,9 +269,11 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
               }
               // Task rows inside a Stage Group render with the indented
               // `grouped` variant; Unstaged loose rows keep the under-project
-              // indent (spec #85 Implementation Decisions).
-              const prevRow = rows[vItem.index - 1];
-              const rowVariant = prevRow?.kind === 'stage-group' ? 'grouped' : 'underProject';
+              // indent (spec #85 Implementation Decisions). Derived once per
+              // row set so every row of a group shares the variant, not just
+              // the first one after the header.
+              const rowVariant =
+                taskVariants.get(`${row.projectId}:${row.taskId}`) ?? 'underProject';
               return (
                 <SortableRow key={`${row.projectId}:${row.taskId}`} dndId={dndId} style={vStyle}>
                   <SidebarTaskItem

@@ -108,6 +108,33 @@ export type StageGroupRowsInput = {
 
 type ColumnEntry = { id: string; rank: string | null };
 
+/** Render indent variant for a sidebar task row (spec #85 Implementation Decisions). */
+export type SidebarTaskRowVariant = 'underProject' | 'grouped';
+
+/**
+ * The render indent variant for every task row: tasks inside a Stage Group
+ * use the deeper `grouped` indent, Unstaged loose rows keep the current
+ * `underProject` indent (spec #85 Implementation Decisions). Derived from the
+ * row sequence — a task row belongs to the group whose header precedes it,
+ * so every task row after a `stage-group` header (until the next project or
+ * Board row) is `grouped`, not just the first one. Collapsed groups emit no
+ * task rows, so nothing to derive there. Keyed by `projectId:taskId`.
+ */
+export function taskRowVariants(rows: readonly SidebarRow[]): Map<string, SidebarTaskRowVariant> {
+  const variants = new Map<string, SidebarTaskRowVariant>();
+  let inGroup = false;
+  for (const row of rows) {
+    if (row.kind === 'stage-group') {
+      inGroup = true;
+    } else if (row.kind === 'project' || row.kind === 'board') {
+      inGroup = false;
+    } else if (row.kind === 'task') {
+      variants.set(`${row.projectId}:${row.taskId}`, inGroup ? 'grouped' : 'underProject');
+    }
+  }
+  return variants;
+}
+
 /**
  * Builds the ordered sidebar rows for one expanded project: project row,
  * Board row, Unstaged loose task rows, then one `stage-group` header row
