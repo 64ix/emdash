@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   currentView: 'project' as string,
   boardProjectId: undefined as string | undefined,
   sidebarRows: [] as SidebarRow[],
+  hiddenTaskIdsByProject: {} as Record<string, string[]>,
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
@@ -53,6 +54,9 @@ vi.mock('@renderer/lib/stores/app-state', () => ({
   sidebarStore: {
     get sidebarRows() {
       return mocks.sidebarRows;
+    },
+    get hiddenTaskIdsByProject() {
+      return mocks.hiddenTaskIdsByProject;
     },
     expandedProjectIds: { has: () => true },
     ensureProjectExpanded: mocks.ensureProjectExpanded,
@@ -161,6 +165,7 @@ describe('sidebar Board row (ticket #43)', () => {
     mocks.ensureProjectExpanded.mockClear();
     mocks.currentView = 'project';
     mocks.boardProjectId = undefined;
+    mocks.hiddenTaskIdsByProject = {};
     mocks.sidebarRows = [
       { kind: 'project', projectId: 'p1' },
       { kind: 'board', projectId: 'p1' },
@@ -231,5 +236,21 @@ describe('sidebar Board row (ticket #43)', () => {
     managersByProject.set('p1', new Map([['t1', makeTask('t1', 'idle')]]));
     await mount();
     expect(host.querySelector('[aria-label$="need attention"]')).toBeNull();
+  });
+
+  it('excludes hidden tasks from the attention count (spec #85, ticket #87)', async () => {
+    managersByProject.set(
+      'p1',
+      new Map([
+        ['t1', makeTask('t1', 'awaiting-input')],
+        ['t2', makeTask('t2', 'awaiting-input')],
+      ])
+    );
+    // t2 is a Hidden Task — sidebar-only view state, so it must not inflate
+    // the badge even though the board would count it.
+    mocks.hiddenTaskIdsByProject = { p1: ['t2'] };
+    await mount();
+    const badge = host.querySelector('[aria-label$="need attention"]');
+    expect(badge?.textContent).toBe('1');
   });
 });

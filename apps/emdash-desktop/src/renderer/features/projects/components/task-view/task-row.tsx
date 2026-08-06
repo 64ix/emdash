@@ -1,4 +1,5 @@
 import { observer } from 'mobx-react-lite';
+import { EyeOff } from 'lucide-react';
 import { useRef } from 'react';
 import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
 import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
@@ -13,6 +14,7 @@ import { PrBadge } from '@renderer/lib/components/pr-badge';
 import { StackedAgentLogos } from '@renderer/lib/components/stacked-agent-logos';
 import { useNavigate } from '@renderer/lib/layout/navigation-provider';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
+import { sidebarStore } from '@renderer/lib/stores/app-state';
 import { Checkbox } from '@renderer/lib/ui/checkbox';
 import { RelativeTime } from '@renderer/lib/ui/relative-time';
 import { cn } from '@renderer/utils/utils';
@@ -58,6 +60,14 @@ export const TaskRow = observer(function TaskRow({
   const currentPr = task.data.prs ? selectCurrentPr(task.data.prs) : undefined;
   const branchName =
     getTaskGitWorktreeStore(task.data.projectId, task.data.id)?.branchName ?? undefined;
+  // Hidden Task (spec #85, ticket #87): sidebar-only view state. The badge
+  // and the context menu's "Show in sidebar" action are the task list's
+  // unhide affordance — the task itself is unchanged everywhere else.
+  const isHiddenFromSidebar = sidebarStore.isTaskHidden(task.data.projectId, task.data.id);
+  const handleHideFromSidebar = () =>
+    sidebarStore.hideTaskFromSidebar(task.data.projectId, task.data.id);
+  const handleShowInSidebar = () =>
+    sidebarStore.showTaskInSidebar(task.data.projectId, task.data.id);
 
   return (
     <TaskContextMenu
@@ -72,6 +82,9 @@ export const TaskRow = observer(function TaskRow({
       onRestore={handleRestore}
       onConvertAutomation={undefined}
       onDelete={handleDelete}
+      isHiddenFromSidebar={isHiddenFromSidebar}
+      onHideFromSidebar={handleHideFromSidebar}
+      onShowInSidebar={handleShowInSidebar}
     >
       <button
         onClick={() => {
@@ -109,6 +122,18 @@ export const TaskRow = observer(function TaskRow({
             <span className="min-w-0 truncate text-left text-sm">{task.data.name}</span>
             <TaskGitDiffStats task={task} className="shrink-0 text-xs" />
             {currentPr && <PrBadge pr={currentPr} />}
+            {isHiddenFromSidebar && (
+              <button
+                type="button"
+                onClick={handleShowInSidebar}
+                title="Hidden from sidebar — click to show in the sidebar again"
+                aria-label="Show in sidebar"
+                className="flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border bg-background-2 px-2 py-0.5 text-[10px] text-foreground-muted transition-colors hover:text-foreground"
+              >
+                <EyeOff className="size-3" />
+                Hidden
+              </button>
+            )}
           </div>
         </div>
         <StackedAgentLogos stats={task.conversationStats} />

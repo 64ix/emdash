@@ -170,4 +170,13 @@ export type SidebarSnapshot = {
    * always appears expanded.
    */
   collapsedStageGroupIdsByProject?: Record<string, WorkflowStage[]>;
+  /**
+   * Hidden Task ids per project (spec #85, ticket #87): tasks the user hid
+   * from the sidebar with the context menu's "Hide from sidebar" action.
+   * Pure view state — the task itself is never touched (ADR 0006: the
+   * board, the project view's task list and search keep showing it). The
+   * hidden set survives restarts; hidden tasks are unhidden from the
+   * project view's task list.
+   */
+  hiddenTaskIdsByProject?: Record<string, string[]>;
 };

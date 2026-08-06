@@ -1,6 +1,7 @@
 import { observable, runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
 import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
+import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { SidebarStore } from './sidebar-store';
 
@@ -65,6 +66,7 @@ type TaskFixture = {
   workflowStage?: WorkflowStage;
   boardRank?: string;
   isPinned?: boolean;
+  prs?: { status: string; mergedAt: string | null }[];
 };
 
 function task(taskId: string, createdAt: string, overrides: Partial<TaskFixture> = {}) {
@@ -76,6 +78,9 @@ function task(taskId: string, createdAt: string, overrides: Partial<TaskFixture>
       isPinned: false,
       createdAt,
       updatedAt: createdAt,
+      // The store now runs the shared Shipped Fade predicate on registered
+      // tasks, which reads `prs`; an empty array keeps the default non-faded.
+      prs: [],
       ...overrides,
     },
   };
@@ -562,5 +567,312 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     store.toggleStageGroupCollapsed('project-1', 'spec');
 
     expect(store.visibleTaskIdsForProject('project-1')).toEqual(['i1']);
+  });
+});
+
+describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
+  it('hides a task from the sidebar only, group count and rows included', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 's2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+            { id: 'u1', createdAt: '2026-01-01T00:00:03.000Z' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 's1');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'task:u1',
+      'group:Spec:1',
+      'task:s2',
+    ]);
+    expect(store.isTaskHidden('project-1', 's1')).toBe(true);
+    expect(store.isTaskHidden('project-1', 's2')).toBe(false);
+  });
+
+  it('hides a task from the Unstaged loose rows too', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [{ id: 'u1', createdAt: '2026-01-01T00:00:01.000Z' }],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 'u1');
+
+    expect(store.sidebarRows).toEqual([
+      { kind: 'project', projectId: 'project-1' },
+      { kind: 'board', projectId: 'project-1' },
+    ]);
+  });
+
+  it('drops the group header entirely when every task of a stage is hidden', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [{ id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' }],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 's1');
+
+    expect(store.sidebarRows).toEqual([
+      { kind: 'project', projectId: 'project-1' },
+      { kind: 'board', projectId: 'project-1' },
+    ]);
+  });
+
+  it('showing a hidden task restores its row', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [{ id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' }],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 's1');
+    store.showTaskInSidebar('project-1', 's1');
+
+    expect(store.isTaskHidden('project-1', 's1')).toBe(false);
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Spec:1',
+      'task:s1',
+    ]);
+    // Showing a task that was never hidden is a no-op.
+    expect(() => store.showTaskInSidebar('project-1', 's1')).not.toThrow();
+  });
+
+  it('persists the hidden set in the snapshot and restores it', () => {
+    const fixtures = (): { id: string; createdAt: string; tasks: TaskFixture[] }[] => [
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [
+          { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+          { id: 'i1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea' },
+        ],
+      },
+    ];
+    const store = new SidebarStore(projectManagerWithTasks(fixtures()));
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 's1');
+
+    const restored = new SidebarStore(projectManagerWithTasks(fixtures()));
+    restored.restoreSnapshot(store.snapshot);
+    restored.ensureProjectExpanded('project-1');
+
+    expect(restored.hiddenTaskIdsByProject).toEqual({ 'project-1': ['s1'] });
+    // s1 is the only Spec task, so its group drops its header entirely.
+    expect(shape(restored.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Idea:1',
+      'task:i1',
+    ]);
+    expect(restored.isTaskHidden('project-1', 's1')).toBe(true);
+  });
+
+  it('drops non-string ids when restoring a snapshot', () => {
+    const store = new SidebarStore(projectManager([]));
+    store.restoreSnapshot({
+      hiddenTaskIdsByProject: { 'project-1': ['s1', 42 as unknown as string] },
+    });
+    expect(store.hiddenTaskIdsByProject).toEqual({ 'project-1': ['s1'] });
+  });
+
+  it('excludes hidden tasks from per-project navigation order', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'i1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea' },
+            { id: 'u1', createdAt: '2026-01-01T00:00:03.000Z' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 'i1');
+
+    expect(store.visibleTaskIdsForProject('project-1')).toEqual(['u1', 's1']);
+  });
+
+  it('excludes hidden tasks from Next/Previous entries across projects', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [{ id: 't1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' }],
+        },
+        {
+          id: 'project-2',
+          createdAt: '2026-01-02T00:00:00.000Z',
+          tasks: [{ id: 't2', createdAt: '2026-01-02T00:00:01.000Z', workflowStage: 'idea' }],
+        },
+      ])
+    );
+    store.setProjectOrder(['project-1', 'project-2']);
+    store.ensureProjectExpanded('project-1');
+    store.ensureProjectExpanded('project-2');
+    store.hideTaskFromSidebar('project-2', 't2');
+
+    expect(store.visibleTaskEntries).toEqual([
+      { projectId: 'project-1', taskId: 't1' },
+    ]);
+  });
+
+  it('keeps the hidden set while the project is collapsed and restores rows on expand', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [{ id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' }],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 's1');
+    store.toggleProjectExpanded('project-1');
+
+    expect(store.hiddenTaskIdsByProject).toEqual({ 'project-1': ['s1'] });
+  });
+});
+
+describe('SidebarStore Shipped Fade (spec #85, ticket #87)', () => {
+  it('excludes a faded shipped task from the Shipped group, keeping its stage and archive state', () => {
+    const oldMergedAt = new Date(Date.now() - (SHIPPED_FADE_WINDOW_MS + 60_000)).toISOString();
+    const manager = projectManagerWithTasks([
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [
+          {
+            id: 'faded',
+            createdAt: '2026-01-01T00:00:01.000Z',
+            workflowStage: 'shipped',
+            prs: [{ status: 'merged', mergedAt: oldMergedAt }],
+          },
+          {
+            id: 'fresh',
+            createdAt: '2026-01-01T00:00:02.000Z',
+            workflowStage: 'shipped',
+            prs: [{ status: 'merged', mergedAt: new Date().toISOString() }],
+          },
+        ],
+      },
+    ]);
+    const store = new SidebarStore(manager);
+    store.ensureProjectExpanded('project-1');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Shipped:1',
+      'task:fresh',
+    ]);
+    // The faded task itself is untouched: still Shipped, still not archived,
+    // so it stays reachable in the project view's task list.
+    const fadedData = manager.projects
+      .get('project-1')!
+      .mountedProject!.taskManager.tasks.get('faded') as unknown as {
+      data: { workflowStage?: WorkflowStage; archivedAt?: string };
+    };
+    expect(fadedData.data.workflowStage).toBe('shipped');
+    expect(fadedData.data.archivedAt).toBeUndefined();
+    expect(store.visibleTaskIdsForProject('project-1')).toEqual(['fresh']);
+  });
+
+  it('leaves a shipped task inside the fade window in the group', () => {
+    const recentMergedAt = new Date(Date.now() - 60_000).toISOString();
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'recent',
+              createdAt: '2026-01-01T00:00:01.000Z',
+              workflowStage: 'shipped',
+              prs: [{ status: 'merged', mergedAt: recentMergedAt }],
+            },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Shipped:1',
+      'task:recent',
+    ]);
+  });
+
+  it('counts only visible tasks when fade and hidden filtering overlap', () => {
+    const oldMergedAt = new Date(Date.now() - (SHIPPED_FADE_WINDOW_MS + 60_000)).toISOString();
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'faded',
+              createdAt: '2026-01-01T00:00:01.000Z',
+              workflowStage: 'shipped',
+              prs: [{ status: 'merged', mergedAt: oldMergedAt }],
+            },
+            {
+              id: 'hidden',
+              createdAt: '2026-01-01T00:00:02.000Z',
+              workflowStage: 'shipped',
+              prs: [{ status: 'merged', mergedAt: new Date().toISOString() }],
+            },
+            {
+              id: 'visible',
+              createdAt: '2026-01-01T00:00:03.000Z',
+              workflowStage: 'shipped',
+              prs: [{ status: 'merged', mergedAt: new Date().toISOString() }],
+            },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 'hidden');
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Shipped:1',
+      'task:visible',
+    ]);
   });
 });

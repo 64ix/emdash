@@ -1,4 +1,4 @@
-import { Archive, Copy, MessageSquare, Pencil, Pin, PinOff, RotateCcw, Trash2 } from 'lucide-react';
+import { Archive, Copy, Eye, EyeOff, MessageSquare, Pencil, Pin, PinOff, RotateCcw, Trash2 } from 'lucide-react';
 import React from 'react';
 import { toast } from '@renderer/lib/hooks/use-toast';
 import {
@@ -23,6 +23,12 @@ interface TaskContextMenuProps {
   onReconnect?: () => void;
   onConvertAutomation?: () => void;
   onDelete: () => void;
+  /** Hidden Task (spec #85, ticket #87): sidebar-only view state — see CONTEXT.md "Hidden Task". */
+  isHiddenFromSidebar?: boolean;
+  /** "Hide from sidebar" — removes the task from the sidebar only. */
+  onHideFromSidebar?: () => void;
+  /** "Show in sidebar" — restores the task's sidebar row. */
+  onShowInSidebar?: () => void;
 }
 
 export function TaskContextMenu({
@@ -39,6 +45,9 @@ export function TaskContextMenu({
   onReconnect,
   onConvertAutomation,
   onDelete,
+  isHiddenFromSidebar,
+  onHideFromSidebar,
+  onShowInSidebar,
 }: TaskContextMenuProps) {
   const handleCopyBranchName = async () => {
     if (!branchName) return;
@@ -97,6 +106,22 @@ export function TaskContextMenu({
           <ContextMenuItem onClick={onRestore}>
             <RotateCcw className="size-4" />
             Restore
+          </ContextMenuItem>
+        )}
+        {/* Hidden Task (spec #85, ticket #87): the sidebar-only hide/show
+            pair — available for any task, in any stage (CONTEXT.md "Hidden
+            Task"). The sidebar offers "Hide from sidebar"; a hidden task's
+            project-view row offers "Show in sidebar". */}
+        {!isHiddenFromSidebar && onHideFromSidebar && (
+          <ContextMenuItem onClick={onHideFromSidebar}>
+            <EyeOff className="size-4" />
+            Hide from sidebar
+          </ContextMenuItem>
+        )}
+        {isHiddenFromSidebar && onShowInSidebar && (
+          <ContextMenuItem onClick={onShowInSidebar}>
+            <Eye className="size-4" />
+            Show in sidebar
           </ContextMenuItem>
         )}
         {branchName && (

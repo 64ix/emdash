@@ -15,6 +15,7 @@ import {
   useWorkspaceSlots,
 } from '@renderer/lib/layout/navigation-provider';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
+import { sidebarStore } from '@renderer/lib/stores/app-state';
 import { cn } from '@renderer/utils/utils';
 import { selectCurrentPr } from '@shared/core/pull-requests/pull-requests';
 import { PrBadge } from '../../lib/components/pr-badge';
@@ -103,6 +104,12 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
       onReconnect={handleReconnect}
       onConvertAutomation={undefined}
       onDelete={handleDelete}
+      // Hidden Task (spec #85, ticket #87): the sidebar only ever renders
+      // visible tasks, so the menu here only ever offers "Hide from
+      // sidebar"; the row is a no-op for the pinned strip, which is
+      // unchanged (spec user story 29).
+      isHiddenFromSidebar={false}
+      onHideFromSidebar={() => sidebarStore.hideTaskFromSidebar(projectId, taskId)}
     >
       <SidebarMenuRow
         className={cn(

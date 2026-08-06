@@ -1,12 +1,13 @@
 import { Kanban } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { countTasksNeedingAttention } from '@renderer/features/board/board-attention';
+import { taskNeedsAttention } from '@renderer/features/board/board-attention';
 import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import {
   useNavigate,
   useParams,
   useWorkspaceSlots,
 } from '@renderer/lib/layout/navigation-provider';
+import { sidebarStore } from '@renderer/lib/stores/app-state';
 import { Badge } from '@renderer/lib/ui/badge';
 import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
@@ -28,12 +29,21 @@ export const SidebarBoardItem = observer(function SidebarBoardItem({
   const { params } = useParams('board');
   const isActive = currentView === 'board' && params.projectId === projectId;
 
-  // Attention count: `countTasksNeedingAttention` (board-attention.ts) is the
-  // single shared predicate the board's own Needs Attention filter also uses,
-  // so this count never promises more than opening the board would actually
-  // show.
+  // Attention count: `taskNeedsAttention` (board-attention.ts) is the single
+  // shared predicate the board's own Needs Attention filter also uses, so
+  // this count never promises more than opening the board would actually
+  // show. Hidden Tasks (ticket #87) are sidebar-only view state — a task
+  // hidden from the sidebar must not inflate the badge, exactly as it no
+  // longer renders a sidebar row, so the count is filtered to visible tasks.
   const manager = getTaskManagerStore(projectId);
-  const attentionCount = manager ? countTasksNeedingAttention(manager.tasks) : 0;
+  const hiddenIds = new Set(sidebarStore.hiddenTaskIdsByProject[projectId] ?? []);
+  let attentionCount = 0;
+  if (manager) {
+    for (const [taskId, task] of manager.tasks) {
+      if (hiddenIds.has(taskId)) continue;
+      if (taskNeedsAttention(task)) attentionCount++;
+    }
+  }
 
   const openBoard = () => {
     captureTelemetry('board_opened', { source: 'sidebar', project_id: projectId });

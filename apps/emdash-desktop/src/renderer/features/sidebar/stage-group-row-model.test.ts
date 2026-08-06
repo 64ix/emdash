@@ -189,6 +189,42 @@ describe('buildStageGroupedRows', () => {
     expect(shape(rows)).toEqual(['project:p1', 'board:p1', 'task:u1', 'group:Spec:1', 'task:s1']);
   });
 
+  it('drops the Shipped group header entirely when the visibility filter hides every shipped task', () => {
+    const rows = build({
+      tasks: [
+        task('shipped-1', { workflowStage: 'shipped' }),
+        task('shipped-2', { workflowStage: 'shipped' }),
+        task('spec-1', { workflowStage: 'spec' }),
+      ],
+      // The Shipped Fade rule (ticket #87): every shipped task's PR merged
+      // past the window — an empty Shipped group is not rendered at all.
+      isVisible: (t) => t.workflowStage !== 'shipped',
+    });
+    expect(shape(rows)).toEqual(['project:p1', 'board:p1', 'group:Spec:1', 'task:spec-1']);
+  });
+
+  it('counts only non-faded tasks in the Shipped group, mirroring the board column', () => {
+    const rows = build({
+      tasks: [
+        task('faded', { workflowStage: 'shipped' }),
+        task('recent', { workflowStage: 'shipped' }),
+        task('unranked-recent', { workflowStage: 'shipped' }),
+      ],
+      // Ticket #87: the shared fade predicate excludes only the faded task;
+      // the group's count and rows reflect the remaining visible tasks.
+      isVisible: (t) => t.id !== 'faded',
+    });
+    const group = rows.find((row) => row.kind === 'stage-group');
+    expect(group).toMatchObject({ kind: 'stage-group', stage: 'shipped', label: 'Shipped', count: 2 });
+    expect(shape(rows)).toEqual([
+      'project:p1',
+      'board:p1',
+      'group:Shipped:2',
+      'task:recent',
+      'task:unranked-recent',
+    ]);
+  });
+
   it('never mutates the input tasks or assigns a rank', () => {
     const tasks = [
       task('a', { workflowStage: 'spec', boardRank: 'z' }),

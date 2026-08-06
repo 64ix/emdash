@@ -1,4 +1,5 @@
 import { computed, makeAutoObservable, observable, reaction, runInAction } from 'mobx';
+import { isTaskShippedFaded } from '@renderer/features/board/board-columns';
 import { type ProjectStore } from '@renderer/features/projects/stores/project';
 import type { ProjectManagerStore } from '@renderer/features/projects/stores/project-manager';
 import { taskAgentStatus } from '@renderer/features/tasks/stores/task-selectors';
@@ -54,6 +55,20 @@ function sanitizeCollapsedStageGroups(
   return result;
 }
 
+/**
+ * Keeps only string task ids from a persisted snapshot blob — snapshots from
+ * an older or newer app version must not corrupt the hidden set.
+ */
+function sanitizeHiddenTaskIds(value: Record<string, unknown>): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const [projectId, ids] of Object.entries(value)) {
+    if (!Array.isArray(ids)) continue;
+    const valid = ids.filter((id): id is string => typeof id === 'string');
+    if (valid.length > 0) result[projectId] = valid;
+  }
+  return result;
+}
+
 export class SidebarStore implements Snapshottable<SidebarSnapshot> {
   projectOrder: string[] = [];
   taskOrderByProject: Record<string, string[]> = {};
@@ -67,6 +82,16 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
    * group always appears expanded.
    */
   collapsedStageGroupIdsByProject: Record<string, WorkflowStage[]> = {};
+  /**
+   * Hidden Task ids per project (spec #85, ticket #87): tasks the user hid
+   * from the sidebar with the context menu's "Hide from sidebar" action.
+   * Sidebar-only view state — the task itself is never touched (ADR 0006),
+   * so the board, the project view's task list and search keep showing it.
+   * Persisted in the sidebar snapshot; unhidden from the project view's
+   * task list. A stale id for a task deleted elsewhere is inert (it simply
+   * never matches a row), so the set is never pruned reactively.
+   */
+  hiddenTaskIdsByProject: Record<string, string[]> = {};
 
   constructor(private readonly projectManager: ProjectManagerStore) {
     makeAutoObservable(this, {
@@ -198,11 +223,24 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
     for (const task of tasks) {
       if (taskAgentStatus(task) === 'awaiting-input') awaitingInputIds.add(task.data.id);
     }
+    // Visibility (ticket #87): Hidden Tasks leave the sidebar only; Shipped
+    // Fade applies the board's own display rule — a `shipped` task whose PR
+    // merged past the window leaves the Shipped group while keeping its
+    // stage, never archived (CONTEXT.md "Hidden Task", "Shipped Fade"). Both
+    // feed the row model's `isVisible` seam, which filters group membership
+    // and counts alike (ADR 0006: the sidebar is a projection of the board).
+    const hiddenIds = new Set(this.hiddenTaskIdsByProject[projectId] ?? []);
+    const fadedIds = new Set<string>();
+    for (const task of tasks) {
+      const registered = registeredTaskData(task);
+      if (registered && isTaskShippedFaded(registered)) fadedIds.add(registered.id);
+    }
     return buildStageGroupedRows({
       projectId,
       tasks: tasks.map((t) => t.data),
       collapsedStages: new Set(this.collapsedStageGroupIdsByProject[projectId] ?? []),
       awaitingInputIds,
+      isVisible: (task) => !hiddenIds.has(task.id) && !fadedIds.has(task.id),
     });
   }
 
@@ -258,6 +296,7 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
       taskOrderByProject: { ...this.taskOrderByProject },
       taskSortBy: this.taskSortBy,
       collapsedStageGroupIdsByProject: { ...this.collapsedStageGroupIdsByProject },
+      hiddenTaskIdsByProject: { ...this.hiddenTaskIdsByProject },
     };
   }
 
@@ -282,6 +321,9 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
       this.collapsedStageGroupIdsByProject = sanitizeCollapsedStageGroups(
         snapshot.collapsedStageGroupIdsByProject
       );
+    }
+    if (snapshot.hiddenTaskIdsByProject !== undefined) {
+      this.hiddenTaskIdsByProject = sanitizeHiddenTaskIds(snapshot.hiddenTaskIdsByProject);
     }
   }
 
@@ -316,6 +358,44 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
 
   isStageGroupCollapsed(projectId: string, stage: WorkflowStage): boolean {
     return (this.collapsedStageGroupIdsByProject[projectId] ?? []).includes(stage);
+  }
+
+  /**
+   * "Hide from sidebar" (spec #85, ticket #87): removes the task from the
+   * sidebar only — any task, any stage. The task itself is untouched, so
+   * the board, the project view's task list and search keep showing it
+   * (ADR 0006). The hidden set persists in the sidebar snapshot.
+   */
+  hideTaskFromSidebar(projectId: string, taskId: string): void {
+    const current = this.hiddenTaskIdsByProject[projectId] ?? [];
+    if (current.includes(taskId)) return;
+    this.hiddenTaskIdsByProject = {
+      ...this.hiddenTaskIdsByProject,
+      [projectId]: [...current, taskId],
+    };
+  }
+
+  /**
+   * "Show in sidebar": restores a hidden task's sidebar row (spec #85,
+   * user story 27) — the counterpart of `hideTaskFromSidebar`, offered on
+   * the project view's task list. No-op when the task is not hidden.
+   */
+  showTaskInSidebar(projectId: string, taskId: string): void {
+    const current = this.hiddenTaskIdsByProject[projectId] ?? [];
+    if (!current.includes(taskId)) return;
+    const next = current.filter((id) => id !== taskId);
+    const updated = { ...this.hiddenTaskIdsByProject };
+    if (next.length === 0) {
+      delete updated[projectId];
+    } else {
+      updated[projectId] = next;
+    }
+    this.hiddenTaskIdsByProject = updated;
+  }
+
+  /** True when the task is hidden from the sidebar for this project (ticket #87). */
+  isTaskHidden(projectId: string, taskId: string): boolean {
+    return (this.hiddenTaskIdsByProject[projectId] ?? []).includes(taskId);
   }
 
   setTaskSortBy(sortBy: SidebarTaskSortBy): void {
