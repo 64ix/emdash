@@ -1,6 +1,7 @@
 import { runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
+import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { SidebarStore } from './sidebar-store';
 
 type SidebarProjectManager = ConstructorParameters<typeof SidebarStore>[0];
@@ -389,7 +390,9 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     // A new task in the same stage must appear expanded, not collapsed.
     taskManager.tasks.set(
       's2',
-      task('s2', '2026-01-02T00:00:01.000Z', { workflowStage: 'spec' })
+      task('s2', '2026-01-02T00:00:01.000Z', {
+        workflowStage: 'spec',
+      }) as unknown as TaskStore
     );
     runInAction(() => {
       store.toggleProjectExpanded('project-1');
