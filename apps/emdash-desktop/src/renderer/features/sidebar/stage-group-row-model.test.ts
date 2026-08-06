@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { rankBetween } from '@shared/lib/board-rank';
+import type { LinkedIssue } from '@shared/core/linked-issue';
+import type { PrWorkflowFact } from '@shared/core/pull-requests/pr-workflow-derivation';
+import type { Task } from '@shared/core/tasks/tasks';
 import {
   buildStageGroupedRows,
   computeSidebarDropPosition,
+  sidebarStageMoveOptions,
   taskRowVariants,
   type SidebarRow,
   type StageGroupableTask,
@@ -300,5 +304,155 @@ describe('computeSidebarDropPosition', () => {
   it('clears the stage and assigns no rank for an unpositioned Unstaged drop', () => {
     const position = computeSidebarDropPosition('unstaged', [], null);
     expect(position).toEqual({ stage: null, rank: null });
+  });
+});
+
+type StageMoveTask = Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId'>;
+
+function issue(overrides: Partial<LinkedIssue> = {}): LinkedIssue {
+  return {
+    provider: 'github',
+    url: 'https://github.com/acme/repo/issues/1',
+    title: 'Example issue',
+    identifier: '#1',
+    ...overrides,
+  };
+}
+
+/** A Spec-referencing PR like the ones stored on the task (`PullRequest`'s
+ * `PrWorkflowFact` subset plus the `identifier`/`title` the authority
+ * explanation labels it with). */
+type StageMovePr = PrWorkflowFact & { identifier: string | null; title: string };
+
+function pr(overrides: Partial<StageMovePr> = {}): StageMovePr {
+  return {
+    repositoryUrl: 'https://github.com/acme/repo',
+    headRefName: 'spec/1-something',
+    status: 'open',
+    description: null,
+    identifier: '#1',
+    title: 'Example PR',
+    ...overrides,
+  };
+}
+
+function stageTask(overrides: Partial<StageMoveTask> = {}): StageMoveTask {
+  return { workflowStage: 'idea', prs: [], ...overrides };
+}
+
+describe('sidebarStageMoveOptions (spec #85, ticket #88)', () => {
+  it('offers all seven stages plus Unstaged, in pipeline order, for any task', () => {
+    const { options } = sidebarStageMoveOptions(stageTask(), null);
+    expect(options.map((option) => option.label)).toEqual([
+      'Idea',
+      'Exploring',
+      'Spec',
+      'Implementing',
+      'Review',
+      'Shipped',
+      'Triage',
+      'Unstaged',
+    ]);
+  });
+
+  it('leaves every destination open for a manual placement, with no explanation', () => {
+    const { options, explanation } = sidebarStageMoveOptions(stageTask(), null);
+    expect(options.every((option) => !option.blocked)).toBe(true);
+    expect(explanation).toBeNull();
+  });
+
+  it('leaves every destination open for a provisioned-implementation placement', () => {
+    const task = stageTask({ workflowStage: 'implementing', workspaceId: 'workspace-1' });
+    const { options, explanation } = sidebarStageMoveOptions(task, null);
+    expect(options.every((option) => !option.blocked)).toBe(true);
+    expect(explanation).toBeNull();
+  });
+
+  it('blocks destinations an open Map issue would re-advance into Exploring', () => {
+    const map = issue({ identifier: '#55', status: 'open' });
+    const { options, explanation } = sidebarStageMoveOptions(
+      stageTask({ linkedIssues: { version: '1', map } }),
+      null
+    );
+    const blocked = options.filter((option) => option.blocked).map((option) => option.label);
+    expect(blocked).toEqual(['Idea', 'Exploring', 'Unstaged']);
+    expect(options.find((option) => option.label === 'Triage')?.blocked).toBe(false);
+    expect(explanation).toContain('linked Map issue');
+  });
+
+  it('blocks destinations at or below Spec for an open Spec issue', () => {
+    const spec = issue({ identifier: '#56', status: 'open' });
+    const { options, explanation } = sidebarStageMoveOptions(
+      stageTask({ linkedIssues: { version: '1', spec } }),
+      null
+    );
+    const blocked = options.filter((option) => option.blocked).map((option) => option.label);
+    expect(blocked).toEqual(['Idea', 'Exploring', 'Spec', 'Unstaged']);
+    expect(options.find((option) => option.label === 'Implementing')?.blocked).toBe(false);
+    expect(explanation).toContain('linked Spec issue');
+  });
+
+  it('blocks every destination but Triage for a task held by an open PR', () => {
+    const spec = issue({ identifier: '#56', status: 'open' });
+    const task = stageTask({
+      workflowStage: 'review',
+      linkedIssues: { version: '1', spec },
+      prs: [pr({ status: 'open', headRefName: 'spec/56-feature' })],
+    });
+    const { options, explanation } = sidebarStageMoveOptions(task, null);
+    expect(options.filter((option) => option.blocked)).toHaveLength(7);
+    expect(options.find((option) => option.label === 'Triage')?.blocked).toBe(false);
+    expect(explanation).toContain('Held in Review by an open PR');
+  });
+
+  it('blocks every destination but Triage for a task held by a merged PR', () => {
+    const spec = issue({ identifier: '#56', status: 'open' });
+    const task = stageTask({
+      workflowStage: 'shipped',
+      linkedIssues: { version: '1', spec },
+      prs: [pr({ status: 'merged', headRefName: 'spec/56-feature' })],
+    });
+    const { options, explanation } = sidebarStageMoveOptions(task, null);
+    expect(options.filter((option) => option.blocked)).toHaveLength(7);
+    expect(options.find((option) => option.label === 'Triage')?.blocked).toBe(false);
+    expect(explanation).toContain('merged pull request is permanent');
+  });
+
+  it('blocks every destination but Triage for a closed-PR contradiction', () => {
+    const spec = issue({ identifier: '#56', status: 'open' });
+    const task = stageTask({
+      workflowStage: 'implementing',
+      linkedIssues: { version: '1', spec },
+      prs: [pr({ status: 'closed', headRefName: 'spec/56-feature' })],
+    });
+    const { options } = sidebarStageMoveOptions(task, null);
+    expect(options.filter((option) => option.blocked)).toHaveLength(7);
+    expect(options.find((option) => option.label === 'Triage')?.blocked).toBe(false);
+  });
+
+  it('keeps only Review and Shipped (plus Triage) open for a closed-Spec contradiction', () => {
+    const spec = issue({ identifier: '#56', status: 'closed' });
+    const task = stageTask({
+      workflowStage: 'implementing',
+      linkedIssues: { version: '1', spec },
+    });
+    const { options, explanation } = sidebarStageMoveOptions(task, null);
+    const open = options.filter((option) => !option.blocked).map((option) => option.label);
+    expect(open).toEqual(['Review', 'Shipped', 'Triage']);
+    expect(explanation).toContain('closed without a merged pull request');
+  });
+
+  it('derives the PR authority from the task branch, like the board does', () => {
+    const spec = issue({ identifier: '#56', status: 'open' });
+    const task = stageTask({
+      workflowStage: 'review',
+      linkedIssues: { version: '1', spec },
+      prs: [pr({ headRefName: 'spec/56-matching-branch' })],
+    });
+    // The PR references the Spec via its branch, so it governs even with no
+    // description — same matching the board's `authorityForTask` performs.
+    const { options, explanation } = sidebarStageMoveOptions(task, 'spec/56-matching-branch');
+    expect(options.filter((option) => option.blocked)).toHaveLength(7);
+    expect(explanation).toContain('#1');
   });
 });

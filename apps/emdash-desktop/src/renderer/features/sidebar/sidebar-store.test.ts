@@ -564,3 +564,114 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     expect(store.visibleTaskIdsForProject('project-1')).toEqual(['i1']);
   });
 });
+
+describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88)', () => {
+  /**
+   * The "Move to stage…" gesture writes through the task store's optimistic
+   * `updateBoardPosition`; the sidebar rows are a projection of that same
+   * observable task data, so applying the stage change here is exactly the
+   * mutation the gesture applies. The write path itself (RPC call, Unstaged
+   * clearing, rollback on failure) is covered by task-store.test.ts — this
+   * seam only asserts the rows follow.
+   */
+  function taskManagerOf(
+    projectManager: SidebarProjectManager,
+    projectId: string
+  ): {
+    tasks: Map<string, { data: { workflowStage?: WorkflowStage } }>;
+  } {
+    return projectManager.projects.get(projectId)!.mountedProject!.taskManager as {
+      tasks: Map<string, { data: { workflowStage?: WorkflowStage } }>;
+    };
+  }
+
+  it('lands a menu-moved task in the target Stage Group', () => {
+    const projectManager = projectManagerWithTasks([
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [
+          { id: 'idea-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'idea' },
+          { id: 'spec-1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+        ],
+      },
+    ]);
+    const store = new SidebarStore(projectManager);
+    store.ensureProjectExpanded('project-1');
+
+    const tasks = taskManagerOf(projectManager, 'project-1').tasks;
+    runInAction(() => {
+      tasks.get('idea-1')!.data.workflowStage = 'spec';
+    });
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Spec:2',
+      'task:idea-1',
+      'task:spec-1',
+    ]);
+  });
+
+  it('lands a menu-moved task in the loose Unstaged rows when its stage is cleared', () => {
+    const projectManager = projectManagerWithTasks([
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [
+          { id: 'idea-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'idea' },
+          { id: 'spec-1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+        ],
+      },
+    ]);
+    const store = new SidebarStore(projectManager);
+    store.ensureProjectExpanded('project-1');
+
+    const tasks = taskManagerOf(projectManager, 'project-1').tasks;
+    runInAction(() => {
+      tasks.get('idea-1')!.data.workflowStage = undefined;
+    });
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'task:idea-1',
+      'group:Spec:1',
+      'task:spec-1',
+    ]);
+  });
+
+  it('returns a task to its original group when a failed write rolls the stage back', () => {
+    const projectManager = projectManagerWithTasks([
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [
+          { id: 'idea-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'idea' },
+          { id: 'spec-1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+        ],
+      },
+    ]);
+    const store = new SidebarStore(projectManager);
+    store.ensureProjectExpanded('project-1');
+
+    const tasks = taskManagerOf(projectManager, 'project-1').tasks;
+    // Optimistic apply, then the store's rollback restores the old stage —
+    // the projection must follow both directions.
+    runInAction(() => {
+      tasks.get('idea-1')!.data.workflowStage = 'spec';
+    });
+    expect(shape(store.sidebarRows)).toContain('group:Spec:2');
+    runInAction(() => {
+      tasks.get('idea-1')!.data.workflowStage = 'idea';
+    });
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Idea:1',
+      'task:idea-1',
+      'group:Spec:1',
+      'task:spec-1',
+    ]);
+  });
+});
