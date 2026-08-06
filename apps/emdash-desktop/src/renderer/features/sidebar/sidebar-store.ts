@@ -131,10 +131,16 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
             const stored = this.collapsedStageGroupIdsByProject[projectId] ?? [];
             const pruned = stored.filter((stage) => nonEmpty.has(stage));
             if (pruned.length === stored.length) continue;
-            this.collapsedStageGroupIdsByProject = {
-              ...this.collapsedStageGroupIdsByProject,
-              [projectId]: pruned,
-            };
+            const next = { ...this.collapsedStageGroupIdsByProject };
+            // A fully-pruned project's key is dropped entirely, so the record
+            // never carries empty arrays (and `isStageGroupCollapsed` stays
+            // false for every stage of that project).
+            if (pruned.length === 0) {
+              delete next[projectId];
+            } else {
+              next[projectId] = pruned;
+            }
+            this.collapsedStageGroupIdsByProject = next;
           }
         });
       }

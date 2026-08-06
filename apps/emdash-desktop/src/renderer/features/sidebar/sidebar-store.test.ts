@@ -1,4 +1,4 @@
-import { runInAction } from 'mobx';
+import { observable, runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
@@ -82,8 +82,13 @@ function task(taskId: string, createdAt: string, overrides: Partial<TaskFixture>
 function projectManagerWithTasks(
   projects: { id: string; createdAt: string; tasks: TaskFixture[] }[]
 ): SidebarProjectManager {
+  // The real ProjectManagerStore keeps `projects` in an observable map;
+  // mirroring that here means mutations made through the fixture (deleting
+  // or adding tasks) are visible to the store's own observable view of it —
+  // a plain object would be deep-converted into a private copy by
+  // `makeAutoObservable`, and later fixture mutations would silently no-op.
   return {
-    projects: new Map(
+    projects: observable.map(
       projects.map((project) => [
         project.id,
         {
