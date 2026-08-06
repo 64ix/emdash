@@ -125,7 +125,12 @@ export const TaskRow = observer(function TaskRow({
             {isHiddenFromSidebar && (
               <button
                 type="button"
-                onClick={handleShowInSidebar}
+                onClick={(e) => {
+                  // The badge sits inside the row's own clickable button, so
+                  // the click must not bubble into the row's navigate action.
+                  e.stopPropagation();
+                  handleShowInSidebar();
+                }}
                 title="Hidden from sidebar — click to show in the sidebar again"
                 aria-label="Show in sidebar"
                 className="flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-border bg-background-2 px-2 py-0.5 text-[10px] text-foreground-muted transition-colors hover:text-foreground"

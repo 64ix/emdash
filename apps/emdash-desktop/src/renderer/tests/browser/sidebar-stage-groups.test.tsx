@@ -207,6 +207,7 @@ describe('TaskRow Hidden Task badge and actions (spec #85, ticket #87)', () => {
 
   it('shows the Hidden badge with a Show in sidebar action for a hidden task', async () => {
     mocks.hiddenByTaskId.set('t1', true);
+    mocks.navigate.mockClear();
     await mount(
       <div>
         <TaskRow task={taskStore() as never} isSelected={false} onToggleSelect={() => {}} />
@@ -220,6 +221,9 @@ describe('TaskRow Hidden Task badge and actions (spec #85, ticket #87)', () => {
     badge?.click();
     expect(mocks.showTaskInSidebar).toHaveBeenCalledWith('p1', 't1');
     expect(mocks.hideTaskFromSidebar).not.toHaveBeenCalled();
+    // The badge sits inside the row's own clickable button — the click must
+    // not bubble into the row's navigate action.
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   it('shows no badge for a visible task', async () => {
