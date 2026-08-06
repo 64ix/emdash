@@ -136,7 +136,10 @@ export function buildStageGroupedRows(input: StageGroupRowsInput): SidebarRow[] 
     entries.push({ id: task.id, rank: task.boardRank ?? null });
   }
 
-  const rows: SidebarRow[] = [{ kind: 'project', projectId }, { kind: 'board', projectId }];
+  const rows: SidebarRow[] = [
+    { kind: 'project', projectId },
+    { kind: 'board', projectId },
+  ];
 
   for (const column of COLUMNS) {
     const entries = entriesByColumn.get(column);
@@ -213,7 +216,6 @@ export function computeSidebarDropPosition(
 ): SidebarDropPosition {
   return {
     stage: destinationColumn === 'unstaged' ? null : destinationColumn,
-    rank:
-      dropIndex === null ? null : computeDropRank(destinationEntries, dropIndex, trueEntries),
+    rank: dropIndex === null ? null : computeDropRank(destinationEntries, dropIndex, trueEntries),
   };
 }

@@ -1,7 +1,7 @@
 import { observable, runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { SidebarStore } from './sidebar-store';
 
 type SidebarProjectManager = ConstructorParameters<typeof SidebarStore>[0];
@@ -44,9 +44,11 @@ vi.mock('@renderer/features/conversations/stores/conversation-registry', () => (
   conversationRegistry: {
     get: (taskId: string) => {
       const status = registryMocks.statusByTaskId.get(taskId) ?? null;
-      return { get taskStatus() {
-        return status;
-      } };
+      return {
+        get taskStatus() {
+          return status;
+        },
+      };
     },
   },
 }));
@@ -220,9 +222,24 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
           createdAt: '2026-01-01T00:00:00.000Z',
           tasks: [
             { id: 'unranked-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
-            { id: 'ranked-z', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec', boardRank: 'z' },
-            { id: 'awaiting', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'spec', boardRank: 'm' },
-            { id: 'ranked-a', createdAt: '2026-01-01T00:00:04.000Z', workflowStage: 'spec', boardRank: 'a' },
+            {
+              id: 'ranked-z',
+              createdAt: '2026-01-01T00:00:02.000Z',
+              workflowStage: 'spec',
+              boardRank: 'z',
+            },
+            {
+              id: 'awaiting',
+              createdAt: '2026-01-01T00:00:03.000Z',
+              workflowStage: 'spec',
+              boardRank: 'm',
+            },
+            {
+              id: 'ranked-a',
+              createdAt: '2026-01-01T00:00:04.000Z',
+              workflowStage: 'spec',
+              boardRank: 'a',
+            },
           ],
         },
       ])
@@ -383,8 +400,7 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     // The group empties (task deleted elsewhere, e.g. on the board) — the
     // stale collapsed id must be pruned.
-    const taskManager =
-      projectManager.projects.get('project-1')!.mountedProject!.taskManager;
+    const taskManager = projectManager.projects.get('project-1')!.mountedProject!.taskManager;
     taskManager.tasks.delete('s1');
     runInAction(() => {
       store.toggleProjectExpanded('project-1');
@@ -419,7 +435,12 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
           id: 'project-1',
           createdAt: '2026-01-01T00:00:00.000Z',
           tasks: [
-            { id: 'pinned-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec', isPinned: true },
+            {
+              id: 'pinned-1',
+              createdAt: '2026-01-01T00:00:01.000Z',
+              workflowStage: 'spec',
+              isPinned: true,
+            },
             { id: 'regular-1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
           ],
         },
@@ -433,9 +454,7 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
       'group:Spec:1',
       'task:regular-1',
     ]);
-    expect(store.pinnedSidebarEntries).toEqual([
-      { projectId: 'project-1', taskId: 'pinned-1' },
-    ]);
+    expect(store.pinnedSidebarEntries).toEqual([{ projectId: 'project-1', taskId: 'pinned-1' }]);
   });
 
   it('makes the manual task order inert in grouped mode without migrating it', () => {
@@ -445,8 +464,18 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
           id: 'project-1',
           createdAt: '2026-01-01T00:00:00.000Z',
           tasks: [
-            { id: 'spec-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec', boardRank: 'a' },
-            { id: 'spec-2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec', boardRank: 'b' },
+            {
+              id: 'spec-1',
+              createdAt: '2026-01-01T00:00:01.000Z',
+              workflowStage: 'spec',
+              boardRank: 'a',
+            },
+            {
+              id: 'spec-2',
+              createdAt: '2026-01-01T00:00:02.000Z',
+              workflowStage: 'spec',
+              boardRank: 'b',
+            },
           ],
         },
       ])

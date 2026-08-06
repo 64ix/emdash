@@ -28,7 +28,9 @@ function shape(rows: SidebarRow[]): string[] {
   });
 }
 
-function build(input: Omit<StageGroupRowsInput, 'projectId'> & { projectId?: string }): SidebarRow[] {
+function build(
+  input: Omit<StageGroupRowsInput, 'projectId'> & { projectId?: string }
+): SidebarRow[] {
   return buildStageGroupedRows({ projectId: 'p1', ...input });
 }
 
@@ -122,11 +124,7 @@ describe('buildStageGroupedRows', () => {
 
   it('elevates Awaiting Input among Unstaged loose rows too', () => {
     const rows = build({
-      tasks: [
-        task('u1'),
-        task('awaiting-u', { boardRank: 'b' }),
-        task('u2'),
-      ],
+      tasks: [task('u1'), task('awaiting-u', { boardRank: 'b' }), task('u2')],
       awaitingInputIds: new Set(['awaiting-u']),
     });
     expect(shape(rows)).toEqual([
@@ -173,12 +171,7 @@ describe('buildStageGroupedRows', () => {
       tasks: [task('i1', { workflowStage: 'idea' })],
       collapsedStages: new Set(['review', 'shipped']),
     });
-    expect(shape(rows)).toEqual([
-      'project:p1',
-      'board:p1',
-      'group:Idea:1',
-      'task:i1',
-    ]);
+    expect(shape(rows)).toEqual(['project:p1', 'board:p1', 'group:Idea:1', 'task:i1']);
   });
 
   it('applies the visibility filter to group membership and counts (ticket #87 seam)', () => {
@@ -192,13 +185,7 @@ describe('buildStageGroupedRows', () => {
       ],
       isVisible: (t) => !hidden.has(t.id),
     });
-    expect(shape(rows)).toEqual([
-      'project:p1',
-      'board:p1',
-      'task:u1',
-      'group:Spec:1',
-      'task:s1',
-    ]);
+    expect(shape(rows)).toEqual(['project:p1', 'board:p1', 'task:u1', 'group:Spec:1', 'task:s1']);
   });
 
   it('never mutates the input tasks or assigns a rank', () => {

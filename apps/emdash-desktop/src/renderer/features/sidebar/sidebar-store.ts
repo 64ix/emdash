@@ -307,9 +307,7 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
   /** Collapses an expanded Stage Group, or expands a collapsed one (spec #85). */
   toggleStageGroupCollapsed(projectId: string, stage: WorkflowStage): void {
     const current = this.collapsedStageGroupIdsByProject[projectId] ?? [];
-    const next = current.includes(stage)
-      ? current.filter((s) => s !== stage)
-      : [...current, stage];
+    const next = current.includes(stage) ? current.filter((s) => s !== stage) : [...current, stage];
     this.collapsedStageGroupIdsByProject = {
       ...this.collapsedStageGroupIdsByProject,
       [projectId]: next,
