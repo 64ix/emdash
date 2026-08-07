@@ -85,6 +85,7 @@ import {
   EMPTY_CHANGES_FOOTPRINT,
   type ChangesFootprint,
 } from './changes/acp-changes-footprint';
+import { permissionModePresentation } from './permission-mode-presentation';
 
 export type {
   AcpPromptAttachment,
@@ -422,10 +423,16 @@ export class AcpChatStore {
   get permissionModeOptions(): Record<string, ComposerPermissionModeOption> | null {
     const options = this.session?.config.current().modeOptions;
     if (!options) return null;
+    const providerId =
+      conversationRegistry.get(this.taskId)?.conversations.get(this.conversationId)?.data
+        .providerId ?? '';
     return Object.fromEntries(
       options.available.map((option) => [
         option.id,
-        { name: option.name, description: option.description },
+        {
+          ...permissionModePresentation(providerId, option.id, option.name),
+          description: option.description,
+        },
       ])
     );
   }
