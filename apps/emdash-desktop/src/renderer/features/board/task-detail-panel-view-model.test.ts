@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { LinkedIssue, LinkedIssueRoles } from '@shared/core/linked-issue';
-import type { StageHoldingPr, Task, TaskStageAuthority } from '@shared/core/tasks/tasks';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
+import type { Task, TaskStageAuthority } from '@shared/core/tasks/tasks';
 import {
   buildTaskDetailPanelViewModel,
   DECLARATIVE_WORKFLOW_STAGES,
@@ -39,13 +40,38 @@ function makeIssue(overrides: Partial<LinkedIssue> = {}): LinkedIssue {
   };
 }
 
-function makeHoldingPr(overrides: Partial<StageHoldingPr> = {}): StageHoldingPr {
+function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
     url: 'https://github.com/acme/repo/pull/1',
-    title: 'Example PR',
+    provider: 'github',
+    // Normalized repository URL — the shape `pull_requests.repository_url`
+    // actually stores (no `.git`), which is what the Spec-reference matcher
+    // compares against.
+    repositoryUrl: 'https://github.com/acme/repo',
+    baseRefName: 'main',
+    baseRefOid: 'b'.repeat(40),
+    headRepositoryUrl: 'https://github.com/acme/repo.git',
+    headRefName: 'task/branch',
+    headRefOid: 'h'.repeat(40),
     identifier: '#1',
+    title: 'Example PR',
+    description: null,
     status: 'open',
     isDraft: false,
+    additions: null,
+    deletions: null,
+    changedFiles: null,
+    commitCount: null,
+    mergeableStatus: 'UNKNOWN',
+    mergeStateStatus: 'UNKNOWN',
+    reviewDecision: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    mergedAt: null,
+    author: null,
+    labels: [],
+    assignees: [],
+    checks: [],
     ...overrides,
   };
 }
@@ -278,7 +304,7 @@ describe('deriveStageSection', () => {
   });
 
   it('is locked, explaining an open PR, when the stage is GitHub-proven by Review', () => {
-    const pr = makeHoldingPr({ status: 'open', identifier: '#77', url: 'https://x/pull/77' });
+    const pr = makePr({ status: 'open', identifier: '#77', url: 'https://x/pull/77' });
     const authority: TaskStageAuthority = { holdingPr: pr, isCurrentStageGithubProven: true };
 
     const section = deriveStageSection('review', authority);
@@ -291,7 +317,7 @@ describe('deriveStageSection', () => {
   });
 
   it('is locked, explaining a merged PR, when the stage is GitHub-proven by Shipped', () => {
-    const pr = makeHoldingPr({ status: 'merged', identifier: '#78' });
+    const pr = makePr({ status: 'merged', identifier: '#78' });
     const authority: TaskStageAuthority = { holdingPr: pr, isCurrentStageGithubProven: true };
 
     const section = deriveStageSection('shipped', authority);
@@ -301,7 +327,7 @@ describe('deriveStageSection', () => {
   });
 
   it('is locked, explaining a closed PR, when a currently-contradicting fact proves Triage', () => {
-    const pr = makeHoldingPr({ status: 'closed', identifier: '#79' });
+    const pr = makePr({ status: 'closed', identifier: '#79' });
     const authority: TaskStageAuthority = { holdingPr: pr, isCurrentStageGithubProven: true };
 
     const section = deriveStageSection('idea', authority);
@@ -311,7 +337,7 @@ describe('deriveStageSection', () => {
   });
 
   it('is unlocked while the task currently sits in triage, even with a holding PR, labelled manual', () => {
-    const pr = makeHoldingPr({ status: 'closed', identifier: '#80' });
+    const pr = makePr({ status: 'closed', identifier: '#80' });
     const authority: TaskStageAuthority = { holdingPr: pr, isCurrentStageGithubProven: false };
 
     const section = deriveStageSection('triage', authority);
@@ -416,7 +442,7 @@ describe('deriveStageSection', () => {
 
   it('stays unlocked/declarative when the Spec closed but a merged PR already proves Shipped', () => {
     const spec = makeIssue({ identifier: '#56', title: 'Spec issue', status: 'closed' });
-    const pr = makeHoldingPr({ status: 'merged', identifier: '#90' });
+    const pr = makePr({ status: 'merged', identifier: '#90' });
     const authority: TaskStageAuthority = { holdingPr: pr, isCurrentStageGithubProven: true };
 
     const section = deriveStageSection('shipped', authority, { version: '1', spec });
@@ -491,7 +517,7 @@ describe('deriveGhostDetailViewModel', () => {
 });
 
 describe('buildTaskDetailPanelViewModel', () => {
-  it('assembles vitals, an empty links list and a null PR for a purely local task', () => {
+  it('assembles vitals, an empty links list and no PR for a purely local task', () => {
     const task = makeTask({ name: 'Local only', linkedIssues: undefined });
 
     const vm = buildTaskDetailPanelViewModel({
@@ -503,7 +529,7 @@ describe('buildTaskDetailPanelViewModel', () => {
     });
 
     expect(vm.links).toEqual([]);
-    expect(vm.pr).toBeNull();
+    expect(vm.pullRequest).toBeNull();
     expect(vm.stage.locked).toBe(false);
     expect(vm.vitals.name).toBe('Local only');
     // No `conversations` input at all — an empty section, not a crash.
@@ -534,12 +560,24 @@ describe('buildTaskDetailPanelViewModel', () => {
     expect(vm.conversations.map((r) => r.id)).toEqual(['waiting', 'recent']);
   });
 
-  it('surfaces the holding PR as the Spec-derived PR when the stage is GitHub-proven', () => {
-    const pr = makeHoldingPr({ status: 'merged' });
+  // Ticket #100: the panel's PR section derives through the same shared
+  // `resolveTaskPr` helper the titlebar chip uses — the stage authority RPC's
+  // holding PR only feeds the Workflow Stage explanation, never the PR row.
+  it('derives the Spec-referencing PR from the task payload, not the stage-authority RPC', () => {
     const spec = makeIssue({ identifier: '#20', title: 'Spec issue' });
+    const pr = makePr({
+      identifier: '#20',
+      title: 'Ship the feature',
+      status: 'merged',
+      url: 'https://github.com/acme/repo/pull/20',
+      description: 'Closes #20',
+      // Not the task's branch: only the Spec reference can match it.
+      headRefName: 'feat/something-else',
+    });
     const task = makeTask({
       workflowStage: 'shipped',
       linkedIssues: { version: '1', spec },
+      prs: [pr],
     });
 
     const vm = buildTaskDetailPanelViewModel({
@@ -547,12 +585,101 @@ describe('buildTaskDetailPanelViewModel', () => {
       branchName: 'task/branch',
       sessionCounts: { claude: 1 },
       agentStatus: 'idle',
-      stageAuthority: { holdingPr: pr, isCurrentStageGithubProven: true },
+      // A different holding PR (or none) from the RPC must not change the row.
+      stageAuthority: { holdingPr: null, isCurrentStageGithubProven: false },
     });
 
-    expect(vm.pr).toEqual(pr);
-    expect(vm.stage.locked).toBe(true);
+    expect(vm.pullRequest).toEqual(pr);
     expect(vm.links).toEqual([{ role: 'spec', issue: spec }]);
+  });
+
+  it('shows the current branch-matched PR when no PR is assigned', () => {
+    const older = makePr({
+      url: 'https://github.com/acme/repo/pull/2',
+      identifier: '#2',
+      title: 'Old closed PR',
+      status: 'closed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    const current = makePr({
+      url: 'https://github.com/acme/repo/pull/3',
+      identifier: '#3',
+      title: 'Open PR on the branch',
+      status: 'open',
+      createdAt: '2026-02-01T00:00:00.000Z',
+    });
+    const task = makeTask({ prs: [older, current] });
+
+    const vm = buildTaskDetailPanelViewModel({
+      task,
+      branchName: 'task/branch',
+      sessionCounts: {},
+      agentStatus: null,
+      stageAuthority: undefined,
+    });
+
+    // Open beats most-recently-created (`selectCurrentPr`), scoped to the
+    // task's branch.
+    expect(vm.pullRequest?.url).toBe(current.url);
+  });
+
+  it('shows the assigned PR even when it matches neither the branch nor the Spec', () => {
+    const branchPr = makePr({
+      url: 'https://github.com/acme/repo/pull/3',
+      identifier: '#3',
+      title: 'Branch PR',
+    });
+    const assigned = makePr({
+      url: 'https://github.com/acme/repo/pull/99',
+      identifier: '#99',
+      title: 'Assigned fork PR',
+      headRefName: 'some-other-branch',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    });
+    const spec = makeIssue({ identifier: '#20', title: 'Spec issue' });
+    const task = makeTask({
+      linkedIssues: { version: '1', spec },
+      prs: [branchPr, assigned],
+      assignedPr: assigned,
+    });
+
+    const vm = buildTaskDetailPanelViewModel({
+      task,
+      branchName: 'task/branch',
+      sessionCounts: {},
+      agentStatus: null,
+      stageAuthority: undefined,
+    });
+
+    expect(vm.pullRequest?.url).toBe(assigned.url);
+  });
+
+  it('renders a PR even for a task with no linked issues at all (assigned or branch-matched)', () => {
+    const branchPr = makePr({ url: 'https://github.com/acme/repo/pull/3', identifier: '#3' });
+    const task = makeTask({ prs: [branchPr] });
+
+    const vm = buildTaskDetailPanelViewModel({
+      task,
+      branchName: 'task/branch',
+      sessionCounts: {},
+      agentStatus: null,
+      stageAuthority: undefined,
+    });
+
+    expect(vm.pullRequest?.url).toBe(branchPr.url);
+    expect(vm.links).toEqual([]);
+  });
+
+  it('leaves pullRequest null when nothing is assigned and no PR derives', () => {
+    const vm = buildTaskDetailPanelViewModel({
+      task: makeTask(),
+      branchName: 'task/branch',
+      sessionCounts: {},
+      agentStatus: null,
+      stageAuthority: undefined,
+    });
+
+    expect(vm.pullRequest).toBeNull();
   });
 
   it('locks the stage selector for a task sitting in Spec with no PR yet (issue-derived authority)', () => {
@@ -570,7 +697,7 @@ describe('buildTaskDetailPanelViewModel', () => {
       stageAuthority: { holdingPr: null, isCurrentStageGithubProven: false },
     });
 
-    expect(vm.pr).toBeNull();
+    expect(vm.pullRequest).toBeNull();
     expect(vm.stage.locked).toBe(true);
     expect(vm.stage.explanation).toContain('#30');
     expect(vm.stage.options).toEqual([]);

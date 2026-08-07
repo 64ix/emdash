@@ -5,16 +5,13 @@ import type { AgentStatus } from '@shared/core/agents/agentEvents';
 import type { ConversationType } from '@shared/core/conversations/conversations';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import type { LinkedIssue, LinkedIssueRole, LinkedIssueRoles } from '@shared/core/linked-issue';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
+import { resolveTaskPr } from '@shared/core/pull-requests/task-pr';
 import {
   deriveStageAuthority,
   describeStageAuthorityFact,
 } from '@shared/core/tasks/stage-authority';
-import type {
-  StageHoldingPr,
-  Task,
-  TaskStageAuthority,
-  WorkflowStage,
-} from '@shared/core/tasks/tasks';
+import type { Task, TaskStageAuthority, WorkflowStage } from '@shared/core/tasks/tasks';
 
 /**
  * Pure view-model module for the Task Detail Panel (CONTEXT.md "Task Detail
@@ -286,8 +283,15 @@ export type TaskDetailPanelViewModel = {
    * section itself still renders (an explicit empty state), never hidden. */
   conversations: TaskDetailPanelConversationRow[];
   links: TaskDetailPanelLink[];
-  /** The Spec-derived PR (CONTEXT.md), or `null` when none references the Spec yet. */
-  pr: StageHoldingPr | null;
+  /**
+   * The task's PR (CONTEXT.md "Assigned PR", docs/adr/0009, ticket #100): the
+   * user-assigned PR when one is set, else the derived PR — the current
+   * branch-matched PR, else the Spec-referencing PR — via the same shared
+   * `resolveTaskPr` helper the task titlebar's PR chip uses, so the panel and
+   * the titlebar can never disagree. `null` when nothing matches; the
+   * panel's "Pull request" section renders only when this is non-null.
+   */
+  pullRequest: PullRequest | null;
   stage: TaskDetailPanelStage;
 };
 
@@ -307,7 +311,13 @@ export function buildTaskDetailPanelViewModel(input: {
     }),
     conversations: deriveConversationRows(input.conversations ?? []),
     links: deriveLinkedIssueSections(input.task.linkedIssues),
-    pr: input.stageAuthority?.holdingPr ?? null,
+    pullRequest:
+      resolveTaskPr({
+        assignedPr: input.task.assignedPr ?? null,
+        prs: input.task.prs ?? [],
+        spec: input.task.linkedIssues?.spec ?? null,
+        taskBranch: input.branchName,
+      }) ?? null,
     stage: deriveStageSection(
       input.task.workflowStage ?? null,
       input.stageAuthority,

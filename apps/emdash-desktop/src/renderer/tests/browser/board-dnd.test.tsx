@@ -57,6 +57,10 @@ vi.mock('@renderer/lib/layout/navigation-provider', () => ({
 vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
   getProjectStore: () => ({}),
   projectDisplayName: () => 'Test project',
+  // Ticket #100: the Task Detail Panel's assign picker reads the project's
+  // PR-capable repository URL through this selector; undefined here means
+  // the picker's queries stay disabled.
+  getGitRepositoryStore: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({

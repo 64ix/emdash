@@ -10,6 +10,7 @@ import {
   type LinkedIssue,
   type LinkedIssueRole,
 } from '@shared/core/linked-issue';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type {
   RenameTaskError,
   RenameTaskSuccess,
@@ -322,6 +323,34 @@ export class TaskStore {
         task.type = 'automation-run';
       });
       console.error(e);
+      throw e;
+    }
+  }
+
+  /**
+   * Assigns (`pr`) or unassigns (`null`) the task's Assigned PR (CONTEXT.md
+   * "Assigned PR", docs/adr/0009; ticket #100). Applied optimistically — the
+   * titlebar chip and the Task Detail Panel both re-derive through the shared
+   * `resolveTaskPr` helper, so the assignment wins over derivation the moment
+   * `assignedPr` lands on the payload — then persisted via the
+   * `tasks.setTaskAssignedPr` RPC, with a rollback on failure (same seam as
+   * `updateLinkedIssueRole` / `setPinned`).
+   */
+  async setAssignedPr(pr: PullRequest | null): Promise<void> {
+    if (this.state === 'unregistered') return;
+    const task = registeredTaskData(this);
+    if (!task) return;
+    const previous = task.assignedPr;
+    runInAction(() => {
+      task.assignedPr = pr ?? undefined;
+    });
+    try {
+      await rpc.tasks.setTaskAssignedPr(task.id, pr?.url ?? null);
+    } catch (e) {
+      runInAction(() => {
+        task.assignedPr = previous;
+      });
+      log.error(e);
       throw e;
     }
   }

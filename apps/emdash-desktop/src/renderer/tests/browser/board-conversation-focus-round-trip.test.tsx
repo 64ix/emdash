@@ -189,6 +189,10 @@ vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
   // stub is enough.
   getProjectManagerStore: () => ({ projects: new Map() }),
   getProjectSshConnectionId: () => undefined,
+  // Ticket #100: the Task Detail Panel's assign picker reads the project's
+  // PR-capable repository URL through this selector; undefined here means
+  // the picker's queries stay disabled.
+  getGitRepositoryStore: () => undefined,
 }));
 
 // `WorkspaceViewModel`'s own module graph reaches several more of this
