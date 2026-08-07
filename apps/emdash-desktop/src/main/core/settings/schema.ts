@@ -81,6 +81,10 @@ export const keyboardSettingsSchema = z
 export const providerCustomConfigEntrySchema = z.object({
   extraArgs: z.string().optional(),
   env: z.record(z.string(), z.string()).optional(),
+  /** Default model applied to new ACP sessions at launch when none is chosen explicitly. */
+  defaultModel: z.string().optional(),
+  /** Default effort/reasoning level applied to new ACP sessions at launch. */
+  defaultEffort: z.string().optional(),
 });
 
 export const providerConfigDefaults: Record<string, unknown> = {};
