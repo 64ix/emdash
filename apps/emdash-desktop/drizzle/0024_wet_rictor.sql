@@ -1,4 +1,4 @@
-ALTER TABLE `tasks` ADD `assigned_pr_url` text REFERENCES pull_requests(url);--> statement-breakpoint
+ALTER TABLE `tasks` ADD `assigned_pr_url` text REFERENCES pull_requests(url) ON DELETE SET NULL;--> statement-breakpoint
 /*
  SQLite does not support "Creating foreign key on existing column" out of the box, we do not generate automatic migration for that, so it has to be done manually
  Please refer to: https://www.techonthenet.com/sqlite/tables/alter_table.php
