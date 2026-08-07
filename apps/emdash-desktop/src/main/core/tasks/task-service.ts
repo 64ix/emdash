@@ -37,6 +37,7 @@ import { getDeletePreflight } from './operations/getDeletePreflight';
 import { getTasks } from './operations/getTasks';
 import { renameTask } from './operations/renameTask';
 import { restoreTask } from './operations/restoreTask';
+import { setTaskAssignedPr } from './operations/setTaskAssignedPr';
 import { setTaskPinned } from './operations/setTaskPinned';
 import { updateTaskBoardPosition } from './operations/updateTaskBoardPosition';
 import { updateTaskStatus } from './operations/updateTaskStatus';
@@ -257,6 +258,7 @@ export class TaskService implements Hookable<TaskLifecycleHooks> {
   updateTaskStatus = updateTaskStatus;
   updateTaskBoardPosition = updateTaskBoardPosition;
   setTaskPinned = setTaskPinned;
+  setTaskAssignedPr = setTaskAssignedPr;
   getTasks = getTasks;
 }
 

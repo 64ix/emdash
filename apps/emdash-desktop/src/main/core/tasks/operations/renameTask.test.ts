@@ -37,6 +37,7 @@ function makeTaskRow(values: Partial<TaskRow>): TaskRow {
     workspaceIntent: values.workspaceIntent ?? null,
     type: values.type ?? 'task',
     automationRunId: values.automationRunId ?? null,
+    assignedPrUrl: values.assignedPrUrl ?? null,
   };
 }
 

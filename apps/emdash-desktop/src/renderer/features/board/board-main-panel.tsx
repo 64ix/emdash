@@ -114,20 +114,29 @@ function columnToStage(column: ColumnId): WorkflowStage | null {
 
 /**
  * A card's Workflow Stage authority (ticket #48), computed synchronously from
- * data already loaded onto the task — `task.prs` (branch-matched PRs; see
+ * data already loaded onto the task — `task.assignedPr` (CONTEXT.md "Assigned
+ * PR", docs/adr/0009), `task.prs` (branch-matched PRs; see
  * `getPullRequestsForTask`) and `task.linkedIssues` — so drag-time evaluation
  * never waits on a round trip. Reuses `deriveTaskStageAuthorityFact`, the
  * exact PR-fact precedence `BoardSyncService`/the Task Detail Panel's RPC
- * already use, rather than re-deriving it.
+ * already use, rather than re-deriving it. The task's assigned PR is the
+ * holding fact when set (threaded through so an assigned-PR-governed card
+ * keeps its cross-stage destinations disabled exactly like a Spec-derived
+ * one — otherwise the next `syncProject` pass would silently revert the
+ * drag).
  */
 function authorityForTask(
-  task: Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId'>,
+  task: Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId' | 'assignedPr'>,
   branchName: string | null
 ): StageAuthority {
   const specIssueNumber = parseIssueNumberFromIdentifier(task.linkedIssues?.spec?.identifier);
   const currentStage = task.workflowStage ?? null;
   const prAuthority = deriveTaskStageAuthorityFact({
     currentStage,
+    // The task's assigned PR wins over every derived match (docs/adr/0009) —
+    // the same override `BoardSyncService.syncProject`/
+    // `getTaskStageAuthority`/`applyProvisionedStage` apply.
+    assignedPr: task.assignedPr,
     specIssueNumber,
     taskBranch: branchName,
     // Defensive: `task.prs` is non-optional on `Task`, but older/lighter test

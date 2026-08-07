@@ -5,7 +5,14 @@ import { workflowStages, type Task, type TaskLifecycleStatus } from '@shared/cor
 export function mapTaskRowToTask(
   row: TaskRow,
   prs: PullRequest[] = [],
-  conversations: Record<string, number> = {}
+  conversations: Record<string, number> = {},
+  /**
+   * The task's Assigned PR, resolved by the caller from `row.assignedPrUrl`
+   * (CONTEXT.md "Assigned PR"). `getTasks` resolves it via the FK to
+   * `pull_requests.url`; other construction sites leave it undefined — no
+   * assignment UI exists yet, so no caller writes the column today.
+   */
+  assignedPr?: PullRequest
 ): Task {
   const stage = workflowStages.safeParse(row.workflowStage);
   return {
@@ -20,6 +27,7 @@ export function mapTaskRowToTask(
     lastInteractedAt: row.lastInteractedAt ?? undefined,
     createdAt: row.createdAt,
     prs,
+    assignedPr,
     conversations,
     updatedAt: row.updatedAt,
     statusChangedAt: row.statusChangedAt,

@@ -51,9 +51,11 @@ import {
   type LinkedIssue,
   type LinkedIssueRole,
 } from '@shared/core/linked-issue';
+import { resolveTaskPr } from '@shared/core/pull-requests/task-pr';
 import { AutomationRunPill } from './components/automation-run-pill';
 import { IssueSelector, ProviderLogo } from './components/issue-selector/issue-selector';
 import { PreviewServerPills } from './components/preview-servers/preview-server-pills';
+import { PullRequestChip } from './pull-request-chip';
 import { type SidebarTab } from './types';
 import { useGitActions } from './use-git-actions';
 import { WorkflowStageChip } from './workflow-stage-chip';
@@ -142,6 +144,16 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
 
   const isRemoteProject = projectStore?.data.type === 'ssh';
   const mostAdvancedLink = mostAdvancedLinkedIssue(taskPayload.linkedIssues);
+  // The task's PR (CONTEXT.md "Assigned PR", docs/adr/0009): the user-assigned
+  // PR when one is set, else the current branch-matched PR, else the
+  // Spec-referencing PR. Derived through the shared helper so the titlebar can
+  // never disagree with the Task Detail Panel's PR section (ticket #100).
+  const taskPr = resolveTaskPr({
+    assignedPr: taskPayload.assignedPr,
+    prs: taskPayload.prs,
+    spec: taskPayload.linkedIssues?.spec ?? null,
+    taskBranch: workspace.gitWorktree.branchName,
+  });
   return (
     <Titlebar
       leftSlot={
@@ -300,6 +312,11 @@ const ActiveTaskTitlebar = observer(function ActiveTaskTitlebar({
             </PopoverContent>
           </Popover>
           {mostAdvancedLink ? <LinkedIssueBadge issue={mostAdvancedLink.issue} /> : null}
+          {/* PR chip (ticket #99): the task's PR — assigned, else branch-matched,
+              else Spec-referencing (`resolveTaskPr`). Rendered between the
+              Linked Issue Badge and the Workflow Stage chip; absent when no PR
+              derives. */}
+          {taskPr ? <PullRequestChip pr={taskPr} /> : null}
           {/* Workflow Stage chip (ticket #50): only for registered tasks, not
               an in-flight automation run that hasn't converted into one yet
               (the same `type === 'task'` gate the Pin control just below

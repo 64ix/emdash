@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { rpc } from '@renderer/lib/ipc';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task } from '@shared/core/tasks/tasks';
 import { createUnprovisionedTask, registeredTaskData } from './task-store';
 
@@ -73,6 +74,7 @@ vi.mock('@renderer/lib/ipc', () => ({
       setTaskPinned: vi.fn(),
       updateLinkedIssueRole: vi.fn(),
       convertAutomationTask: vi.fn(),
+      setTaskAssignedPr: vi.fn(),
     },
   },
 }));
@@ -225,5 +227,72 @@ describe('TaskStore.updateBoardPosition', () => {
 
     expect(registeredTaskData(store)?.workflowStage).toBe('idea');
     expect(registeredTaskData(store)?.boardRank).toBe('a');
+  });
+});
+
+describe('TaskStore.setAssignedPr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('applies the assigned PR to the payload before the RPC resolves, and persists via setTaskAssignedPr', async () => {
+    const task = makeTask();
+    const store = createUnprovisionedTask(task);
+    let resolveRpc: () => void = () => {};
+    vi.mocked(rpc.tasks.setTaskAssignedPr).mockReturnValue(
+      new Promise((resolve) => {
+        resolveRpc = () => resolve(undefined);
+      })
+    );
+    const pr = {
+      url: 'https://github.com/acme/repo/pull/9',
+      title: 'Assigned PR',
+    } as Task['assignedPr'];
+
+    const pending = store.setAssignedPr(pr ?? null);
+
+    // MobX deep-observes the payload, so assert on the observable's content
+    // rather than object identity.
+    expect(registeredTaskData(store)?.assignedPr?.url).toBe(pr!.url);
+
+    resolveRpc();
+    await pending;
+
+    expect(rpc.tasks.setTaskAssignedPr).toHaveBeenCalledWith('task-1', pr!.url);
+  });
+
+  it('clears the assigned PR when unassigning and persists null', async () => {
+    const task = makeTask({
+      assignedPr: {
+        url: 'https://github.com/acme/repo/pull/9',
+        title: 'Assigned PR',
+      } as Task['assignedPr'],
+    });
+    const store = createUnprovisionedTask(task);
+    vi.mocked(rpc.tasks.setTaskAssignedPr).mockResolvedValue(undefined);
+
+    await store.setAssignedPr(null);
+
+    expect(registeredTaskData(store)?.assignedPr).toBeUndefined();
+    expect(rpc.tasks.setTaskAssignedPr).toHaveBeenCalledWith('task-1', null);
+  });
+
+  it('rolls the payload back to the previous assignment when the RPC call fails', async () => {
+    const previous = {
+      url: 'https://github.com/acme/repo/pull/9',
+      title: 'Assigned PR',
+    } as Task['assignedPr'];
+    const task = makeTask({ assignedPr: previous });
+    const store = createUnprovisionedTask(task);
+    vi.mocked(rpc.tasks.setTaskAssignedPr).mockRejectedValue(new Error('offline'));
+
+    await expect(
+      store.setAssignedPr({
+        url: 'https://github.com/acme/repo/pull/10',
+        title: 'Other',
+      } as PullRequest)
+    ).rejects.toThrow('offline');
+
+    expect(registeredTaskData(store)?.assignedPr?.url).toBe(previous!.url);
   });
 });

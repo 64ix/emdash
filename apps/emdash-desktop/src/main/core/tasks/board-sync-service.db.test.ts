@@ -55,6 +55,7 @@ async function insertTask(
     workflowStage?: string | null;
     linkedIssues?: LinkedIssueRoles | null;
     workspaceId?: string | null;
+    assignedPrUrl?: string | null;
   }
 ) {
   await db.insert(tasks).values({
@@ -65,6 +66,7 @@ async function insertTask(
     workflowStage: overrides.workflowStage ?? null,
     linkedIssues: overrides.linkedIssues ?? null,
     workspaceId: overrides.workspaceId ?? null,
+    assignedPrUrl: overrides.assignedPrUrl ?? null,
   });
 }
 
@@ -275,6 +277,122 @@ describe('BoardSyncService', () => {
     });
   });
 
+  describe('syncProject — Assigned PR override (ticket #101)', () => {
+    it('puts the task in review for an assigned open PR, even against a merged Spec fact', async () => {
+      // The Spec-referencing PR already merged, but the user's explicit
+      // assignment (a fork-flow PR that neither references the Spec nor matches
+      // the branch) is the holding fact and proves `review`.
+      await insertTask(fixture.db, { id: 'task-assigned-open', linkedIssues: specLink('#110') });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/21`,
+        headRefName: 'spec/110',
+        status: 'merged',
+        description: 'Closes #110',
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/22`,
+        headRefName: 'fork-flow/assigned',
+        status: 'open',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/22` })
+        .where(eq(tasks.id, 'task-assigned-open'));
+
+      await service.syncProject(PROJECT_ID);
+
+      expect(await stageOf(fixture.db, 'task-assigned-open')).toBe('review');
+    });
+
+    it('puts the task in shipped for an assigned merged PR', async () => {
+      await insertTask(fixture.db, { id: 'task-assigned-merged', linkedIssues: specLink('#111') });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/23`,
+        headRefName: 'fork-flow/assigned',
+        status: 'merged',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/23` })
+        .where(eq(tasks.id, 'task-assigned-merged'));
+
+      await service.syncProject(PROJECT_ID);
+
+      expect(await stageOf(fixture.db, 'task-assigned-merged')).toBe('shipped');
+    });
+
+    it('puts the task in triage for an assigned closed-without-merge PR', async () => {
+      await insertTask(fixture.db, { id: 'task-assigned-closed', linkedIssues: specLink('#112') });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/24`,
+        headRefName: 'fork-flow/assigned',
+        status: 'closed',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/24` })
+        .where(eq(tasks.id, 'task-assigned-closed'));
+
+      await service.syncProject(PROJECT_ID);
+
+      expect(await stageOf(fixture.db, 'task-assigned-closed')).toBe('triage');
+    });
+
+    it('derives a stage for a link-less task once a PR is assigned to it', async () => {
+      await insertTask(fixture.db, { id: 'task-assigned-linkless', linkedIssues: null });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/25`,
+        headRefName: 'fork-flow/assigned',
+        status: 'open',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/25` })
+        .where(eq(tasks.id, 'task-assigned-linkless'));
+
+      await service.syncProject(PROJECT_ID);
+
+      expect(await stageOf(fixture.db, 'task-assigned-linkless')).toBe('review');
+    });
+
+    it('reverts to the Spec-derived stage when the assigned PR is unassigned', async () => {
+      // Assigned merged PR proves `shipped`; unassigning must restore the
+      // Spec-referencing open PR's `review` — not keep the assignment's fact.
+      await insertTask(fixture.db, { id: 'task-assign-revert', linkedIssues: specLink('#113') });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/26`,
+        headRefName: 'spec/113',
+        status: 'open',
+        description: 'Closes #113',
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/27`,
+        headRefName: 'fork-flow/assigned',
+        status: 'merged',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/27` })
+        .where(eq(tasks.id, 'task-assign-revert'));
+
+      await service.syncProject(PROJECT_ID);
+      expect(await stageOf(fixture.db, 'task-assign-revert')).toBe('shipped');
+
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: null })
+        .where(eq(tasks.id, 'task-assign-revert'));
+      await service.syncProject(PROJECT_ID);
+
+      expect(await stageOf(fixture.db, 'task-assign-revert')).toBe('review');
+    });
+  });
+
   describe('applyProvisionedStage — task-provisioned hook', () => {
     it('sets implementing for a Spec-linked task with no PR facts yet', async () => {
       await insertTask(fixture.db, { id: 'task-provision-fresh', linkedIssues: specLink('#200') });
@@ -342,6 +460,71 @@ describe('BoardSyncService', () => {
 
       expect(await stageOf(fixture.db, 'task-provision-linkless')).toBeNull();
       expect(mocks.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('applyProvisionedStage — Assigned PR override (ticket #101)', () => {
+    it('sets review for an assigned open PR instead of implementing', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-provision-assigned-open',
+        linkedIssues: specLink('#210'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/30`,
+        headRefName: 'fork-flow/assigned',
+        status: 'open',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/30` })
+        .where(eq(tasks.id, 'task-provision-assigned-open'));
+
+      await service.applyProvisionedStage('task-provision-assigned-open');
+
+      expect(await stageOf(fixture.db, 'task-provision-assigned-open')).toBe('review');
+    });
+
+    it('sets shipped for an assigned merged PR', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-provision-assigned-merged',
+        linkedIssues: specLink('#211'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/31`,
+        headRefName: 'fork-flow/assigned',
+        status: 'merged',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/31` })
+        .where(eq(tasks.id, 'task-provision-assigned-merged'));
+
+      await service.applyProvisionedStage('task-provision-assigned-merged');
+
+      expect(await stageOf(fixture.db, 'task-provision-assigned-merged')).toBe('shipped');
+    });
+
+    it('stages a link-less task with an assigned PR on provisioning', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-provision-assigned-linkless',
+        linkedIssues: null,
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/32`,
+        headRefName: 'fork-flow/assigned',
+        status: 'open',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/32` })
+        .where(eq(tasks.id, 'task-provision-assigned-linkless'));
+
+      await service.applyProvisionedStage('task-provision-assigned-linkless');
+
+      expect(await stageOf(fixture.db, 'task-provision-assigned-linkless')).toBe('review');
     });
   });
 
@@ -430,6 +613,122 @@ describe('BoardSyncService', () => {
         holdingPr: null,
         isCurrentStageGithubProven: false,
       });
+    });
+  });
+
+  describe('getStageAuthority — Assigned PR override (ticket #101)', () => {
+    it('is github-proven, pointing at the assigned open PR — even link-less', async () => {
+      await insertTask(fixture.db, { id: 'task-authority-assigned-open', linkedIssues: null });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/40`,
+        headRefName: 'fork-flow/assigned',
+        status: 'open',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/40` })
+        .where(eq(tasks.id, 'task-authority-assigned-open'));
+
+      expect(await service.getStageAuthority('task-authority-assigned-open')).toEqual({
+        holdingPr: {
+          url: `${REPOSITORY_URL}/pull/40`,
+          title: 'PR',
+          identifier: '#1',
+          status: 'open',
+          isDraft: false,
+        },
+        isCurrentStageGithubProven: true,
+      });
+    });
+
+    it('points at the assigned merged PR, winning over the Spec-referencing open PR', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-authority-assigned-merged',
+        workflowStage: 'implementing',
+        linkedIssues: specLink('#310'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/41`,
+        headRefName: 'spec/310',
+        status: 'open',
+        description: 'Closes #310',
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/42`,
+        headRefName: 'fork-flow/assigned',
+        status: 'merged',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/42` })
+        .where(eq(tasks.id, 'task-authority-assigned-merged'));
+
+      const authority = await service.getStageAuthority('task-authority-assigned-merged');
+      expect(authority.holdingPr?.url).toBe(`${REPOSITORY_URL}/pull/42`);
+      expect(authority.holdingPr?.status).toBe('merged');
+      expect(authority.isCurrentStageGithubProven).toBe(true);
+    });
+
+    it('is never github-proven for an assigned closed PR while the task sits in triage', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-authority-assigned-closed',
+        workflowStage: 'triage',
+        linkedIssues: specLink('#311'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/43`,
+        headRefName: 'fork-flow/assigned',
+        status: 'closed',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/43` })
+        .where(eq(tasks.id, 'task-authority-assigned-closed'));
+
+      const authority = await service.getStageAuthority('task-authority-assigned-closed');
+      expect(authority.holdingPr?.url).toBe(`${REPOSITORY_URL}/pull/43`);
+      expect(authority.holdingPr?.status).toBe('closed');
+      expect(authority.isCurrentStageGithubProven).toBe(false);
+    });
+
+    it('reverts to the Spec-derived holding fact when the assigned PR is unassigned', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-authority-assign-revert',
+        workflowStage: 'triage',
+        linkedIssues: specLink('#312'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/44`,
+        headRefName: 'spec/312',
+        status: 'open',
+        description: 'Closes #312',
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/45`,
+        headRefName: 'fork-flow/assigned',
+        status: 'closed',
+        description: null,
+      });
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: `${REPOSITORY_URL}/pull/45` })
+        .where(eq(tasks.id, 'task-authority-assign-revert'));
+
+      const assigned = await service.getStageAuthority('task-authority-assign-revert');
+      expect(assigned.holdingPr?.url).toBe(`${REPOSITORY_URL}/pull/45`);
+
+      await fixture.db
+        .update(tasks)
+        .set({ assignedPrUrl: null })
+        .where(eq(tasks.id, 'task-authority-assign-revert'));
+
+      const reverted = await service.getStageAuthority('task-authority-assign-revert');
+      expect(reverted.holdingPr?.url).toBe(`${REPOSITORY_URL}/pull/44`);
+      expect(reverted.holdingPr?.status).toBe('open');
+      expect(reverted.isCurrentStageGithubProven).toBe(false); // task still in triage
     });
   });
 });
