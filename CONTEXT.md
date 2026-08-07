@@ -28,7 +28,8 @@ Board.
 
 Stage authority is hybrid: GitHub is authoritative for every stage it can
 prove (`exploring` = open Map, `spec` = open Spec issue, `review` = open
-PR referencing the Spec, `shipped` = that PR merged); the agent or user
+PR — the task's [Assigned PR](#assigned-pr) when one is set, else one
+referencing the Spec, `shipped` = that PR merged); the agent or user
 declares the rest (`idea`, `implementing`). A GitHub fact always wins over
 a manual placement.
 
@@ -119,8 +120,21 @@ feature goes through Wayfinder. Optional.
 
 The `[Spec] <feature>` issue for a task. The anchor link: once a task has
 a Spec, everything downstream (tickets, PR, shipped) is derived from
-GitHub by walking from the Spec. A PR is never a stored link — it is
-always derived from the Spec.
+GitHub by walking from the Spec. A PR is derived from the Spec by default
+— unless the user assigns one explicitly, which overrides derivation (see
+[Assigned PR](#assigned-pr)).
+
+## Assigned PR
+
+The Pull Request a user has explicitly attached to a task. Persisted on
+the task, at most one per task. When set, it overrides every derived PR
+(branch match or Spec reference) for display and for the Workflow Stage:
+an open Assigned PR proves `review`, a merged one proves `shipped`, a
+closed unmerged one sends the task to Triage — the same semantics as the
+Spec-derived PR. Unassigning reverts to derivation. Any PR synced for the
+task's project can be assigned; it need not reference the Spec nor match
+the task's branch, and it stays displayed even when derivation finds
+nothing.
 
 ## Unstaged
 
@@ -180,6 +194,10 @@ focused task above; an id that no longer resolves (the Conversation was
 deleted) is a no-op — the task view still opens, with nothing focused.
 Not shown in ghost mode — a Ghost Card is not a task and has no
 Conversations.
+
+The panel shows the task's PR — its [Assigned PR](#assigned-pr) when one
+is set, else the derived PR — as a clickable row opening the PR
+externally, with the assign and unassign controls.
 
 ## Context Usage
 
