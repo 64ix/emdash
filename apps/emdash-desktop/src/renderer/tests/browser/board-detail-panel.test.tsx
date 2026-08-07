@@ -183,7 +183,7 @@ const mocks = vi.hoisted(() => ({
   // Ticket #50: the task titlebar's Workflow Stage chip carries this back to
   // the board via `useParams('board')`. A mutable field (not a fixed
   // literal) so individual tests can drive it, mirroring how
-  // `sidebar-board-row.test.tsx` makes its own mocked params configurable.
+  // `sidebar-project-row.test.tsx` makes its own mocked params configurable.
   focusTaskId: undefined as string | undefined,
   // Ticket #100: the project's PR-capable repository URL, read by the
   // panel's mocked `getGitRepositoryStore` selector to feed the assign
