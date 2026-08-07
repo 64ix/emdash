@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/sortable';
 import { AlertTriangle } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   columnEmphasis,
   isBoardDisplayable,
@@ -122,9 +122,6 @@ function isAboveTarget(activeRect: ClientRect | null, overRect: ClientRect | nul
  */
 export const GlobalBoardMainPanel = observer(function GlobalBoardMainPanel() {
   const { navigate } = useNavigate();
-  // Guard so the Escape/panel-disappearance effects below can read the latest
-  // maps (rebuilt every render) without re-subscribing on every render.
-  const boardContainerRef = useRef<HTMLDivElement>(null);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   // Cross-column drag preview (same semantics as the Feature Board's).
   const [dragPreview, setDragPreview] = useState<{ column: ColumnId; index: number } | null>(null);
@@ -567,7 +564,7 @@ export const GlobalBoardMainPanel = observer(function GlobalBoardMainPanel() {
   );
 
   return (
-    <div ref={boardContainerRef} className="flex h-full flex-col bg-background text-foreground">
+    <div className="flex h-full flex-col bg-background text-foreground">
       <BoardHeader
         title="Global board"
         projectName={headerContext}
