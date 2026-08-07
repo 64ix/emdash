@@ -25,8 +25,8 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
-import type { LinkedIssueRoles } from '@shared/core/linked-issue';
 import type { SidebarRow } from '@renderer/features/sidebar/stage-group-row-model';
+import type { LinkedIssueRoles } from '@shared/core/linked-issue';
 
 type MockStore = {
   data: {
@@ -389,11 +389,14 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
   it('rejects a cross-stage drop a GitHub fact would overwrite, with the board gating feedback and no promise line', async () => {
     // spec-1 is held in Spec by an open Spec issue: the Idea group is a
     // destination the next sync pass would reassert over (ADR 0006).
-    storesById.set('spec-1', makeStore('spec-1', {
-      workflowStage: 'spec',
-      boardRank: 'a',
-      linkedIssues: openSpecLink(),
-    }));
+    storesById.set(
+      'spec-1',
+      makeStore('spec-1', {
+        workflowStage: 'spec',
+        boardRank: 'a',
+        linkedIssues: openSpecLink(),
+      })
+    );
     await mount();
 
     const idea1Center = center(taskRow('idea-1'));
@@ -427,11 +430,14 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
   it('keeps a GitHub-authoritative task reorderable within its own group', async () => {
     // Same-group drops never change the stage, so nothing contests them —
     // exactly like the board's same-column reorder.
-    storesById.set('spec-1', makeStore('spec-1', {
-      workflowStage: 'spec',
-      boardRank: 'a',
-      linkedIssues: openSpecLink(),
-    }));
+    storesById.set(
+      'spec-1',
+      makeStore('spec-1', {
+        workflowStage: 'spec',
+        boardRank: 'a',
+        linkedIssues: openSpecLink(),
+      })
+    );
     await mount();
 
     // spec-1 dropped above spec-2: still a write, still in 'spec'.

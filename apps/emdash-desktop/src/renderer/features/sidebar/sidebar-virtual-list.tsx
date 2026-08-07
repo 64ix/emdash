@@ -529,9 +529,7 @@ function InsertionIndicator({
     const activeRowIdx = rows.findIndex(
       (r) => isSortableRow(r) && rowToDndId(r) === String(active.id)
     );
-    const overRowIdx = rows.findIndex(
-      (r) => isSortableRow(r) && rowToDndId(r) === String(over.id)
-    );
+    const overRowIdx = rows.findIndex((r) => isSortableRow(r) && rowToDndId(r) === String(over.id));
     if (activeRowIdx !== -1 && overRowIdx !== -1) {
       const authority = taskDropAuthority(
         activeParsed.projectId,

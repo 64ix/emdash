@@ -2,8 +2,8 @@ import { observable, runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
 import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
-import { rankBetween } from '@shared/lib/board-rank';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
+import { rankBetween } from '@shared/lib/board-rank';
 import { SidebarStore } from './sidebar-store';
 
 type SidebarProjectManager = ConstructorParameters<typeof SidebarStore>[0];
@@ -992,9 +992,24 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
         id: 'project-1',
         createdAt: '2026-01-01T00:00:00.000Z',
         tasks: [
-          { id: 'idea-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'idea', boardRank: 'a' },
-          { id: 'idea-2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea', boardRank: 'm' },
-          { id: 'spec-1', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'spec', boardRank: 'a' },
+          {
+            id: 'idea-1',
+            createdAt: '2026-01-01T00:00:01.000Z',
+            workflowStage: 'idea',
+            boardRank: 'a',
+          },
+          {
+            id: 'idea-2',
+            createdAt: '2026-01-01T00:00:02.000Z',
+            workflowStage: 'idea',
+            boardRank: 'm',
+          },
+          {
+            id: 'spec-1',
+            createdAt: '2026-01-01T00:00:03.000Z',
+            workflowStage: 'spec',
+            boardRank: 'a',
+          },
         ],
       },
     ]);
@@ -1029,7 +1044,12 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
         tasks: [
           { id: 'u1', createdAt: '2026-01-01T00:00:01.000Z' },
           { id: 'u2', createdAt: '2026-01-01T00:00:02.000Z', boardRank: 'a' },
-          { id: 'idea-1', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'idea', boardRank: 'z' },
+          {
+            id: 'idea-1',
+            createdAt: '2026-01-01T00:00:03.000Z',
+            workflowStage: 'idea',
+            boardRank: 'z',
+          },
         ],
       },
     ]);
