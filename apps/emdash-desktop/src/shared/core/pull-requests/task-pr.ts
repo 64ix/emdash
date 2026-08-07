@@ -1,8 +1,5 @@
 import { parseRepositoryRef } from '@shared/repository-ref';
-import {
-  findSpecMatchingPrs,
-  parseIssueNumberFromIdentifier,
-} from './pr-workflow-derivation';
+import { findSpecMatchingPrs, parseIssueNumberFromIdentifier } from './pr-workflow-derivation';
 import { selectCurrentPr, type PullRequest } from './pull-requests';
 
 /**

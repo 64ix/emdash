@@ -1,7 +1,7 @@
 import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import { assemblePullRequest } from '@main/core/pull-requests/pr-utils';
 import { db } from '@main/db/client';
 import { conversations, pullRequests, tasks, workspaces } from '@main/db/schema';
-import { assemblePullRequest } from '@main/core/pull-requests/pr-utils';
 import { type Task } from '@shared/core/tasks/tasks';
 import { mapTaskRowToTask } from '../utils/utils';
 
@@ -58,10 +58,7 @@ export async function getTasks(projectId?: string): Promise<Task[]> {
     .map((r) => r.assignedPrUrl)
     .filter((url): url is string => url != null);
   const assignedPrRows = assignedPrUrls.length
-    ? await db
-        .select()
-        .from(pullRequests)
-        .where(inArray(pullRequests.url, assignedPrUrls))
+    ? await db.select().from(pullRequests).where(inArray(pullRequests.url, assignedPrUrls))
     : [];
   const assignedPrByUrl = new Map(
     assignedPrRows.map((r) => [r.url, assemblePullRequest(r, null, [], [], [])])

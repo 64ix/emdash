@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveTaskPr } from './task-pr';
 import type { PullRequest } from './pull-requests';
+import { resolveTaskPr } from './task-pr';
 
 const SPEC_REPO = 'https://github.com/acme/app';
 const OTHER_REPO = 'https://github.com/upstream/app';
@@ -62,9 +62,9 @@ describe('resolveTaskPr (ticket #99)', () => {
       createdAt: '2026-01-02T00:00:00.000Z',
     });
 
-    expect(
-      resolveTaskPr({ prs: [merged, open], spec: SPEC, taskBranch: 'feature/one' })
-    ).toBe(open);
+    expect(resolveTaskPr({ prs: [merged, open], spec: SPEC, taskBranch: 'feature/one' })).toBe(
+      open
+    );
   });
 
   it('falls back to the most recently created branch-matched PR when none is open', () => {
@@ -108,9 +108,7 @@ describe('resolveTaskPr (ticket #99)', () => {
       status: 'open',
     });
 
-    expect(
-      resolveTaskPr({ prs: [specPr], spec: SPEC, taskBranch: 'feature/one' })
-    ).toBe(specPr);
+    expect(resolveTaskPr({ prs: [specPr], spec: SPEC, taskBranch: 'feature/one' })).toBe(specPr);
   });
 
   it('falls back to a Spec-referencing PR matched by branch token', () => {

@@ -47,10 +47,7 @@ describe('0024_assigned_pr', () => {
       title: 'Improve migration test tooling',
       status: 'open',
     });
-    await fixture.db
-      .update(tasks)
-      .set({ assignedPrUrl: PR_URL })
-      .where(eq(tasks.id, TASK_A2_ID));
+    await fixture.db.update(tasks).set({ assignedPrUrl: PR_URL }).where(eq(tasks.id, TASK_A2_ID));
 
     const [row] = await fixture.db.select().from(tasks).where(eq(tasks.id, TASK_A2_ID));
     expect(row.assignedPrUrl).toBe(PR_URL);
