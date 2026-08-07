@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { rpc } from '@renderer/lib/ipc';
+import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { Task } from '@shared/core/tasks/tasks';
 import { createUnprovisionedTask, registeredTaskData } from './task-store';
 
@@ -248,7 +249,7 @@ describe('TaskStore.setAssignedPr', () => {
       title: 'Assigned PR',
     } as Task['assignedPr'];
 
-    const pending = store.setAssignedPr(pr);
+    const pending = store.setAssignedPr(pr ?? null);
 
     // MobX deep-observes the payload, so assert on the observable's content
     // rather than object identity.
@@ -286,7 +287,10 @@ describe('TaskStore.setAssignedPr', () => {
     vi.mocked(rpc.tasks.setTaskAssignedPr).mockRejectedValue(new Error('offline'));
 
     await expect(
-      store.setAssignedPr({ url: 'https://github.com/acme/repo/pull/10', title: 'Other' })
+      store.setAssignedPr({
+        url: 'https://github.com/acme/repo/pull/10',
+        title: 'Other',
+      } as PullRequest)
     ).rejects.toThrow('offline');
 
     expect(registeredTaskData(store)?.assignedPr?.url).toBe(previous!.url);

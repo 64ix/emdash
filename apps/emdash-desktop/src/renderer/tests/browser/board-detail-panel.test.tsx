@@ -196,7 +196,7 @@ const mocks = vi.hoisted(() => ({
     Promise.resolve({ success: true, data: { prs: [] as PullRequest[] } })
   ),
   syncPullRequests: vi.fn(() => Promise.resolve({ success: true })),
-  setTaskAssignedPr: vi.fn(() => Promise.resolve()),
+  setTaskAssignedPr: vi.fn((_taskId: string, _prUrl: string | null) => Promise.resolve()),
   openExternal: vi.fn(() => Promise.resolve()),
 }));
 

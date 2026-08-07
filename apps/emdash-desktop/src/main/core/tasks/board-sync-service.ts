@@ -473,7 +473,7 @@ function toStageAuthorityPrFact(row: {
   url: string;
   title: string;
   identifier: string | null;
-  isDraft: number | boolean;
+  isDraft: number | null;
   repositoryUrl: string;
   headRefName: string;
   status: string;

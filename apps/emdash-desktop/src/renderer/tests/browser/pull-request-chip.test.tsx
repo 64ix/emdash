@@ -136,7 +136,7 @@ describe('PullRequestChip (ticket #99)', () => {
       ['mouseenter', MouseEvent, mouseOpts],
       ['pointermove', PointerEvent, pointerOpts],
       ['mousemove', MouseEvent, mouseOpts],
-    ]) {
+    ] as const) {
       button.dispatchEvent(new EventCtor(type, init));
     }
     await new Promise((resolve) => setTimeout(resolve, 800));
