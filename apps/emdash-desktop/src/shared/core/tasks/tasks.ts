@@ -95,7 +95,16 @@ export type Task = {
   /** Typed, role-keyed linked issues (Origin / Map / Spec). At most one issue per role. */
   linkedIssues?: LinkedIssueRoles;
   isPinned: boolean;
+  /** The PRs synced for the task (branch-matched via `getPullRequestsForTask`). */
   prs: PullRequest[];
+  /**
+   * The task's Assigned PR (CONTEXT.md "Assigned PR", docs/adr/0009): the PR a
+   * user explicitly attached to the task, resolved by `getTasks` through the
+   * `tasks.assigned_pr_url` FK to `pull_requests.url`. When set it overrides
+   * every derived PR (branch match, Spec reference) for display; absent when
+   * unassigned, in which case derivation applies.
+   */
+  assignedPr?: PullRequest;
   conversations: Record<string, number>;
   workspaceGit?: { linesAdded: number; linesDeleted: number };
   workspaceId?: string;
