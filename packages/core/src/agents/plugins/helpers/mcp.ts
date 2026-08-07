@@ -28,6 +28,30 @@ function deepClone<T>(obj: T): T {
   return structuredClone(obj);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge emdash's shared skills root into an OpenCode config's `skills.paths`
+ * (merge-safe injection, ADR 0007): user-provided paths keep their order and
+ * are never duplicated; the shared root is appended once. Every other key of
+ * `parsed` — and every other `skills` key — is left untouched. A missing or
+ * empty shared root is fine: the entry is inert until skills are installed.
+ */
+function mergeSkillsPaths(parsed: Record<string, unknown>, skillsPaths: string[]): void {
+  if (!skillsPaths.length) return;
+  const skills = parsed.skills;
+  const currentPaths =
+    isRecord(skills) && Array.isArray(skills.paths) ? (skills.paths as unknown[]) : [];
+  const merged = [...currentPaths];
+  for (const entry of skillsPaths) {
+    if (!merged.includes(entry)) merged.push(entry);
+  }
+  if (merged.length === currentPaths.length) return;
+  parsed.skills = { ...(isRecord(skills) ? skills : {}), paths: merged };
+}
+
 const INJECTED_ACCEPT = 'application/json, text/event-stream';
 
 function ensureHeader(headers: Record<string, string>, key: string, val: string): void {
@@ -58,6 +82,8 @@ type McpConfigShape = {
   serversKey: string;
   /** Treat serversKey as a literal key instead of a dot-delimited object path. */
   serversKeyIsLiteral?: boolean;
+  /** Hook run before serialization so an adapter can merge extra config keys. */
+  onWrite?: (parsed: Record<string, unknown>) => void;
   toNative(server: McpServerRegistration): Record<string, unknown>;
   fromNative(name: string, raw: Record<string, unknown>): McpServerRegistration;
 };
@@ -167,8 +193,10 @@ export function createMcpAdapter(shape: McpConfigShape) {
       const parsed: Record<string, unknown> = content ? parseMcpFile(content, shape.format) : {};
       const native = Object.fromEntries(servers.map((s) => [s.name, shape.toNative(s)]));
       setServers(parsed, native);
+      shape.onWrite?.(parsed);
       const output =
         shape.format === 'json' ? JSON.stringify(parsed, null, 2) + '\n' : stringifyTOML(parsed);
+      if (output === content) return;
       await fs.write(shape.configPath, output);
     },
     async removeServer(fs: PluginFs, name: string): Promise<void> {
@@ -348,16 +376,25 @@ export function qwenMcpAdapter(configPath = '.qwen/settings.json') {
 /**
  * OpenCode adapter — type:'remote'/url for HTTP; type:'local'/command[] for stdio.
  * Write: ~/.config/opencode/opencode.json; legacy read: ~/.opencode/config.json.
+ *
+ * Every write also merges `skills.paths` with the emdash shared skills root
+ * (ADR 0007): the root is appended once after any user-provided paths, and no
+ * other key is touched. `~` is expanded to the home directory by OpenCode
+ * itself, so the entry is portable across machines.
  */
 export function opencodeMcpAdapter(
   configPath = '.config/opencode/opencode.json',
-  legacyReadPaths = ['.opencode/config.json']
+  legacyReadPaths = ['.opencode/config.json'],
+  skillsPaths: string[] = ['~/.agentskills']
 ) {
   return createMcpAdapter({
     configPath,
     legacyReadPaths,
     format: 'json',
     serversKey: 'mcp',
+    onWrite(parsed) {
+      mergeSkillsPaths(parsed, skillsPaths);
+    },
     toNative(s) {
       const entry = deepClone(s) as Record<string, unknown>;
       delete entry.name;
@@ -420,12 +457,14 @@ export function opencodeMcpAdapter(
  * (type:'remote'/url for HTTP; type:'local'/command[] for stdio).
  * Write: ~/.config/mimocode/mimocode.json; read lower-priority config.json and
  * project-local .mimocode/mimocode.json for existing installs.
+ * MiMo Code is out of scope for the skills.paths injection: its config is
+ * written without the emdash shared skills root.
  */
 export function mimocodeMcpAdapter(
   configPath = '.config/mimocode/mimocode.json',
   legacyReadPaths = ['.config/mimocode/config.json', '.mimocode/mimocode.json']
 ) {
-  return opencodeMcpAdapter(configPath, legacyReadPaths);
+  return opencodeMcpAdapter(configPath, legacyReadPaths, []);
 }
 
 /**
