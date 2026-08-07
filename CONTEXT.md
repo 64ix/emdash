@@ -16,6 +16,42 @@ opens the Task Detail Panel for it. An id that doesn't resolve there
 (invalid, archived, or simply absent) is a no-op — the board still renders
 normally.
 
+## Global Board
+
+The cross-project view (fork-only) that aggregates the Feature Boards of
+every project in the current workspace: all real tasks — Unstaged and Triage
+included — as cards in the same **Workflow Stage** columns, each card marked
+with its project. The sibling of the Feature Board, not a mode of it: where
+the Feature Board resolves one explicit project, the Global Board shows them
+all, and every project-scoped rule keeps its per-column meaning across
+projects.
+
+Reached from the Board button at the top of the left sidebar (above the
+pinned-task list, below the space switcher) and the command palette's Open
+Global Board command. Not the app's default landing view.
+
+Ghost Cards and Link Suggestions have no place here — only real tasks are
+shown, in every stage.
+
+Display rules match the Feature Board per column: **Shipped Fade** hides old
+shipped cards and **Awaiting Input** floats to the top. A card's manual
+position is its **Board Rank** in the shared per-stage column — a Global
+Board drop may interleave projects, and each project's own board still shows
+its cards in the same relative order.
+
+Interactions are the Feature Board's: dragging between columns changes
+Workflow Stage, dragging within a column writes Board Rank, both blocked by
+stage authority; clicking a card opens the **Task Detail Panel** in place.
+There is no column-scoped creation (a new card would have no project), no
+focused-task round trip, and no SSH gate — unreachable projects still display
+from the database, and their actions fail cleanly.
+
+Above the columns sits the same Board Header as the Feature Board — search,
+Needs Attention, and the stage, agent state, linked-issue presence and PR
+state filters — plus a project multi-select, the only filter that persists
+(per workspace, database-backed). Projects without a single displayable card
+are omitted from the board and the filter list until they have one.
+
 ## Workflow Stage
 
 The position of a task in the feature delivery pipeline:
@@ -41,27 +77,29 @@ pushes cards in; only the user or an agent moves a card back out.
 ## Shipped Fade
 
 A display rule, not a stage: `shipped` cards whose PR merged more than a
-fixed window ago are hidden from the Feature Board and from the sidebar's
-Shipped Stage Group. The task keeps its stage forever and is never
-archived or otherwise altered. The Shipped column (and group) disclose the
-window so older cards never appear to vanish arbitrarily. A faded task
+fixed window ago are hidden from the Feature Board, the Global Board and
+the sidebar's Shipped Stage Group. The task keeps its stage forever and is
+never archived or otherwise altered. The Shipped column (and group) disclose
+the window so older cards never appear to vanish arbitrarily. A faded task
 remains reachable in the project view's task list, where it can be
 archived or restored.
 
 ## Awaiting Input
 
-The state of a task on the Feature Board when at least one of its sessions
+The state of a task on a board when at least one of its sessions
 has an unseen `awaiting-input` conversation — an agent is waiting on the
 user. A display state, not a position: awaiting-input cards float to the
-top of their Feature Board column (and of their sidebar Stage Group) at
-render time and fall back to their manual place once handled.
+top of their board column (Feature Board, Global Board) and of their
+sidebar Stage Group at render time and fall back to their manual place once
+handled.
 
 ## Board Rank
 
-A task's manually chosen position within a Feature Board column or sidebar
-Stage Group. Only ever set by an explicit user gesture (a drop, in the
-board or the sidebar); never written by the system. Tasks without a Board
-Rank sort after ranked ones, in their existing order.
+A task's manually chosen position within a board column (Feature Board or
+Global Board; on the Global Board the column is shared across projects) or
+sidebar Stage Group. Only ever set by an explicit user gesture (a drop, in
+the board or the sidebar); never written by the system. Tasks without a
+Board Rank sort after ranked ones, in their existing order.
 
 ## Ghost Card
 
@@ -167,13 +205,14 @@ task-level state change).
 
 ## Task Detail Panel
 
-The side panel that opens on the right of the Feature Board when a card is
-clicked, splitting the view: the board stays fully interactive on the left
+The side panel that opens on the right of the Feature Board or the Global
+Board when a card is clicked, splitting the view: the board stays fully
+interactive on the left
 (including drag-and-drop), the clicked task's details on the right. Fixed
 width, not resizable. Clicking a different card switches its content;
 re-clicking the shown card does nothing. Escape and a close button dismiss
 it, and the card behind it stays highlighted while it is open. Ephemeral
-view state — it does not survive leaving the Feature Board, adds no
+view state — it does not survive leaving the board it belongs to, adds no
 view-registry entry, and writes nothing to the database; a task that stops
 being displayable (archived, faded by Shipped Fade) closes the panel rather
 than showing stale or missing data. Clicking a Ghost Card opens the same
