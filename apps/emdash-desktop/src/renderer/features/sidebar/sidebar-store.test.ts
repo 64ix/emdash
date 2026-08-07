@@ -2,6 +2,7 @@ import { observable, runInAction } from 'mobx';
 import { describe, expect, it, vi } from 'vitest';
 import type { TaskStore } from '@renderer/features/tasks/stores/task-store';
 import { SHIPPED_FADE_WINDOW_MS } from '@shared/core/pull-requests/pr-workflow-derivation';
+import { rankBetween } from '@shared/lib/board-rank';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { SidebarStore } from './sidebar-store';
 
@@ -888,10 +889,10 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
     projectManager: SidebarProjectManager,
     projectId: string
   ): {
-    tasks: Map<string, { data: { workflowStage?: WorkflowStage } }>;
+    tasks: Map<string, { data: { workflowStage?: WorkflowStage; boardRank?: string } }>;
   } {
     return projectManager.projects.get(projectId)!.mountedProject!.taskManager as {
-      tasks: Map<string, { data: { workflowStage?: WorkflowStage } }>;
+      tasks: Map<string, { data: { workflowStage?: WorkflowStage; boardRank?: string } }>;
     };
   }
 
@@ -982,6 +983,72 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
       'task:idea-1',
       'group:Spec:1',
       'task:spec-1',
+    ]);
+  });
+
+  it('lands a drag-dropped task in the target group at its new rank (spec #85, ticket #89)', () => {
+    const projectManager = projectManagerWithTasks([
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [
+          { id: 'idea-1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'idea', boardRank: 'a' },
+          { id: 'idea-2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea', boardRank: 'm' },
+          { id: 'spec-1', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'spec', boardRank: 'a' },
+        ],
+      },
+    ]);
+    const store = new SidebarStore(projectManager);
+    store.ensureProjectExpanded('project-1');
+
+    // The exact write a between-rows drop persists: stage change plus an
+    // interpolated Board Rank (`computeSidebarDropPosition`'s output). The
+    // projection must move the row into the target group, ordered by rank.
+    const tasks = taskManagerOf(projectManager, 'project-1').tasks;
+    runInAction(() => {
+      tasks.get('idea-2')!.data.workflowStage = 'spec';
+      tasks.get('idea-2')!.data.boardRank = rankBetween('a', 'm');
+    });
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'group:Idea:1',
+      'task:idea-1',
+      'group:Spec:2',
+      'task:spec-1',
+      'task:idea-2',
+    ]);
+  });
+
+  it('lands an Unstaged drop as a loose row in rank order, above the unranked ones (spec #85, ticket #89)', () => {
+    const projectManager = projectManagerWithTasks([
+      {
+        id: 'project-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tasks: [
+          { id: 'u1', createdAt: '2026-01-01T00:00:01.000Z' },
+          { id: 'u2', createdAt: '2026-01-01T00:00:02.000Z', boardRank: 'a' },
+          { id: 'idea-1', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'idea', boardRank: 'z' },
+        ],
+      },
+    ]);
+    const store = new SidebarStore(projectManager);
+    store.ensureProjectExpanded('project-1');
+
+    const tasks = taskManagerOf(projectManager, 'project-1').tasks;
+    // A positioned Unstaged drop: stage cleared, ranked before u2's 'a'.
+    runInAction(() => {
+      tasks.get('idea-1')!.data.workflowStage = undefined;
+      tasks.get('idea-1')!.data.boardRank = rankBetween(null, 'a');
+    });
+
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'board:project-1',
+      'task:idea-1',
+      'task:u2',
+      'task:u1',
     ]);
   });
 });

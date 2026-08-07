@@ -25,11 +25,23 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { type SidebarRow, taskRowVariants } from '@renderer/features/sidebar/stage-group-row-model';
-import { getTaskStore } from '@renderer/features/tasks/stores/task-selectors';
+import { sortColumn, type ColumnId } from '@renderer/features/board/board-ordering';
+import {
+  computeSidebarDropPosition,
+  sidebarStageMoveOptions,
+  taskRowVariants,
+  type SidebarRow,
+} from '@renderer/features/sidebar/stage-group-row-model';
+import {
+  getTaskGitWorktreeStore,
+  getTaskStore,
+} from '@renderer/features/tasks/stores/task-selectors';
+import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
+import { useToast } from '@renderer/lib/hooks/use-toast';
 import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import { useParams, useWorkspaceSlots } from '@renderer/lib/layout/navigation-provider';
 import { sidebarStore } from '@renderer/lib/stores/app-state';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { SidebarBoardItem } from './board-item';
 import { SidebarProjectItem } from './project-item';
 import { SidebarStageGroupItem } from './stage-group-item';
@@ -51,6 +63,7 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
   const [dragPointerY, setDragPointerY] = useState<number | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const { toast } = useToast();
 
   const activeTaskProjectExpanded =
     currentView === 'task' && taskParams.projectId
@@ -195,20 +208,86 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
       if (newIdx === oldIdx) return;
       sidebarStore.setProjectOrder(arrayMove(ids, oldIdx, newIdx));
     } else if (oParsed.kind === 'task' && oParsed.projectId === aParsed.projectId) {
+      // Task drags (spec #85, ticket #89): grouped mode writes the board's
+      // stage and Board Rank fields through `updateBoardPosition` — the same
+      // path the Feature Board and the "Move to stage…" menu use (ADR 0006).
+      // The stale manual task order is inert in grouped mode and never
+      // written (spec: no data migration).
       const projectId = aParsed.projectId;
-      const taskIds = rows
-        .filter(
-          (r): r is Extract<SidebarRow, { kind: 'task' }> =>
-            r.kind === 'task' && r.projectId === projectId
-        )
-        .map((r) => r.taskId);
-      const oldIdx = taskIds.indexOf(aParsed.taskId);
-      const overTaskIdx = taskIds.indexOf(oParsed.taskId);
-      if (oldIdx === -1 || overTaskIdx === -1) return;
-      let newIdx = isAbove ? overTaskIdx : overTaskIdx + 1;
-      if (newIdx > oldIdx) newIdx -= 1;
-      if (newIdx === oldIdx) return;
-      sidebarStore.setTaskOrder(projectId, arrayMove(taskIds, oldIdx, newIdx));
+      const task = getTaskStore(projectId, aParsed.taskId);
+      if (!task) return;
+      const overRowIdx = rows.findIndex(
+        (r) => isSortableRow(r) && rowToDndId(r) === String(over.id)
+      );
+      if (overRowIdx === -1) return;
+      const overRow = rows[overRowIdx];
+      if (overRow.kind !== 'task') return;
+      const activeRowIdx = rows.findIndex(
+        (r) => isSortableRow(r) && rowToDndId(r) === String(active.id)
+      );
+      if (activeRowIdx === -1) return;
+
+      // The destination column: the group whose header precedes the over row
+      // (the row model's own layout), or `unstaged` when no header precedes.
+      const destinationColumn: ColumnId = taskRowStage(rows, overRowIdx) ?? 'unstaged';
+      const destinationStage = destinationColumn === 'unstaged' ? null : destinationColumn;
+
+      // Board authority gating (ADR 0006): only a cross-stage drop can be
+      // overwritten by the next sync pass — a same-group drop never changes
+      // the stage, exactly like the board's same-column reorder. A blocked
+      // destination is rejected with the board's own explanation as feedback
+      // (the same `fact + action` text the board shows for blocked drops).
+      const authority = taskDropAuthority(
+        projectId,
+        aParsed.taskId,
+        taskRowStage(rows, activeRowIdx),
+        destinationStage
+      );
+      if (authority.blocked) {
+        toast({
+          title: 'Stage move blocked',
+          description: authority.explanation ?? undefined,
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      // The destination's visible task rows in rendered order, dragged card
+      // excluded — the drop slot the user aimed at is decided by these rows.
+      const destRows: { idx: number; taskId: string; rank: string | null }[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.kind !== 'task' || row.projectId !== projectId) continue;
+        if ((taskRowStage(rows, i) ?? 'unstaged') !== destinationColumn) continue;
+        if (row.taskId === aParsed.taskId) continue;
+        const destTask = getTaskStore(projectId, row.taskId);
+        const destRegistered = destTask ? registeredTaskData(destTask) : null;
+        destRows.push({
+          idx: i,
+          taskId: row.taskId,
+          rank: destRegistered?.boardRank ?? null,
+        });
+      }
+
+      // Rank math mirrors the board exactly (`computeDropPosition`): the
+      // drop index is the over row's position among the destination's
+      // `sortColumn`-ordered entries, above or below per the pointer. Dropping
+      // below the destination's last rendered row is an unpositioned
+      // end-of-group drop — stage-only, `rank: null`, so the task lands
+      // unranked after the ranked tasks (spec user story 16).
+      const destSorted = sortColumn(destRows);
+      const overSortedIdx = destSorted.findIndex((entry) => entry.taskId === oParsed.taskId);
+      if (overSortedIdx === -1) return;
+      const dropIndex: number | null =
+        !isAbove && destRows.length > 0 && destRows[destRows.length - 1]!.idx === overRowIdx
+          ? null
+          : overSortedIdx + (isAbove ? 0 : 1);
+      const position = computeSidebarDropPosition(
+        destinationColumn,
+        destSorted.map((entry) => ({ id: entry.taskId, rank: entry.rank })),
+        dropIndex
+      );
+      void task.updateBoardPosition(position.stage, position.rank);
     }
   }
 
@@ -290,7 +369,7 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
       <DragOverlay dropAnimation={null}>
         {activeDragId ? <DragOverlayContent dndId={activeDragId} /> : null}
       </DragOverlay>
-      <InsertionIndicator pointerY={dragPointerY} />
+      <InsertionIndicator pointerY={dragPointerY} rows={rows} />
     </DndContext>
   );
 });
@@ -321,6 +400,49 @@ function parseDndId(id: string): SidebarDndId | null {
     if (projectId && taskId) return { kind: 'task', projectId, taskId };
   }
   return null;
+}
+
+/**
+ * The Workflow Stage of the task row at `rowIndex` — derived from the row
+ * model's own layout ("a task row belongs to the group whose header precedes
+ * it", `taskRowVariants`): walk up to the nearest `stage-group` header;
+ * hitting the project or Board row first (or the top) means Unstaged (`null`).
+ * The same walk classifies both a drag's source row and its target row.
+ */
+function taskRowStage(rows: readonly SidebarRow[], rowIndex: number): WorkflowStage | null {
+  for (let i = rowIndex - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row.kind === 'stage-group') return row.stage;
+    if (row.kind === 'project' || row.kind === 'board') return null;
+  }
+  return null;
+}
+
+/**
+ * The board's authority answer for a sidebar task drop (spec #85, ticket #89):
+ * `blocked` only for a cross-stage destination a governing GitHub fact would
+ * reassert over — the exact #88 gating (`sidebarStageMoveOptions`'s
+ * `blocked` flag), never a second implementation. A same-stage drop (a
+ * reorder within the group, or between Unstaged rows) never changes the
+ * stage, so nothing contests it — mirroring the board's same-column
+ * reorder. `explanation` is the board's `fact + action` feedback text to
+ * surface when the drop is rejected.
+ */
+function taskDropAuthority(
+  projectId: string,
+  taskId: string,
+  sourceStage: WorkflowStage | null,
+  destinationStage: WorkflowStage | null
+): { blocked: boolean; explanation: string | null } {
+  if (sourceStage === destinationStage) return { blocked: false, explanation: null };
+  const task = getTaskStore(projectId, taskId);
+  const registered = task ? registeredTaskData(task) : null;
+  if (!registered) return { blocked: false, explanation: null };
+  const branchName = getTaskGitWorktreeStore(projectId, taskId)?.branchName ?? null;
+  const move = sidebarStageMoveOptions(registered, branchName);
+  const option = move.options.find((candidate) => candidate.stage === destinationStage);
+  if (!option?.blocked) return { blocked: false, explanation: null };
+  return { blocked: true, explanation: move.explanation };
 }
 
 // Project drags consider every visible row so dropping over a task maps to its
@@ -381,7 +503,13 @@ function DragOverlayContent({ dndId }: { dndId: string }) {
   );
 }
 
-function InsertionIndicator({ pointerY }: { pointerY: number | null }) {
+function InsertionIndicator({
+  pointerY,
+  rows,
+}: {
+  pointerY: number | null;
+  rows: readonly SidebarRow[];
+}) {
   const { active, over } = useDndContext();
   if (!active || !over || active.id === over.id) return null;
   const activeParsed = parseDndId(String(active.id));
@@ -393,6 +521,26 @@ function InsertionIndicator({ pointerY }: { pointerY: number | null }) {
     overParsed.projectId === activeParsed.projectId
   ) {
     return null;
+  }
+  // Never promise a drop the board's authority would reject (ADR 0006): over
+  // a destination a governing GitHub fact would overwrite, no insertion line
+  // is drawn — the same "no ghost in the disabled column" rule as the board.
+  if (activeParsed.kind === 'task' && overParsed.kind === 'task') {
+    const activeRowIdx = rows.findIndex(
+      (r) => isSortableRow(r) && rowToDndId(r) === String(active.id)
+    );
+    const overRowIdx = rows.findIndex(
+      (r) => isSortableRow(r) && rowToDndId(r) === String(over.id)
+    );
+    if (activeRowIdx !== -1 && overRowIdx !== -1) {
+      const authority = taskDropAuthority(
+        activeParsed.projectId,
+        activeParsed.taskId,
+        taskRowStage(rows, activeRowIdx),
+        taskRowStage(rows, overRowIdx)
+      );
+      if (authority.blocked) return null;
+    }
   }
   const overRect = over.rect;
   if (!overRect) return null;
