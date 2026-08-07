@@ -118,6 +118,7 @@ export async function runAcpTranscript(opts: TranscriptOptions): Promise<void> {
     cwd,
     env: spawnContext.agentEnv,
     cli: spawnContext.cli,
+    autoApprove: false,
   });
 
   const connResult = await createAcpAgentConnection(
