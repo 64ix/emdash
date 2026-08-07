@@ -1,7 +1,14 @@
 import type { GitBranchRef } from '@emdash/core/git';
 import { toStoredBranch } from '@main/core/tasks/stored-branch';
 import type { AppDb } from '@main/db/client';
-import { conversations, projectRemotes, projects, projectSettings, tasks } from '@main/db/schema';
+import {
+  conversations,
+  projectRemotes,
+  projects,
+  projectSettings,
+  pullRequests,
+  tasks,
+} from '@main/db/schema';
 
 const mainBranch: GitBranchRef = { type: 'local', branch: 'main' };
 
@@ -16,6 +23,11 @@ const TASK_B1_ID = 'bbbb0001-0000-0000-0000-000000000000';
 
 const CONV_A1_ID = 'cccc0001-0000-0000-0000-000000000000';
 const CONV_A2_ID = 'cccc0002-0000-0000-0000-000000000000';
+
+// Task A2's user-assigned PR (CONTEXT.md "Assigned PR", docs/adr/0009) — an open
+// PR on the task's own branch, so `assigned_pr_url` exercises the FK to
+// `pull_requests.url` in the fixture.
+const PR_A2_URL = 'https://github.com/example/emdash/pull/456';
 
 /**
  * Realistic but fully synthetic dataset — no sensitive data.
@@ -57,6 +69,24 @@ export async function baseline(db: AppDb): Promise<void> {
     .insert(projectSettings)
     .values([{ projectId: PROJECT_A_ID }, { projectId: PROJECT_B_ID }]);
 
+  // The PR must exist before any task references it through `assigned_pr_url`'s FK.
+  await db.insert(pullRequests).values([
+    {
+      url: PR_A2_URL,
+      repositoryUrl: 'https://github.com/example/emdash.git',
+      baseRefName: 'main',
+      baseRefOid: 'b'.repeat(40),
+      headRepositoryUrl: 'https://github.com/example/emdash.git',
+      headRefName: 'feat/migration-testing',
+      headRefOid: 'c'.repeat(40),
+      identifier: '#456',
+      title: 'Improve migration test tooling',
+      description: 'Reworks the fixture generator.',
+      status: 'open',
+      isDraft: 0,
+    },
+  ]);
+
   await db.insert(tasks).values([
     {
       id: TASK_A1_ID,
@@ -75,6 +105,7 @@ export async function baseline(db: AppDb): Promise<void> {
       taskBranch: 'feat/migration-testing',
       sourceBranch: toStoredBranch(mainBranch),
       workspaceId: `local:${PROJECT_A_ID}:branch:feat/migration-testing`,
+      assignedPrUrl: PR_A2_URL,
     },
     {
       id: TASK_A3_ID,
