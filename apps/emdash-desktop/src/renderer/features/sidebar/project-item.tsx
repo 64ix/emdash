@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React, { useCallback, useEffect } from 'react';
+import { taskNeedsAttention } from '@renderer/features/board/board-attention';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import {
   isUnmountedProject,
@@ -22,6 +23,7 @@ import {
   getGitRepositoryStore,
   projectViewKind,
 } from '@renderer/features/projects/stores/project-selectors';
+import { getTaskManagerStore } from '@renderer/features/tasks/stores/task-selectors';
 import { ConnectionStatusDot } from '@renderer/lib/components/connection-status-dot';
 import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import {
@@ -31,6 +33,7 @@ import {
 } from '@renderer/lib/layout/navigation-provider';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { appState, sidebarStore } from '@renderer/lib/stores/app-state';
+import { Badge } from '@renderer/lib/ui/badge';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -40,6 +43,7 @@ import {
 } from '@renderer/lib/ui/context-menu';
 import { BoundShortcut } from '@renderer/lib/ui/shortcut';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/tooltip';
+import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { cn } from '@renderer/utils/utils';
 import type { ConnectionState } from '@shared/core/ssh/ssh';
 import {
@@ -78,8 +82,8 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
     void repo?.remoteData.load();
   }, [projectId]);
 
-  // `board` (ticket #43) resolves here too — opening a project's board keeps
-  // its sidebar project row looking active, same as opening its task list.
+  // `board` resolves here too — opening a project's board keeps its sidebar
+  // project row looking active, same as opening its task list.
   const currentProjectId = activeProjectIdForView(currentView, {
     task: taskParams.projectId,
     project: projectParams.projectId,
@@ -88,6 +92,23 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
   const currentTaskId = currentView === 'task' ? taskParams.taskId : null;
 
   const isProjectActive = currentProjectId === projectId && !currentTaskId;
+
+  // Attention count: `taskNeedsAttention` (board-attention.ts) is the single
+  // shared predicate the board's own Needs Attention filter also uses, so
+  // this count never promises more than opening the board would actually
+  // show. Hidden Tasks (ticket #87) are sidebar-only view state — a task
+  // hidden from the sidebar must not inflate the badge, exactly as it no
+  // longer renders a sidebar row. Surfaces on the project row — the project
+  // row itself is the sidebar's canonical entry point to the board.
+  const manager = getTaskManagerStore(projectId);
+  const hiddenIds = new Set(sidebarStore.hiddenTaskIdsByProject[projectId] ?? []);
+  let attentionCount = 0;
+  if (manager) {
+    for (const [taskId, task] of manager.tasks) {
+      if (hiddenIds.has(taskId)) continue;
+      if (taskNeedsAttention(task)) attentionCount++;
+    }
+  }
 
   useEffect(() => {
     if (isProjectActive) prefetchRepository();
@@ -111,7 +132,12 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
   const canReconnect = sshConnectionState !== 'connected';
   const ProjectIcon = isSshProject ? FolderInput : FolderClosed;
   const projectLabel = project.name ?? 'project';
-  const openProject = () => navigate('project', { projectId });
+  // Clicking a project opens its Feature Board directly — the board no longer
+  // has a dedicated sidebar row of its own.
+  const openProject = () => {
+    captureTelemetry('board_opened', { source: 'sidebar', project_id: projectId });
+    navigate('board', { projectId });
+  };
 
   const renderSpinnerWithTooltip = () => {
     if (!isUnregisteredProject(project)) return null;
@@ -188,6 +214,15 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
               )}
             </SidebarMenuAction>
           </div>
+          {attentionCount > 0 && (
+            <Badge
+              variant="secondary"
+              className="shrink-0"
+              aria-label={`${attentionCount} task${attentionCount === 1 ? '' : 's'} need attention`}
+            >
+              {attentionCount}
+            </Badge>
+          )}
           <Tooltip>
             <TooltipTrigger
               className="h-6"

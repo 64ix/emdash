@@ -245,7 +245,7 @@ export function pullRequestErrorMessage(error: PullRequestError): string {
  * Returns the open PR if one exists, otherwise the most recently created PR.
  * Use this everywhere a single "current" PR needs to be displayed.
  */
-export function selectCurrentPr(prs: PullRequest[]): PullRequest | undefined {
+export function selectCurrentPr(prs: readonly PullRequest[]): PullRequest | undefined {
   if (prs.length === 0) return undefined;
   const open = prs.find((pr) => pr.status === 'open');
   if (open) return open;

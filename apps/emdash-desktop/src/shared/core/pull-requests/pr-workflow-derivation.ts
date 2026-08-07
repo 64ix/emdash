@@ -158,24 +158,45 @@ export type TaskStageAuthorityFact<T extends PrWorkflowFact> = {
 };
 
 /**
- * Derives the Workflow Stage authority fact for a task's Spec link: which PR (if
- * any) proves its stage, and whether that fact currently governs the *persisted*
- * stage. See CONTEXT.md ("Workflow Stage") and docs/adr/0003 for the authority
- * model, and `BoardSyncService.syncProject` for the periodic pass this fact
- * predicts. Scope: this only covers the PR-provable half of ADR 0003 (`review`,
- * `shipped`, PR-triggered `triage`) — the issue-provable half (`exploring`,
- * `spec` from a live Map/Spec issue state) needs a live GitHub call the inbound
- * issues sync alone performs, not data already at hand, so it is intentionally
- * left alone here.
+ * Derives the Workflow Stage authority fact for a task's PR: which PR (if any)
+ * proves its stage, and whether that fact currently governs the *persisted*
+ * stage. See CONTEXT.md ("Workflow Stage", "Assigned PR") and docs/adr/0003,
+ * docs/adr/0009 for the authority model, and `BoardSyncService.syncProject` for
+ * the periodic pass this fact predicts. Scope: this only covers the
+ * PR-provable half of ADR 0003 (`review`, `shipped`, PR-triggered `triage`) —
+ * the issue-provable half (`exploring`, `spec` from a live Map/Spec issue
+ * state) needs a live GitHub call the inbound issues sync alone performs, not
+ * data already at hand, so it is intentionally left alone here.
  */
 export function deriveTaskStageAuthorityFact<T extends PrWorkflowFact>(input: {
   currentStage: WorkflowStage | null;
+  /**
+   * The task's Assigned PR fact (CONTEXT.md "Assigned PR", docs/adr/0009):
+   * when set it is the holding fact — open proves `review`, merged proves
+   * `shipped`, closed-without-merge proves `triage` — ahead of every
+   * Spec-derived match, with the same "proven unless the persisted stage is
+   * `triage`" rule. Independent of the Spec link: a link-less task with an
+   * assigned PR still has an authority fact. `null`/`undefined` reads as
+   * unassigned, in which case the Spec-derived authority applies unchanged.
+   */
+  assignedPr?: T | null;
   specIssueNumber: number | null;
   /** The repository the Spec issue lives in — see `findSpecMatchingPrs`. */
   specRepositoryUrl?: string | null;
   taskBranch?: string | null;
   prFacts: readonly T[];
 }): TaskStageAuthorityFact<T> {
+  if (input.assignedPr) {
+    // `PullRequestStatus` is always one of open/merged/closed, so a single
+    // assigned PR always derives a stage — the same mapping and the same
+    // "never proven while persisted `triage`" rule as the Spec-derived path
+    // below (the periodic pass never revisits a triaged task).
+    return {
+      holdingPr: input.assignedPr,
+      isCurrentStageGithubProven: input.currentStage !== 'triage',
+    };
+  }
+
   if (input.specIssueNumber == null) {
     return { holdingPr: null, isCurrentStageGithubProven: false };
   }

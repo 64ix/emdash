@@ -12,7 +12,9 @@ import {
   deriveTaskStageAuthorityFact,
   findSpecMatchingPrs,
   parseIssueNumberFromIdentifier,
+  type PrDerivedStage,
   type PrWorkflowFact,
+  type TaskStageAuthorityFact,
 } from '@shared/core/pull-requests/pr-workflow-derivation';
 import { prSyncProgressChannel } from '@shared/core/pull-requests/prEvents';
 import type { PullRequestStatus } from '@shared/core/pull-requests/pull-requests';
@@ -29,13 +31,17 @@ type StageAuthorityPrFact = PrWorkflowFact & {
   isDraft: boolean;
 };
 
-type SpecLinkedTaskRow = {
+/** A task row the periodic sync pass may derive a stage for: Spec-linked, or
+ * carrying an Assigned PR (CONTEXT.md "Assigned PR" — a user's explicit PR
+ * needs no Spec link to become the stage authority). */
+type BoardSyncTaskRow = {
   id: string;
   projectId: string;
   workflowStage: string | null;
   specIssueNumber: number | null;
   specRepositoryUrl: string | null;
   workspaceId: string | null;
+  assignedPrUrl: string | null;
 };
 
 /**
@@ -68,7 +74,13 @@ function specRepositoryUrlOf(linkedIssues: { spec?: { url?: string } } | null): 
  *   for a Spec-linked task unless a stronger open/merged PR fact already proves
  *   `review`/`shipped`.
  *
- * Link-less tasks (no `linkedIssues.spec`) are never touched. Once a task is in
+ * Every entry point honors the task's Assigned PR (CONTEXT.md "Assigned PR",
+ * docs/adr/0009) as the holding fact when one is set: its own status derives
+ * the stage — open → `review`, merged → `shipped`, closed-without-merge →
+ * `triage` — ahead of the Spec-derived matches, and unassigning falls back to
+ * the Spec-derived path unchanged.
+ *
+ * Link-less tasks without an assigned PR are never touched. Once a task is in
  * `triage`, `syncProject` never moves it out — only a user/agent gesture does
  * (a manual move, or provisioning the task again).
  */
@@ -117,33 +129,46 @@ export class BoardSyncService implements IInitializable, IDisposable {
   }
 
   /**
-   * The core derivation pass: recompute PR-derived stages for every Spec-linked,
-   * non-archived task in a project. A sync pass over unchanged state writes nothing
-   * and emits nothing.
+   * The core derivation pass: recompute PR-derived stages for every non-archived
+   * task in a project that has a Spec link or an Assigned PR. A sync pass over
+   * unchanged state writes nothing and emits nothing.
    */
   async syncProject(projectId: string): Promise<void> {
     const repositoryUrls = await this._repositoryUrlsForProject(projectId);
     if (repositoryUrls.length === 0) return;
 
-    const specLinkedTasks = await this._specLinkedTasks(projectId);
-    if (specLinkedTasks.length === 0) return;
+    const syncEligibleTasks = await this._syncEligibleTasks(projectId);
+    if (syncEligibleTasks.length === 0) return;
 
     const branchByWorkspace = await this._branchNamesByWorkspaceId(
-      specLinkedTasks.flatMap((t) => (t.workspaceId ? [t.workspaceId] : []))
+      syncEligibleTasks.flatMap((t) => (t.workspaceId ? [t.workspaceId] : []))
     );
     const prFacts = await this._prFactsForRepositories(repositoryUrls);
+    const assignedPrByUrl = await this._assignedPrFactsByUrls(
+      syncEligibleTasks.map((t) => t.assignedPrUrl)
+    );
 
-    for (const task of specLinkedTasks) {
+    for (const task of syncEligibleTasks) {
       // Triage is a sink for the periodic pass: only a user/agent gesture leaves it.
       if (task.workflowStage === 'triage') continue;
 
       const taskBranch = task.workspaceId ? branchByWorkspace.get(task.workspaceId) : undefined;
-      const matches = findSpecMatchingPrs(prFacts, {
-        specIssueNumber: task.specIssueNumber,
-        specRepositoryUrl: task.specRepositoryUrl,
-        taskBranch,
-      });
-      const derived = derivePrStage(matches);
+
+      // An assigned PR is the holding fact when set (CONTEXT.md "Assigned PR",
+      // docs/adr/0009): it wins over every Spec-derived match; unassigning
+      // falls back to the derivation below. A dangling URL (the FK's
+      // ON DELETE SET NULL should prevent it) reads as unassigned.
+      let derived: PrDerivedStage | null = null;
+      const assignedFact = task.assignedPrUrl ? assignedPrByUrl.get(task.assignedPrUrl) : undefined;
+      if (assignedFact) derived = derivePrStage([assignedFact]);
+      if (!derived && task.specIssueNumber != null) {
+        const matches = findSpecMatchingPrs(prFacts, {
+          specIssueNumber: task.specIssueNumber,
+          specRepositoryUrl: task.specRepositoryUrl,
+          taskBranch,
+        });
+        derived = derivePrStage(matches);
+      }
       if (!derived) continue; // no PR fact for this task — never touched on the periodic pass
 
       // expectedCurrentStage: drop the write if the stage moved since the
@@ -157,10 +182,11 @@ export class BoardSyncService implements IInitializable, IDisposable {
 
   /**
    * task-provisioned hook: sets `implementing` for a Spec-linked task. An open or
-   * merged matching PR is a stronger (GitHub-proven) fact and wins instead —
-   * provisioning never downgrades a task out of `review`/`shipped`. Provisioning
-   * itself is a user/agent gesture, so — unlike `syncProject` — it may move a task
-   * out of `triage`.
+   * merged PR fact — the task's Assigned PR, else a Spec-matching PR — is a
+   * stronger (GitHub-proven) fact and wins instead, so provisioning never
+   * downgrades a task out of `review`/`shipped`. Provisioning itself is a
+   * user/agent gesture, so — unlike `syncProject` — it may move a task out of
+   * `triage`.
    */
   async applyProvisionedStage(taskId: string): Promise<void> {
     const [row] = await db
@@ -170,27 +196,39 @@ export class BoardSyncService implements IInitializable, IDisposable {
         workflowStage: tasks.workflowStage,
         linkedIssues: tasks.linkedIssues,
         workspaceId: tasks.workspaceId,
+        assignedPrUrl: tasks.assignedPrUrl,
       })
       .from(tasks)
       .where(eq(tasks.id, taskId))
       .limit(1);
+    if (!row) return;
 
-    const specIssueNumber = parseIssueNumberFromIdentifier(row?.linkedIssues?.spec?.identifier);
-    if (!row || specIssueNumber == null) return; // link-less tasks are never auto-moved
-
-    const repositoryUrls = await this._repositoryUrlsForProject(row.projectId);
     const taskBranch = row.workspaceId
       ? (await this._branchNamesByWorkspaceId([row.workspaceId])).get(row.workspaceId)
       : undefined;
 
-    const prFacts =
-      repositoryUrls.length > 0 ? await this._prFactsForRepositories(repositoryUrls) : [];
-    const matches = findSpecMatchingPrs(prFacts, {
-      specIssueNumber,
-      specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
-      taskBranch,
-    });
-    const derived = derivePrStage(matches);
+    // An assigned PR is the holding fact when set (CONTEXT.md "Assigned PR",
+    // docs/adr/0009) — the same override `syncProject`/`getStageAuthority`
+    // apply; otherwise derive from the Spec link exactly as before.
+    let derived: PrDerivedStage | null = null;
+    if (row.assignedPrUrl) {
+      const assignedFact = await this._prFactByUrl(row.assignedPrUrl);
+      if (assignedFact) derived = derivePrStage([assignedFact]);
+    }
+    if (!derived) {
+      const specIssueNumber = parseIssueNumberFromIdentifier(row.linkedIssues?.spec?.identifier);
+      if (specIssueNumber == null) return; // link-less tasks are never auto-moved
+
+      const repositoryUrls = await this._repositoryUrlsForProject(row.projectId);
+      const prFacts =
+        repositoryUrls.length > 0 ? await this._prFactsForRepositories(repositoryUrls) : [];
+      const matches = findSpecMatchingPrs(prFacts, {
+        specIssueNumber,
+        specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
+        taskBranch,
+      });
+      derived = derivePrStage(matches);
+    }
 
     // A current `review`/`shipped` stage is a GitHub-proven fact; the transient
     // absence of a matching PR row (PR facts not yet synced, renamed branch)
@@ -209,8 +247,9 @@ export class BoardSyncService implements IInitializable, IDisposable {
   /**
    * Read-only stage authority fact for the Task Detail Panel (ticket #41,
    * CONTEXT.md "Workflow Stage"): the PR that proves — or would prove, once the
-   * next `syncProject` pass catches up — the task's Workflow Stage through its
-   * Spec Linked Issue Role, and whether that fact currently governs the
+   * next `syncProject` pass catches up — the task's Workflow Stage — the task's
+   * Assigned PR when one is set (CONTEXT.md "Assigned PR", docs/adr/0009), else
+   * the Spec-derived match — and whether that fact currently governs the
    * *persisted* stage. Reuses the exact same matching and precedence rules
    * `syncProject`/`applyProvisionedStage` use, so the panel never derives a
    * second, divergeable answer.
@@ -224,11 +263,33 @@ export class BoardSyncService implements IInitializable, IDisposable {
         workflowStage: tasks.workflowStage,
         linkedIssues: tasks.linkedIssues,
         workspaceId: tasks.workspaceId,
+        assignedPrUrl: tasks.assignedPrUrl,
       })
       .from(tasks)
       .where(eq(tasks.id, taskId))
       .limit(1);
     if (!row) return none;
+
+    const currentStage = (row.workflowStage as WorkflowStage | null) ?? null;
+
+    // Assigned-PR override (CONTEXT.md "Assigned PR", docs/adr/0009): the
+    // user's explicit assignment is the holding fact when set — open proves
+    // `review`, merged proves `shipped`, closed-without-merge proves `triage` —
+    // with no Spec link required. A dangling URL (the FK's ON DELETE SET NULL
+    // should prevent it) reads as unassigned and falls through to derivation.
+    if (row.assignedPrUrl) {
+      const assignedPr = await this._prFactByUrl(row.assignedPrUrl);
+      if (assignedPr) {
+        return this._stageAuthorityResult(
+          deriveTaskStageAuthorityFact({
+            currentStage,
+            assignedPr,
+            specIssueNumber: null,
+            prFacts: [],
+          })
+        );
+      }
+    }
 
     const specIssueNumber = parseIssueNumberFromIdentifier(row.linkedIssues?.spec?.identifier);
     if (specIssueNumber == null) return none; // link-less tasks have no PR authority to prove
@@ -241,14 +302,23 @@ export class BoardSyncService implements IInitializable, IDisposable {
       : undefined;
     const prFacts = await this._stageAuthorityPrFacts(repositoryUrls);
 
-    const { holdingPr, isCurrentStageGithubProven } = deriveTaskStageAuthorityFact({
-      currentStage: (row.workflowStage as WorkflowStage | null) ?? null,
-      specIssueNumber,
-      specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
-      taskBranch,
-      prFacts,
-    });
+    return this._stageAuthorityResult(
+      deriveTaskStageAuthorityFact({
+        currentStage,
+        specIssueNumber,
+        specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
+        taskBranch,
+        prFacts,
+      })
+    );
+  }
 
+  /** Maps a `deriveTaskStageAuthorityFact` result onto the RPC-erased shape the
+   * Task Detail Panel consumes. */
+  private _stageAuthorityResult({
+    holdingPr,
+    isCurrentStageGithubProven,
+  }: TaskStageAuthorityFact<StageAuthorityPrFact>): TaskStageAuthority {
     return {
       holdingPr: holdingPr
         ? {
@@ -271,7 +341,9 @@ export class BoardSyncService implements IInitializable, IDisposable {
     return rows.map((r) => r.remoteUrl);
   }
 
-  private async _specLinkedTasks(projectId: string): Promise<SpecLinkedTaskRow[]> {
+  /** The non-archived tasks a periodic pass may derive a stage for: Spec-linked,
+   * or carrying an Assigned PR (which needs no Spec link — docs/adr/0009). */
+  private async _syncEligibleTasks(projectId: string): Promise<BoardSyncTaskRow[]> {
     const rows = await db
       .select({
         id: tasks.id,
@@ -279,13 +351,16 @@ export class BoardSyncService implements IInitializable, IDisposable {
         workflowStage: tasks.workflowStage,
         linkedIssues: tasks.linkedIssues,
         workspaceId: tasks.workspaceId,
+        assignedPrUrl: tasks.assignedPrUrl,
       })
       .from(tasks)
       .where(and(eq(tasks.projectId, projectId), isNull(tasks.archivedAt), eq(tasks.type, 'task')));
 
     return rows.flatMap((row) => {
       const specIssueNumber = parseIssueNumberFromIdentifier(row.linkedIssues?.spec?.identifier);
-      if (specIssueNumber == null) return []; // link-less tasks are never auto-moved
+      if (specIssueNumber == null && row.assignedPrUrl == null) {
+        return []; // link-less, unassigned tasks are never auto-moved
+      }
       return [
         {
           id: row.id,
@@ -294,6 +369,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
           specIssueNumber,
           specRepositoryUrl: specRepositoryUrlOf(row.linkedIssues),
           workspaceId: row.workspaceId,
+          assignedPrUrl: row.assignedPrUrl,
         },
       ];
     });
@@ -354,17 +430,65 @@ export class BoardSyncService implements IInitializable, IDisposable {
       .from(pullRequests)
       .where(pullRequestRepositoryScope(repositoryUrls));
 
-    return rows.map((row) => ({
-      url: row.url,
-      title: row.title,
-      identifier: row.identifier ?? null,
-      isDraft: Boolean(row.isDraft),
-      repositoryUrl: row.repositoryUrl,
-      headRefName: row.headRefName,
-      status: row.status as PullRequestStatus,
-      description: row.description ?? null,
-    }));
+    return rows.map(toStageAuthorityPrFact);
   }
+
+  /** The assigned-PR facts for a set of task rows — one entry per task with an
+   * assigned PR, in the same display shape `_stageAuthorityPrFacts` produces. */
+  private async _assignedPrFactsByUrls(
+    urls: (string | null)[]
+  ): Promise<Map<string, StageAuthorityPrFact>> {
+    const assignedUrls = urls.filter((url): url is string => url != null);
+    if (assignedUrls.length === 0) return new Map();
+
+    const rows = await db
+      .select({
+        url: pullRequests.url,
+        title: pullRequests.title,
+        identifier: pullRequests.identifier,
+        isDraft: pullRequests.isDraft,
+        repositoryUrl: pullRequests.repositoryUrl,
+        headRefName: pullRequests.headRefName,
+        status: pullRequests.status,
+        description: pullRequests.description,
+      })
+      .from(pullRequests)
+      .where(inArray(pullRequests.url, assignedUrls));
+
+    return new Map(rows.map((row) => [row.url, toStageAuthorityPrFact(row)]));
+  }
+
+  /** The single assigned-PR fact for one task, or `null` when the URL is
+   * dangling (the FK's ON DELETE SET NULL should prevent that). */
+  private async _prFactByUrl(url: string): Promise<StageAuthorityPrFact | null> {
+    const facts = await this._assignedPrFactsByUrls([url]);
+    return facts.get(url) ?? null;
+  }
+}
+
+/** Maps a selected pull-request row (the shape `_stageAuthorityPrFacts` and
+ * `_assignedPrFactsByUrls` both select) to the display fact the stage authority
+ * needs. */
+function toStageAuthorityPrFact(row: {
+  url: string;
+  title: string;
+  identifier: string | null;
+  isDraft: number | null;
+  repositoryUrl: string;
+  headRefName: string;
+  status: string;
+  description: string | null;
+}): StageAuthorityPrFact {
+  return {
+    url: row.url,
+    title: row.title,
+    identifier: row.identifier ?? null,
+    isDraft: Boolean(row.isDraft),
+    repositoryUrl: row.repositoryUrl,
+    headRefName: row.headRefName,
+    status: row.status as PullRequestStatus,
+    description: row.description ?? null,
+  };
 }
 
 export const boardSyncService = new BoardSyncService();

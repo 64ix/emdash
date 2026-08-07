@@ -22,6 +22,8 @@ import {
 } from '@renderer/features/board/task-detail-panel-view-model';
 import { ConversationAgentIcon } from '@renderer/features/conversations/conversation-agent-icon';
 import type { ConversationManagerStore } from '@renderer/features/conversations/conversation-manager';
+import { getGitRepositoryStore } from '@renderer/features/projects/stores/project-selectors';
+import { PrSelector } from '@renderer/features/tasks/components/pr-selector/pr-selector';
 import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
 import {
   getConversationsForTask,
@@ -43,7 +45,8 @@ import { RelativeTime } from '@renderer/lib/ui/relative-time';
 import { MAX_CONVERSATION_TITLE_LENGTH } from '@shared/core/conversations/conversations';
 import type { GhostCard } from '@shared/core/issues/ghost-card';
 import { linkedIssueRoleLabels } from '@shared/core/linked-issue';
-import type { StageHoldingPr, TaskStageAuthority, WorkflowStage } from '@shared/core/tasks/tasks';
+import { getPrNumber, type PullRequest } from '@shared/core/pull-requests/pull-requests';
+import type { TaskStageAuthority, WorkflowStage } from '@shared/core/tasks/tasks';
 
 /** Fixed width (CONTEXT.md "Task Detail Panel"): roughly 380-420px, not resizable in v1. */
 export const TASK_DETAIL_PANEL_WIDTH_CLASS = 'w-[400px]';
@@ -90,18 +93,78 @@ function LinkedIssueRow({ link }: { link: TaskDetailPanelLink }) {
   );
 }
 
-/** The chain's final link (ticket #49): the Spec-derived PR. `data-delivery-chain-item`
- * distinguishes this row from the typed Linked Issue rows above it within the
- * same "Delivery chain" section. */
-function SpecDerivedPrRow({ pr }: { pr: StageHoldingPr }) {
+/**
+ * The task's PR row (ticket #100, CONTEXT.md "Assigned PR"): status icon, PR
+ * number, title, and the same external link every other row in the panel
+ * uses. Rendered inside the dedicated "Pull request" section — never inside
+ * "Delivery chain", which now keeps only Origin -> Map -> Spec.
+ */
+function TaskPullRequestRow({ pr }: { pr: PullRequest }) {
+  const prNumber = getPrNumber(pr);
   return (
-    <div data-delivery-chain-item="pr" className="flex items-center gap-2 text-xs">
+    <div data-task-pr-row className="flex items-center gap-2 text-xs">
       <StatusIcon pr={pr} className="size-3.5" disableTooltip />
+      {prNumber != null && (
+        <span className="shrink-0 font-sans text-foreground-muted">#{prNumber}</span>
+      )}
       <span className="min-w-0 flex-1 truncate" title={pr.title}>
         {pr.title}
       </span>
       <ExternalLinkButton url={pr.url} label={`Open ${pr.title} on GitHub`} />
     </div>
+  );
+}
+
+/**
+ * The "Pull request" section (ticket #100): always rendered when the task has
+ * a PR — assigned or derived, even with no linked issues — showing the PR's
+ * status, number and title with an external link, plus the assign/unassign
+ * controls. Assignment goes through the existing `PrSelector` picker over the
+ * project's synced PRs (the same component the create-task flow uses — never
+ * a second picker); its value is the *assigned* PR (not the derived one), so
+ * clearing it unassigns and display reverts to derivation.
+ */
+function PullRequestSection({
+  pr,
+  assignedPr,
+  repositoryUrl,
+  projectId,
+  onAssign,
+}: {
+  pr: PullRequest;
+  assignedPr: PullRequest | undefined;
+  repositoryUrl: string;
+  projectId: string;
+  onAssign: (pr: PullRequest | null) => void;
+}) {
+  return (
+    <PanelSection id="pull-request" title="Pull request">
+      <div className="flex flex-col gap-2">
+        <TaskPullRequestRow pr={pr} />
+        <PrSelector
+          value={assignedPr ?? null}
+          onValueChange={onAssign}
+          projectId={projectId}
+          repositoryUrl={repositoryUrl}
+          renderPlaceholder={() => (
+            <span className="flex h-7 w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-2 text-xs text-foreground-passive transition-colors hover:bg-background-2">
+              Assign a pull request
+            </span>
+          )}
+        />
+        {assignedPr && (
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label="Unassign pull request"
+            onClick={() => onAssign(null)}
+            className="self-start text-foreground-muted hover:text-foreground"
+          >
+            Unassign
+          </Button>
+        )}
+      </div>
+    </PanelSection>
   );
 }
 
@@ -341,9 +404,11 @@ export type TaskDetailPanelTarget =
 /**
  * Task Detail Panel (CONTEXT.md): the side panel that opens on the right of
  * the Feature Board when a card is clicked. Shows the task's vitals, typed
- * Linked Issue Roles, the Spec-derived PR, the Workflow Stage with its
- * authority, management actions (rename, pin/unpin, archive, "Open task"),
- * and — for a Ghost Card — the issue's own details with Adopt/Reject.
+ * Linked Issue Roles, its PR (CONTEXT.md "Assigned PR" — assigned, else
+ * derived — with assign/unassign controls, ticket #100), the Workflow Stage
+ * with its authority, management actions (rename, pin/unpin, archive, "Open
+ * task"), and — for a Ghost Card — the issue's own details with
+ * Adopt/Reject.
  *
  * All display logic lives in the pure `task-detail-panel-view-model` module;
  * this component only renders what it computes.
@@ -397,10 +462,11 @@ export const TaskDetailPanel = observer(function TaskDetailPanel({
 });
 
 /**
- * The real-task half of the Task Detail Panel: vitals, typed links, derived
- * PR and stage authority (ticket #41), plus management actions and direct
- * navigation (ticket #42). Store access follows the documented selectors:
- * `getTaskStore`/`getTaskManagerStore` plus explicit null checks, never
+ * The real-task half of the Task Detail Panel: vitals, typed links, the
+ * task's PR with assign/unassign controls (ticket #100) and stage authority
+ * (ticket #41), plus management actions and direct navigation (ticket #42).
+ * Store access follows the documented selectors: `getTaskStore`/
+ * `getTaskManagerStore` plus explicit null checks, never
  * `asProvisioned(...)!` / `asMounted(...)!`.
  */
 const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
@@ -443,6 +509,11 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
 
   const manager = getTaskManagerStore(projectId);
   const branchName = getTaskGitWorktreeStore(projectId, taskId)?.branchName ?? null;
+  // The repository the assign picker lists PRs for (ticket #100): the same
+  // PR-capable repository URL `TaskManagerStore` scopes its PR reloads to.
+  // `''` when the project isn't mounted or has no PR capability — the picker
+  // then renders disabled, never a second fetch path.
+  const pullRequestRepositoryUrl = getGitRepositoryStore(projectId)?.pullRequestRepositoryUrl ?? '';
   // Conversations section (ticket #68): reads the same per-task conversation
   // manager registry the task-level status dot already reads through
   // `taskAgentStatus` — populated for every task, provisioned or not, when
@@ -476,6 +547,15 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
   const handleRename = () => showRenameTask({ projectId, taskId, currentName: task.name });
 
   const handleTogglePin = () => void store.setPinned(!task.isPinned);
+
+  // Assign/unassign the task's Assigned PR (ticket #100): delegates to the
+  // task store's optimistic-setter, which persists through the
+  // `tasks.setTaskAssignedPr` RPC and rolls back on failure. The panel and
+  // titlebar chip both re-derive through `resolveTaskPr`, so the assignment
+  // (or its removal) is reflected in both surfaces from this single call.
+  const handleSetAssignedPr = (pr: PullRequest | null) => {
+    void store.setAssignedPr(pr);
+  };
 
   // Reuses the existing archive RPC via the task manager. Safe if the task
   // disappears mid-interaction: `archiveTask` itself re-reads the task from
@@ -616,21 +696,33 @@ const TaskDetailPanelBody = observer(function TaskDetailPanelBody({
         )}
       </PanelSection>
 
+      {/* Pull request (ticket #100, CONTEXT.md "Assigned PR"): the task's PR —
+          assigned, else branch-matched, else Spec-referencing (`resolveTaskPr`,
+          same helper the titlebar chip uses). Rendered whenever a PR exists,
+          even with no linked issues; the row opens the PR externally and the
+          picker/unassign controls below manage the assignment. */}
+      {vm.pullRequest && (
+        <PullRequestSection
+          pr={vm.pullRequest}
+          assignedPr={task.assignedPr}
+          repositoryUrl={pullRequestRepositoryUrl}
+          projectId={projectId}
+          onAssign={handleSetAssignedPr}
+        />
+      )}
+
       {/* Delivery chain (ticket #49, CONTEXT.md "Origin Issue", "Map",
-          "Spec"): Origin -> Map -> Spec -> Pull Request, in that order, each
-          opening at its external source (`ExternalLinkButton` -> `app.openExternal`,
-          the same helper every row here already used before this ticket —
-          never a raw `window.open`/`<a target=_blank>`). Origin/Map/Spec come
-          from `vm.links` (already Origin-Map-Spec ordered); the Spec-derived
-          PR — the chain's most advanced link — renders last, in the same
-          section, rather than as a second, disconnected block. */}
-      {(vm.links.length > 0 || vm.pr) && (
+          "Spec"): Origin -> Map -> Spec, in that order, each opening at its
+          external source (`ExternalLinkButton` -> `app.openExternal`, the
+          same helper every row here already used before this ticket — never
+          a raw `window.open`/`<a target=_blank>`). The Spec-derived PR
+          moved out into the dedicated "Pull request" section (ticket #100). */}
+      {vm.links.length > 0 && (
         <PanelSection id="delivery-chain" title="Delivery chain">
           <div className="flex flex-col gap-1.5">
             {vm.links.map((link) => (
               <LinkedIssueRow key={link.role} link={link} />
             ))}
-            {vm.pr && <SpecDerivedPrRow pr={vm.pr} />}
           </div>
         </PanelSection>
       )}

@@ -149,6 +149,13 @@ export const tasks = sqliteTable(
     workspaceIntent: text('workspace_intent'), // JSON: { git: GitSetup; workspace: WorkspaceLocation }
     type: text('type').notNull().default('task'), // 'task' | 'automation-run'
     automationRunId: text('automation_run_id'), // set when type = 'automation-run'; FK added after automationRuns is defined
+    // The user-assigned PR (CONTEXT.md "Assigned PR", docs/adr/0009): at most one
+    // per task; when set it overrides every derived PR (branch match, Spec
+    // reference) for display and stage authority. Null = derive from GitHub facts.
+    // FK added after pullRequests is defined.
+    assignedPrUrl: text('assigned_pr_url').references(() => pullRequests.url, {
+      onDelete: 'set null',
+    }),
   },
   (table) => ({
     projectIdIdx: index('idx_tasks_project_id').on(table.projectId),

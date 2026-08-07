@@ -1,10 +1,12 @@
+import type { Result } from '@emdash/shared';
 /**
  * Browser-mode tests for the Task Detail Panel: the shell's gestures
  * (CONTEXT.md, ticket #40 — open, switch, close, highlight, drag-with-panel-
  * open, disappearance), its content (ticket #41 — vitals, typed links,
- * derived PR, stage authority), and its actions (ticket #42 — the hover
- * arrow, the "Open task" button, and the ghost adopt-then-switch path).
- * Rename/pin/archive reuse pre-existing RPCs already covered where they
+ * derived PR, stage authority; ticket #100 — the dedicated "Pull request"
+ * section with its assign/unassign controls), and its actions (ticket #42 —
+ * the hover arrow, the "Open task" button, and the ghost adopt-then-switch
+ * path). Rename/pin/archive reuse pre-existing RPCs already covered where they
  * live, so this file does not re-test them (ticket #42's own criterion).
  *
  * Mounts the real BoardMainPanel in Chromium (real layout, real
@@ -13,8 +15,13 @@
  * browser tests (`board-dnd.test.tsx`) — including mocking `@renderer/lib/ipc`
  * directly rather than the generic `electronAPI.invoke` stub, so
  * `tasks.getTaskStageAuthority` can return a distinct fixture per test.
+ *
+ * Ticket #100's "Pull request" section renders the real `PrSelector` (the
+ * same picker the create-task flow uses), so the harness mounts a
+ * `QueryClientProvider` and stubs `rpc.pullRequests` the way the picker's own
+ * test file does.
  */
-import type { Result } from '@emdash/shared';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { observable, runInAction } from 'mobx';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -28,7 +35,6 @@ import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type {
   CreateTaskError,
   CreateTaskSuccess,
-  StageHoldingPr,
   Task,
   TaskStageAuthority,
 } from '@shared/core/tasks/tasks';
@@ -62,10 +68,18 @@ type MockStore = {
     // focused-task navigation suite's search-filter interaction never trips
     // it for a mock task that otherwise has no reason to carry any PRs.
     prs?: PullRequest[];
+    // Ticket #100: the task's Assigned PR (CONTEXT.md "Assigned PR") — the
+    // panel's PR section derives through `resolveTaskPr`, so this field
+    // drives the "assigned wins" behavior.
+    assignedPr?: PullRequest;
   };
   conversationStats: Record<string, number>;
   updateBoardPosition: ReturnType<typeof vi.fn>;
   setPinned: ReturnType<typeof vi.fn>;
+  // Ticket #100: the panel's assign/unassign control delegates here; the
+  // store method itself (optimistic update + `tasks.setTaskAssignedPr` RPC,
+  // rollback on failure) is covered by task-store.test.ts.
+  setAssignedPr: ReturnType<typeof vi.fn>;
   // `openTaskView`'s own provision-then-navigate check
   // (`board-main-panel.tsx`): `state === 'unprovisioned' && phase === 'idle'`.
   // Defaulted to `'provisioned'`/`null` by `makeStore` below — most tests
@@ -169,8 +183,21 @@ const mocks = vi.hoisted(() => ({
   // Ticket #50: the task titlebar's Workflow Stage chip carries this back to
   // the board via `useParams('board')`. A mutable field (not a fixed
   // literal) so individual tests can drive it, mirroring how
-  // `sidebar-board-row.test.tsx` makes its own mocked params configurable.
+  // `sidebar-project-row.test.tsx` makes its own mocked params configurable.
   focusTaskId: undefined as string | undefined,
+  // Ticket #100: the project's PR-capable repository URL, read by the
+  // panel's mocked `getGitRepositoryStore` selector to feed the assign
+  // picker. `''` by default (project not mounted) so the picker's queries
+  // stay disabled outside the picker tests.
+  pullRequestRepositoryUrl: '' as string,
+  // Ticket #100: the project's synced PRs served to the picker's
+  // `listPullRequests` query, and the sync RPC result.
+  listPullRequests: vi.fn(() =>
+    Promise.resolve({ success: true, data: { prs: [] as PullRequest[] } })
+  ),
+  syncPullRequests: vi.fn(() => Promise.resolve({ success: true })),
+  setTaskAssignedPr: vi.fn((_taskId: string, _prUrl: string | null) => Promise.resolve()),
+  openExternal: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
@@ -181,6 +208,9 @@ vi.mock('@renderer/lib/layout/navigation-provider', () => ({
 vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
   getProjectStore: () => ({}),
   projectDisplayName: () => 'Test project',
+  // Ticket #100: the panel's assign picker reads the project's PR-capable
+  // repository URL through this selector; `''` disables its queries.
+  getGitRepositoryStore: () => ({ pullRequestRepositoryUrl: mocks.pullRequestRepositoryUrl }),
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
@@ -259,9 +289,18 @@ vi.mock('@renderer/lib/ipc', () => ({
     tasks: {
       syncBoardStages: vi.fn(() => Promise.resolve()),
       getTaskStageAuthority: mocks.getTaskStageAuthority,
+      // Ticket #100: the panel's assign/unassign persistence RPC.
+      setTaskAssignedPr: mocks.setTaskAssignedPr,
+    },
+    pullRequests: {
+      // Ticket #100: the assign picker (`PrSelector`) lists and syncs the
+      // project's PRs through these — same surface its own tests stub.
+      listPullRequests: mocks.listPullRequests,
+      syncPullRequests: mocks.syncPullRequests,
+      getPullRequestsForTask: vi.fn(() => Promise.resolve({ success: true, data: { prs: [] } })),
     },
     app: {
-      openExternal: vi.fn(() => Promise.resolve()),
+      openExternal: mocks.openExternal,
     },
   },
   events: {
@@ -270,6 +309,10 @@ vi.mock('@renderer/lib/ipc', () => ({
 }));
 
 import { BoardMainPanel } from '@renderer/features/board/board-main-panel';
+
+// Ticket #100: shared query client for the assign picker's react-query hooks
+// (`retry: false` so a stubbed-down RPC error never spins a retry loop).
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 function makeStore(
   id: string,
@@ -289,6 +332,7 @@ function makeStore(
     conversationStats: {},
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
     setPinned: vi.fn().mockResolvedValue(undefined),
+    setAssignedPr: vi.fn().mockResolvedValue(undefined),
     ...storeOverrides,
   };
 }
@@ -308,6 +352,7 @@ function makeLiveStore(id: string, overrides: Partial<MockStore['data']> = {}) {
     data,
     conversationStats: {},
     updateBoardPosition: vi.fn().mockResolvedValue(undefined),
+    setAssignedPr: vi.fn().mockResolvedValue(undefined),
   } as unknown as MockStore & { data: typeof data };
 }
 
@@ -413,6 +458,13 @@ function setupDom() {
     mocks.adoptGhostCard.mockReset();
     mocks.rejectGhostCard.mockImplementation(() => Promise.resolve());
     mocks.focusTaskId = undefined;
+    mocks.pullRequestRepositoryUrl = '';
+    mocks.listPullRequests.mockImplementation(() =>
+      Promise.resolve({ success: true, data: { prs: [] as PullRequest[] } })
+    );
+    mocks.syncPullRequests.mockImplementation(() => Promise.resolve({ success: true }));
+    mocks.setTaskAssignedPr.mockImplementation(() => Promise.resolve());
+    mocks.openExternal.mockImplementation(() => Promise.resolve());
   });
 
   afterEach(() => {
@@ -424,11 +476,20 @@ function setupDom() {
     conversationManagersByTaskId.clear();
     vi.clearAllMocks();
     mocks.focusTaskId = undefined;
+    mocks.pullRequestRepositoryUrl = '';
+    queryClient.clear();
   });
 }
 
 async function mount() {
-  root.render(<BoardMainPanel />);
+  // Ticket #100: the panel's assign picker (`PrSelector`) runs its PR list
+  // through @tanstack/react-query, so the harness provides a client — the
+  // same wrapper the picker's own test file uses.
+  root.render(
+    <QueryClientProvider client={queryClient}>
+      <BoardMainPanel />
+    </QueryClientProvider>
+  );
   await settle();
 }
 
@@ -521,10 +582,17 @@ function linkedIssueRoles(): string[] {
   );
 }
 
-/** The Spec-derived PR's own row within the merged "Delivery chain" section
- * (ticket #49), or `null` when nothing references the Spec. */
-function deliveryChainPrRow(): Element | null {
-  return host.querySelector('[data-delivery-chain-item="pr"]');
+/** The task's PR row within the dedicated "Pull request" section (ticket
+ * #100), or `null` when the section isn't rendered. */
+function taskPrRow(): Element | null {
+  return host.querySelector('[data-task-pr-row]');
+}
+
+/** The section's assign picker trigger button (the reused `PrSelector`). */
+function assignPrPickerTrigger(): HTMLElement | null {
+  return host.querySelector(
+    '[data-panel-section="pull-request"] button[data-slot="combobox-trigger"]'
+  );
 }
 
 /** A card's hover-revealed direct-navigation arrow (ticket #42). */
@@ -585,6 +653,43 @@ function makeCreatedTask(overrides: Partial<Task> = {}): Task {
     conversations: {},
     type: 'task',
     workflowStage: 'idea',
+    ...overrides,
+  };
+}
+
+/** A full synced PR fixture (ticket #100), defaulted to an open PR on `task/branch`. */
+function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
+  return {
+    url: 'https://github.com/acme/repo/pull/1',
+    provider: 'github',
+    // Normalized repository URL — the shape `pull_requests.repository_url`
+    // actually stores (no `.git`), which is what the Spec-reference matcher
+    // compares against.
+    repositoryUrl: 'https://github.com/acme/repo',
+    baseRefName: 'main',
+    baseRefOid: 'b'.repeat(40),
+    headRepositoryUrl: 'https://github.com/acme/repo.git',
+    headRefName: 'task/branch',
+    headRefOid: 'h'.repeat(40),
+    identifier: '#1',
+    title: 'Example PR',
+    description: null,
+    status: 'open',
+    isDraft: false,
+    additions: null,
+    deletions: null,
+    changedFiles: null,
+    commitCount: null,
+    mergeableStatus: 'UNKNOWN',
+    mergeStateStatus: 'UNKNOWN',
+    reviewDecision: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    mergedAt: null,
+    author: null,
+    labels: [],
+    assignees: [],
+    checks: [],
     ...overrides,
   };
 }
@@ -1222,10 +1327,11 @@ describe('Task Detail Panel — typed links (ticket #41)', () => {
 describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)', () => {
   setupDom();
 
-  // Ticket #49: Origin/Map/Spec and the Spec-derived PR merge into one
-  // "Delivery chain" section — a task with linked issues but no PR still
-  // shows the chain (its typed links), just with no PR row inside it.
-  it('shows no PR row in the delivery chain when nothing references the Spec', async () => {
+  // Ticket #100: Origin/Map/Spec live in the "Delivery chain" section, and
+  // the task's PR (assigned, else derived) moved into its own dedicated
+  // "Pull request" section — so a task with linked issues but no PR shows
+  // the chain (its typed links) and no PR section at all.
+  it('shows no PR section when nothing is assigned and no PR derives, while the delivery chain keeps its links', async () => {
     const linkedIssues: LinkedIssueRoles = {
       version: '1',
       origin: {
@@ -1244,22 +1350,40 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
 
     expect(panelSection('delivery-chain')).not.toBeNull();
-    expect(deliveryChainPrRow()).toBeNull();
+    expect(linkedIssueRoles()).toEqual(['origin']);
+    expect(panelSection('pull-request')).toBeNull();
+    expect(taskPrRow()).toBeNull();
   });
 
-  it('shows the Spec-derived PR in the delivery chain, disables the stage selector, and names the holding fact', async () => {
-    const pr: StageHoldingPr = {
+  // Ticket #100: the PR row now derives from the task's own payload through
+  // the shared `resolveTaskPr` helper (the stage-authority RPC only feeds the
+  // stage explanation below) — a Spec-referencing PR on the task's synced set
+  // shows up even though nothing is assigned.
+  it('shows the Spec-referencing PR in the Pull request section, disables the stage selector, and names the holding fact', async () => {
+    const spec: LinkedIssueRoles['spec'] = {
+      provider: 'github',
+      url: 'https://github.com/acme/repo/issues/9',
+      title: 'Spec issue',
+      identifier: '#9',
+    };
+    const pr: PullRequest = makePr({
       url: 'https://github.com/acme/repo/pull/9',
       title: 'Ship the feature',
       identifier: '#9',
       status: 'open',
-      isDraft: false,
-    };
+      description: 'Closes #9',
+      // Not the task's branch: only the Spec reference can match it.
+      headRefName: 'feat/ship-it',
+    });
     mocks.getTaskStageAuthority.mockResolvedValueOnce({
       holdingPr: pr,
       isCurrentStageGithubProven: true,
     });
-    const a = makeStore('card-a', { workflowStage: 'review' });
+    const a = makeStore('card-a', {
+      workflowStage: 'review',
+      linkedIssues: { version: '1', spec },
+      prs: [pr],
+    });
     managerTasks.set(a.data.id, a);
     await mount();
 
@@ -1267,11 +1391,11 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     await settle();
     await settle();
 
-    expect(panelSection('delivery-chain')).not.toBeNull();
-    expect(deliveryChainPrRow()).not.toBeNull();
+    expect(panelSection('pull-request')).not.toBeNull();
+    expect(taskPrRow()).not.toBeNull();
     expect(panelText()).toContain('Ship the feature');
-    expect(stageSelect().disabled).toBe(true);
     expect(panelText()).toContain('#9');
+    expect(stageSelect().disabled).toBe(true);
   });
 
   it('offers only the declarative stages, and applies a stage change, when the stage is declarative', async () => {
@@ -1358,6 +1482,191 @@ describe('Task Detail Panel — Spec-derived PR and stage authority (ticket #41)
     // The linked issue is still listed in the Delivery chain section (ticket
     // #41's content) regardless of which stage-authority claim it backs.
     expect(linkedIssueRoles()).toEqual(['spec']);
+  });
+});
+
+// Ticket #100: the dedicated "Pull request" section (CONTEXT.md "Assigned
+// PR"). Always rendered when a PR exists — assigned or derived, even with no
+// linked issues; shows status, number and title with an external link; and
+// assigns through the reused `PrSelector` picker over the project's synced
+// PRs. The picker itself (its own search/status filter/error states) is
+// covered by `pr-selector.test.ts` — these tests only pin the panel's
+// wiring: that the section renders, that the row opens the PR, and that
+// picking/unassigning reaches the store's `setAssignedPr` (which persists
+// via `tasks.setTaskAssignedPr`).
+describe('Task Detail Panel — Pull request section (ticket #100)', () => {
+  setupDom();
+
+  it('renders the PR row with status, number and title for a branch-matched PR, even with no linked issues', async () => {
+    const pr = makePr({
+      url: 'https://github.com/acme/repo/pull/7',
+      identifier: '#7',
+      title: 'A purely branch-matched PR',
+      status: 'merged',
+    });
+    const a = makeStore('card-a', { prs: [pr] });
+    branchByTaskId.set('card-a', 'task/branch');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    const row = taskPrRow();
+    expect(row).not.toBeNull();
+    expect(row!.textContent).toContain('#7');
+    expect(row!.textContent).toContain('A purely branch-matched PR');
+    // Status icon: the row leads with the merged-status icon (`StatusIcon`,
+    // the same component the Changes panel and the picker use).
+    expect(row!.querySelector('svg')).not.toBeNull();
+    expect(panelSection('delivery-chain')).toBeNull(); // no links, no chain
+  });
+
+  it('clicking the PR row opens the PR in the external browser', async () => {
+    const pr = makePr({ url: 'https://github.com/acme/repo/pull/7', title: 'Open me' });
+    const a = makeStore('card-a', { prs: [pr] });
+    branchByTaskId.set('card-a', 'task/branch');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    const link = taskPrRow()!.querySelector('button') as HTMLElement;
+    click(link);
+    await settle();
+
+    expect(mocks.openExternal).toHaveBeenCalledWith('https://github.com/acme/repo/pull/7');
+  });
+
+  it('shows no Pull request section at all when nothing is assigned and nothing derives', async () => {
+    const a = makeStore('card-a');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(panelSection('pull-request')).toBeNull();
+  });
+
+  it('shows the assigned PR instead of the derived one, with an unassign action that reverts to derivation', async () => {
+    const derived = makePr({
+      url: 'https://github.com/acme/repo/pull/3',
+      identifier: '#3',
+      title: 'Derived branch PR',
+    });
+    const assigned = makePr({
+      url: 'https://github.com/acme/repo/pull/99',
+      identifier: '#99',
+      title: 'User-assigned PR',
+      headRefName: 'some-other-branch',
+    });
+    // Live store with a faithful `setAssignedPr` (the real store method's
+    // optimistic payload update + persistence RPC): the unassign gesture must
+    // visibly revert the row to the derived PR and persist null.
+    const a = makeLiveStore('card-a', { prs: [derived, assigned], assignedPr: assigned });
+    a.setAssignedPr.mockImplementation((pr: PullRequest | null) => {
+      runInAction(() => {
+        a.data.assignedPr = pr ?? undefined;
+      });
+      void mocks.setTaskAssignedPr('card-a', pr?.url ?? null);
+    });
+    branchByTaskId.set('card-a', 'task/branch');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+
+    expect(taskPrRow()!.textContent).toContain('#99');
+    expect(taskPrRow()!.textContent).toContain('User-assigned PR');
+    expect(panelText()).not.toContain('Derived branch PR');
+
+    // Unassign action is present only while a PR is assigned.
+    const unassign = host.querySelector(
+      'button[aria-label="Unassign pull request"]'
+    ) as HTMLElement;
+    expect(unassign).not.toBeNull();
+    click(unassign);
+    await settle();
+
+    expect(a.setAssignedPr).toHaveBeenCalledWith(null);
+    expect(taskPrRow()!.textContent).toContain('#3');
+    expect(mocks.setTaskAssignedPr).toHaveBeenCalledWith('card-a', null);
+  });
+
+  it('assigns a PR from the project picker, persisting through the setTaskAssignedPr RPC', async () => {
+    const listed = makePr({
+      url: 'https://github.com/acme/repo/pull/11',
+      identifier: '#11',
+      title: 'PR from the project',
+      headRefName: 'other/branch',
+    });
+    mocks.pullRequestRepositoryUrl = 'https://github.com/acme/repo';
+    mocks.listPullRequests.mockImplementation(() =>
+      Promise.resolve({ success: true, data: { prs: [listed] } })
+    );
+    // The section needs a PR to render at all, so the task starts with a
+    // derived PR — the picker then lists the project's synced PRs (which can
+    // be a *different* PR than the derived one). The store mock mirrors the
+    // real `TaskStore.setAssignedPr` (optimistic payload update + the
+    // `tasks.setTaskAssignedPr` persistence RPC).
+    const derived = makePr({ identifier: '#2', title: 'Derived PR' });
+    const a = makeStore('card-a', { prs: [derived] });
+    a.setAssignedPr.mockImplementation((pr: PullRequest | null) => {
+      void mocks.setTaskAssignedPr('card-a', pr?.url ?? null);
+    });
+    branchByTaskId.set('card-a', 'task/branch');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(panelSection('pull-request')).not.toBeNull();
+
+    const trigger = assignPrPickerTrigger()!;
+    expect(trigger).not.toBeNull();
+    click(trigger);
+    await settle(6);
+
+    const item = document.body.querySelector('[data-slot="combobox-item"]') as HTMLElement;
+    expect(item).not.toBeNull();
+    click(item);
+    await settle(6);
+
+    expect(a.setAssignedPr).toHaveBeenCalledWith(listed);
+    expect(mocks.setTaskAssignedPr).toHaveBeenCalledWith('card-a', listed.url);
+  });
+
+  it('reflects an assignment landing on the payload while the panel is open (assigned wins live)', async () => {
+    const derived = makePr({
+      url: 'https://github.com/acme/repo/pull/3',
+      identifier: '#3',
+      title: 'Derived branch PR',
+    });
+    const assigned = makePr({
+      url: 'https://github.com/acme/repo/pull/99',
+      identifier: '#99',
+      title: 'User-assigned PR',
+      headRefName: 'some-other-branch',
+    });
+    const a = makeLiveStore('card-a', { prs: [derived, assigned] });
+    branchByTaskId.set('card-a', 'task/branch');
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    click(cardEl('card-a'));
+    await settle();
+    expect(taskPrRow()!.textContent).toContain('#3');
+
+    runInAction(() => {
+      a.data.assignedPr = assigned;
+    });
+    await settle();
+
+    expect(taskPrRow()!.textContent).toContain('#99');
+    expect(host.querySelector('button[aria-label="Unassign pull request"]')).not.toBeNull();
   });
 });
 

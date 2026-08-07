@@ -81,6 +81,10 @@ vi.mock('@renderer/lib/layout/navigation-provider', () => ({
 vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
   getProjectStore: () => ({}),
   projectDisplayName: () => 'Test project',
+  // Ticket #100: the Task Detail Panel's assign picker reads the project's
+  // PR-capable repository URL through this selector; undefined here means
+  // the picker's queries stay disabled.
+  getGitRepositoryStore: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
@@ -638,7 +642,7 @@ describe('Ghost Cards remain excluded from sortable ids (ticket #51)', () => {
     expect(moveHandle?.getAttribute('aria-roledescription')).toBe('sortable');
   });
 
-  it("a Ghost Card never receives dnd-kit's sortable/draggable attributes — mirrors #43's sidebar Board row exclusion", async () => {
+  it("a Ghost Card never receives dnd-kit's sortable/draggable attributes", async () => {
     const ghostCard = makeGhostCard();
     mocks.getGhostCards.mockImplementation(() => Promise.resolve([ghostCard]));
     await mount();
