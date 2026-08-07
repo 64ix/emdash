@@ -40,6 +40,10 @@ type MockStore = {
     // Stage authority (ticket #48): the facts `authorityForTask` reads.
     linkedIssues?: LinkedIssueRoles;
     prs?: PullRequest[];
+    // The task's Assigned PR (CONTEXT.md "Assigned PR", docs/adr/0009) — the
+    // holding fact `authorityForTask` must honor ahead of every Spec-derived
+    // match (integration-review regression for #101 x #48).
+    assignedPr?: PullRequest;
     workspaceId?: string;
   };
   conversationStats: Record<string, number>;
@@ -999,6 +1003,71 @@ describe('board drag-and-drop — GitHub-authoritative cards (ticket #48)', () =
     );
 
     // Triage is still the escape valve even for a PR-governed card.
+    captureTelemetryMock.mockClear();
+    const triageTarget = center(columnZone('Triage'));
+    await drag(cardEl('card-a'), triageTarget.x, triageTarget.y);
+    expect(a.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(a.updateBoardPosition).toHaveBeenCalledWith('triage', expect.any(String));
+  });
+
+  // Ticket #101 x #48 (integration review): an *assigned* PR (CONTEXT.md
+  // "Assigned PR", docs/adr/0009) must govern the card exactly like a
+  // Spec-derived one — even with no Spec link at all — or the drag would be
+  // allowed and silently reverted by the next `syncProject` pass. Regression
+  // for `authorityForTask` not threading `task.assignedPr` through.
+  it('disables cross-stage destinations for a card governed by its assigned PR, with no Spec link', async () => {
+    const assignedOpenPr: PullRequest = {
+      url: 'https://github.com/acme/repo/pull/88',
+      provider: 'github',
+      repositoryUrl: 'https://github.com/acme/repo',
+      baseRefName: 'main',
+      baseRefOid: 'abc',
+      headRepositoryUrl: 'https://github.com/acme/repo',
+      headRefName: 'task/branch',
+      headRefOid: 'def',
+      identifier: '#88',
+      title: 'Implement the spec',
+      description: null,
+      status: 'open',
+      isDraft: false,
+      additions: null,
+      deletions: null,
+      changedFiles: null,
+      commitCount: null,
+      mergeableStatus: null,
+      mergeStateStatus: null,
+      reviewDecision: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      mergedAt: null,
+      author: null,
+      labels: [],
+      assignees: [],
+      checks: [],
+    };
+    // No `linkedIssues` at all: the assigned PR is the only possible fact.
+    const a = makeStore('card-a', {
+      workflowStage: 'review',
+      prs: [assignedOpenPr],
+      assignedPr: assignedOpenPr,
+    });
+    managerTasks.set(a.data.id, a);
+    await mount();
+
+    const target = center(columnZone('Shipped'));
+    await drag(cardEl('card-a'), target.x, target.y);
+
+    expect(a.updateBoardPosition).not.toHaveBeenCalled();
+    expect(captureTelemetryMock).toHaveBeenCalledWith(
+      'board_move_blocked',
+      expect.objectContaining({
+        from_stage: 'review',
+        attempted_stage: 'shipped',
+        governing_fact: 'open-pr',
+      })
+    );
+
+    // Triage stays the escape valve.
     captureTelemetryMock.mockClear();
     const triageTarget = center(columnZone('Triage'));
     await drag(cardEl('card-a'), triageTarget.x, triageTarget.y);
