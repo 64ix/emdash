@@ -82,6 +82,10 @@ describe('globalBoardView.canActivate — open sync (spec #104, ticket #108)', (
     expect(globalBoardView.canActivate({ projectId: 'ghost' })).toEqual({ ok: true });
   });
 
+  it('defines a MainPanel (the view renders a full working screen)', () => {
+    expect(globalBoardView.MainPanel).toBeDefined();
+  });
+
   it('fires exactly ONE global getTasks (no projectId) on open — no per-project fan-out', () => {
     globalBoardView.canActivate({});
 
