@@ -20,6 +20,7 @@
  * out — the drag targets are the sortable row wrappers themselves, so the
  * gesture is fully real.
  */
+import { observable } from 'mobx';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -283,7 +284,9 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
     mocks.setProjectOrder.mockClear();
     mocks.setTaskOrder.mockClear();
     mocks.isStageGroupCollapsed.mockClear().mockReturnValue(false);
-    mocks.sidebarRows = defaultRows();
+    // Observable so the real `observer` virtual list re-renders when a test
+    // applies a drop's write to the rows (like the store projection would).
+    mocks.sidebarRows = observable.array(defaultRows()) as unknown as SidebarRow[];
     defaultStores();
   });
 
@@ -314,7 +317,7 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
     // The row lands in the target group: apply the write the way the real
     // projection does (the store re-groups from the observable task data —
     // sidebar-store.test.ts covers that seam) and the rendered list follows.
-    mocks.sidebarRows = [
+    (mocks.sidebarRows as unknown as { replace(rows: SidebarRow[]): void }).replace([
       { kind: 'project', projectId: 'p1' },
       { kind: 'board', projectId: 'p1' },
       { kind: 'task', projectId: 'p1', taskId: 'u1' },
@@ -326,7 +329,7 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
       { kind: 'task', projectId: 'p1', taskId: 'idea-2' },
       { kind: 'task', projectId: 'p1', taskId: 'spec-1' },
       { kind: 'task', projectId: 'p1', taskId: 'spec-2' },
-    ];
+    ]);
     await settle();
     const taskOrder = Array.from(host.querySelectorAll<HTMLElement>('[data-row="task"]')).map(
       (el) => el.textContent

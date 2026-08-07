@@ -73,6 +73,7 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   },
   taskAgentStatus: (store: MockTaskStore) => store.status,
   getTaskStore: () => undefined,
+  getTaskGitWorktreeStore: () => undefined,
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-store', () => ({
