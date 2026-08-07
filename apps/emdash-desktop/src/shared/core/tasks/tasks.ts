@@ -188,8 +188,9 @@ export type DeletePreflightResult = {
 };
 
 /** A PR that proves — or, once the next board-sync pass catches up, will prove —
- * a task's Workflow Stage through its Spec Linked Issue Role. See CONTEXT.md
- * ("Workflow Stage") and docs/adr/0003-board-stages-derived-not-declared.md. */
+ * a task's Workflow Stage: its Assigned PR when one is set, else a
+ * Spec-referencing PR. See CONTEXT.md ("Workflow Stage", "Assigned PR") and
+ * docs/adr/0003-board-stages-derived-not-declared.md, docs/adr/0009. */
 export type StageHoldingPr = {
   url: string;
   title: string;
@@ -200,10 +201,14 @@ export type StageHoldingPr = {
 
 /**
  * Result of the `tasks.getTaskStageAuthority` RPC: whether a task's Workflow
- * Stage is presently proven by a Spec-referencing PR.
+ * Stage is presently proven by a PR — its Assigned PR when one is set
+ * (docs/adr/0009), else a Spec-referencing PR (docs/adr/0003).
  */
 export type TaskStageAuthority = {
-  /** `null` when the task has no Spec Linked Issue Role, or no PR references it. */
+  /**
+   * `null` when the task has neither an assigned PR nor a Spec-referencing PR
+   * proving a stage.
+   */
   holdingPr: StageHoldingPr | null;
   /**
    * `true` when `holdingPr` currently governs the Workflow Stage — the next

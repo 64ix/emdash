@@ -320,3 +320,109 @@ describe('deriveTaskStageAuthorityFact', () => {
     ).toEqual({ holdingPr: closed, isCurrentStageGithubProven: false });
   });
 });
+
+describe('deriveTaskStageAuthorityFact — Assigned PR override (ticket #101)', () => {
+  it('holds the assigned open PR, github-proven, when one is set', () => {
+    const assigned = pr({ headRefName: 'fork-flow/branch', status: 'open', description: null });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        assignedPr: assigned,
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [],
+      })
+    ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: true });
+  });
+
+  it('holds the assigned merged PR when one is set', () => {
+    const assigned = pr({ headRefName: 'fork-flow/branch', status: 'merged', description: null });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'review',
+        assignedPr: assigned,
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [],
+      })
+    ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: true });
+  });
+
+  it('holds the assigned closed-without-merge PR', () => {
+    const assigned = pr({ headRefName: 'fork-flow/branch', status: 'closed', description: null });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'idea',
+        assignedPr: assigned,
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [],
+      })
+    ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: true });
+  });
+
+  it('is never github-proven while the task sits in triage, even for an assigned PR', () => {
+    const assigned = pr({ headRefName: 'fork-flow/branch', status: 'open', description: null });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'triage',
+        assignedPr: assigned,
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [],
+      })
+    ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: false });
+  });
+
+  it('wins over a contradicting Spec-derived match', () => {
+    const assigned = pr({ headRefName: 'fork-flow/branch', status: 'open', description: null });
+    const specMerged = pr({ headRefName: 'feature/1', status: 'merged', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        assignedPr: assigned,
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [specMerged],
+      })
+    ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: true });
+  });
+
+  it('is the holding fact even for a link-less task (no Spec link needed)', () => {
+    const assigned = pr({ headRefName: 'fork-flow/branch', status: 'merged', description: null });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'review',
+        assignedPr: assigned,
+        specIssueNumber: null,
+        taskBranch: null,
+        prFacts: [],
+      })
+    ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: true });
+  });
+
+  it('reverts to the Spec-derived authority when unassigned', () => {
+    const specOpen = pr({ headRefName: 'feature/1', status: 'open', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        assignedPr: null,
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [specOpen],
+      })
+    ).toEqual({ holdingPr: specOpen, isCurrentStageGithubProven: true });
+  });
+
+  it('is declarative with no holding PR when unassigned and link-less', () => {
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'idea',
+        assignedPr: undefined,
+        specIssueNumber: null,
+        taskBranch: 'task/branch',
+        prFacts: [pr({ headRefName: 'task/branch', status: 'open' })],
+      })
+    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
+  });
+});
