@@ -376,7 +376,11 @@ describe('deriveTaskStageAuthorityFact — Assigned PR override (ticket #101)', 
 
   it('wins over a contradicting Spec-derived match', () => {
     const assigned = pr({ headRefName: 'fork-flow/branch', status: 'open', description: null });
-    const specMerged = pr({ headRefName: 'feature/1', status: 'merged', description: 'Closes #42' });
+    const specMerged = pr({
+      headRefName: 'feature/1',
+      status: 'merged',
+      description: 'Closes #42',
+    });
     expect(
       deriveTaskStageAuthorityFact({
         currentStage: 'implementing',

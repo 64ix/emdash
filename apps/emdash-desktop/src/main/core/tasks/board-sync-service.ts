@@ -435,7 +435,9 @@ export class BoardSyncService implements IInitializable, IDisposable {
 
   /** The assigned-PR facts for a set of task rows — one entry per task with an
    * assigned PR, in the same display shape `_stageAuthorityPrFacts` produces. */
-  private async _assignedPrFactsByUrls(urls: (string | null)[]): Promise<Map<string, StageAuthorityPrFact>> {
+  private async _assignedPrFactsByUrls(
+    urls: (string | null)[]
+  ): Promise<Map<string, StageAuthorityPrFact>> {
     const assignedUrls = urls.filter((url): url is string => url != null);
     if (assignedUrls.length === 0) return new Map();
 
