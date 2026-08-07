@@ -452,6 +452,41 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
     expect(mocks.toast).not.toHaveBeenCalled();
   });
 
+  it('never duplicates a hidden task rank when interpolating between visible neighbours', async () => {
+    // A task hidden from the sidebar holds exactly the rank the visible
+    // neighbours' midpoint would produce ('5' between '4' and '6'): the
+    // write must fall back to the true neighbour — the board's `trueEntries`
+    // guard (ticket #45) — instead of duplicating the hidden card's rank
+    // (which would break rankBetween's ordering guard on a later drop).
+    storesById.set('v4', makeStore('v4', { workflowStage: 'idea', boardRank: '4' }));
+    storesById.set('v6', makeStore('v6', { workflowStage: 'idea', boardRank: '6' }));
+    storesById.set('drag-1', makeStore('drag-1', { workflowStage: 'idea', boardRank: 'z' }));
+    // In the manager map (the "true" column set) but not in the rows (the
+    // visible set) — exactly how a Hidden Task looks to the drop math.
+    storesById.set('hidden-5', makeStore('hidden-5', { workflowStage: 'idea', boardRank: '5' }));
+    (mocks.sidebarRows as unknown as { replace(rows: SidebarRow[]): void }).replace([
+      { kind: 'project', projectId: 'p1' },
+      { kind: 'board', projectId: 'p1' },
+      { kind: 'stage-group', projectId: 'p1', stage: 'idea', label: 'Idea', count: 3 },
+      { kind: 'task', projectId: 'p1', taskId: 'v4' },
+      { kind: 'task', projectId: 'p1', taskId: 'v6' },
+      { kind: 'task', projectId: 'p1', taskId: 'drag-1' },
+    ]);
+    await mount();
+
+    // drag-1 (rank 'z') dropped above v6 ('6'): between v4's '4' and v6's
+    // '6', whose naive midpoint is '5' — hidden-5's rank. The write must
+    // land strictly between '4' and hidden-5's '5' instead.
+    const v6Center = center(taskRow('v6'));
+    await dragTo(taskRow('drag-1'), v6Center.x, v6Center.y - 5);
+
+    expect(storesById.get('drag-1')!.updateBoardPosition).toHaveBeenCalledTimes(1);
+    const [stage, rank] = storesById.get('drag-1')!.updateBoardPosition.mock.calls[0]!;
+    expect(stage).toBe('idea');
+    expect(rank).toBeTruthy();
+    expect(rank > '4' && rank < '5').toBe(true);
+  });
+
   it('does not let Stage Group headers or the Board row start a drag', async () => {
     await mount();
 

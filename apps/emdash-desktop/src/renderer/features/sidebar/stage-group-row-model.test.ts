@@ -329,6 +329,28 @@ describe('computeSidebarDropPosition', () => {
     expect(position).toEqual({ stage: 'spec', rank: null });
   });
 
+  it('never reproduces a hidden task rank when trueEntries are supplied (board parity)', () => {
+    // Visible neighbours '4' and '6' midpoint to '5' — the rank a hidden
+    // task already holds. The board's trueEntries guard (ticket #45) must
+    // fall back to interpolating against the true neighbour instead of
+    // duplicating '5' (which would violate rankBetween's ordering guard on
+    // a later drop next to it).
+    const entries = [
+      { id: 'v4', rank: '4' },
+      { id: 'v6', rank: '6' },
+    ];
+    const trueEntries = [
+      { id: 'v4', rank: '4' },
+      { id: 'hidden-5', rank: '5' },
+      { id: 'v6', rank: '6' },
+    ];
+    const position = computeSidebarDropPosition('spec', entries, 1, trueEntries);
+    expect(position.stage).toBe('spec');
+    expect(position.rank).not.toBeNull();
+    // Strictly between the visible lower bound and the hidden card's rank.
+    expect(position.rank! > '4' && position.rank! < '5').toBe(true);
+  });
+
   it('returns a stage-only position for a drop into an empty group body', () => {
     const position = computeSidebarDropPosition('review', [], null);
     expect(position).toEqual({ stage: 'review', rank: null });

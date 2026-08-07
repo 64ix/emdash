@@ -25,6 +25,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { isBoardRankCandidate } from '@renderer/features/board/board-columns';
 import { sortColumn, type ColumnId } from '@renderer/features/board/board-ordering';
 import {
   computeSidebarDropPosition,
@@ -34,6 +35,7 @@ import {
 } from '@renderer/features/sidebar/stage-group-row-model';
 import {
   getTaskGitWorktreeStore,
+  getTaskManagerStore,
   getTaskStore,
 } from '@renderer/features/tasks/stores/task-selectors';
 import { registeredTaskData } from '@renderer/features/tasks/stores/task-store';
@@ -282,10 +284,30 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
         !isAbove && destRows.length > 0 && destRows[destRows.length - 1]!.idx === overRowIdx
           ? null
           : overSortedIdx + (isAbove ? 0 : 1);
+
+      // True (pre-visibility) entries for the rank math — every task holding
+      // a Board Rank in the destination column, hidden or Shipped-Faded rows
+      // included — so the interpolation never reproduces a card's stored rank
+      // the user cannot see. The board's own `trueEntries` guard (ticket #45)
+      // uses `isBoardRankCandidate` for exactly this set and passes it
+      // `sortColumn`-ordered (its `trueSortedByColumn`); the sidebar's
+      // visibility filter (ticket #87) hides some of the same cards.
+      const trueDestEntries: { id: string; rank: string | null }[] = [];
+      const taskManager = getTaskManagerStore(projectId);
+      if (taskManager) {
+        for (const [, candidate] of taskManager.tasks) {
+          const candidateData = registeredTaskData(candidate);
+          if (!candidateData || candidateData.id === aParsed.taskId) continue;
+          if (!isBoardRankCandidate(candidateData)) continue;
+          if ((candidateData.workflowStage ?? 'unstaged') !== destinationColumn) continue;
+          trueDestEntries.push({ id: candidateData.id, rank: candidateData.boardRank ?? null });
+        }
+      }
       const position = computeSidebarDropPosition(
         destinationColumn,
         destSorted.map((entry) => ({ id: entry.taskId, rank: entry.rank })),
-        dropIndex
+        dropIndex,
+        sortColumn(trueDestEntries)
       );
       void task.updateBoardPosition(position.stage, position.rank);
     }
