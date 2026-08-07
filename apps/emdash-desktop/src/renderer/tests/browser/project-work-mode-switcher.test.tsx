@@ -42,6 +42,10 @@ vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
       };
     },
   }),
+  // Ticket #100: the Task Detail Panel (imported transitively through the
+  // project shell's view registry) reads this selector for its assign picker;
+  // inert here — never invoked by this test's tree.
+  getGitRepositoryStore: () => undefined,
 }));
 
 vi.mock('@renderer/utils/telemetryClient', () => ({
