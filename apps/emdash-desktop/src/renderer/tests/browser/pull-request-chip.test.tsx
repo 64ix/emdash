@@ -125,9 +125,6 @@ describe('PullRequestChip (ticket #99)', () => {
 
     // Base-UI tooltips open through the trigger's rest-timer on mousemove,
     // after the provider-less default open delay (600ms) — replay the event
-    // sequence a real hover produces, then wait out the delay.
-    // Base-UI tooltips open through the trigger's rest-timer on mousemove,
-    // after the provider-less default open delay (600ms) — replay the event
     // sequence a real mouse hover produces, then wait out the delay.
     const button = chipButton();
     const pointerOpts = { bubbles: true, pointerType: 'mouse', pointerId: 1, isPrimary: true };
