@@ -17,7 +17,11 @@ import {
   type DragStartEvent,
   type ScreenReaderInstructions,
 } from '@dnd-kit/core';
-import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import { AlertTriangle } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -27,10 +31,7 @@ import {
   PIPELINE_COLUMNS,
   STAGE_LABELS,
 } from '@renderer/features/board/board-columns';
-import {
-  EMPTY_BOARD_FILTERS,
-  type BoardFilterState,
-} from '@renderer/features/board/board-filters';
+import { EMPTY_BOARD_FILTERS, type BoardFilterState } from '@renderer/features/board/board-filters';
 import {
   buildGlobalBoardColumns,
   computeGlobalDropPosition,
@@ -389,7 +390,12 @@ export const GlobalBoardMainPanel = observer(function GlobalBoardMainPanel() {
     // task-scoped RPC the Feature Board uses; an unreachable project's
     // failure rolls back optimistically inside `updateBoardPosition` and is
     // logged, with no SSH gate involved.
-    const { stage, rank } = computeGlobalDropPosition(columns, destinationColumn, activeId, dropIndex);
+    const { stage, rank } = computeGlobalDropPosition(
+      columns,
+      destinationColumn,
+      activeId,
+      dropIndex
+    );
     void store.updateBoardPosition(stage, rank);
   }
 
@@ -612,7 +618,9 @@ export const GlobalBoardMainPanel = observer(function GlobalBoardMainPanel() {
               {activeDragStore ? (
                 <GlobalBoardCardPreview
                   store={activeDragStore}
-                  projectLabel={projectLabelOf(projectIdByCardId.get(activeDragStore.data.id) ?? '')}
+                  projectLabel={projectLabelOf(
+                    projectIdByCardId.get(activeDragStore.data.id) ?? ''
+                  )}
                 />
               ) : null}
             </DragOverlay>

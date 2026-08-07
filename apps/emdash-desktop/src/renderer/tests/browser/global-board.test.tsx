@@ -347,7 +347,7 @@ function activeFiltersText(): string {
 describe('Global Board — mixed-project columns and project markers (spec #104, ticket #107)', () => {
   setupDom();
 
-  it('renders every project\'s cards in the shared stage columns, each marked with its project', async () => {
+  it("renders every project's cards in the shared stage columns, each marked with its project", async () => {
     const alphaSpec = makeStore('alpha-spec', { workflowStage: 'spec', boardRank: 'a' });
     const betaSpec = makeStore('beta-spec', { workflowStage: 'spec', boardRank: 'm' });
     const betaUnstaged = makeStore('beta-unstaged');
@@ -478,7 +478,7 @@ describe('Global Board — drag-and-drop (spec #104, ticket #107)', () => {
 describe('Global Board — Task Detail Panel and creation absence (spec #104, ticket #107)', () => {
   setupDom();
 
-  it('opens the Task Detail Panel for the clicked card, scoped to the card\'s own project', async () => {
+  it("opens the Task Detail Panel for the clicked card, scoped to the card's own project", async () => {
     const a = makeStore('card-a', { workflowStage: 'spec' });
     addProject('alpha', 'Alpha', [a]);
     await mount();

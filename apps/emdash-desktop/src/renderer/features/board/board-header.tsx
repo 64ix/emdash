@@ -284,8 +284,7 @@ export function BoardHeader({
                       key={projectId}
                       label={projectFilter.projectDisplayNameOf(projectId)}
                       checked={
-                        !projectSelectionIsActive ||
-                        projectFilter.selectedProjectIds.has(projectId)
+                        !projectSelectionIsActive || projectFilter.selectedProjectIds.has(projectId)
                       }
                       onCheckedChange={() => toggleProject(projectId)}
                     />
