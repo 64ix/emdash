@@ -12,6 +12,123 @@ async function startHarness(conversationId = 'conv-1') {
   return { h, rt, client: h.client(), sessionId: 'session-1', conversationId };
 }
 
+const modelConfigOption = {
+  id: 'model',
+  name: 'Model',
+  category: 'model',
+  type: 'select',
+  currentValue: 'default',
+  options: [
+    { value: 'default', name: 'Default' },
+    { value: 'm1', name: 'M1' },
+  ],
+};
+
+const effortConfigOption = {
+  id: 'reasoning_effort',
+  name: 'Reasoning effort',
+  category: 'thought_level',
+  type: 'select',
+  currentValue: 'medium',
+  options: [
+    { value: 'medium', name: 'Medium' },
+    { value: 'high', name: 'High' },
+  ],
+};
+
+describe('start-input config application', () => {
+  it('applies model and effort from the start input after a new session starts', async () => {
+    const h = makeAcpHarness();
+    const rt = new AcpRuntime(h.deps);
+    h.agent.newSession.mockResolvedValueOnce({
+      sessionId: 'session-1',
+      configOptions: [modelConfigOption, effortConfigOption],
+    });
+
+    const result = await rt.startSession(makeStartInput({ model: 'm1', effort: 'high' }));
+
+    expect(isOk(result)).toBe(true);
+    expect(h.agent.setSessionConfigOption).toHaveBeenCalledTimes(2);
+    expect(h.agent.setSessionConfigOption).toHaveBeenNthCalledWith(1, {
+      sessionId: 'session-1',
+      configId: 'model',
+      value: 'm1',
+    });
+    expect(h.agent.setSessionConfigOption).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-1',
+      configId: 'reasoning_effort',
+      value: 'high',
+    });
+  });
+
+  it('applies model and effort from the start input after resuming a session', async () => {
+    const h = makeAcpHarness();
+    const rt = new AcpRuntime(h.deps);
+    h.agent.loadSession = vi.fn().mockResolvedValue({
+      sessionId: 'session-old',
+      configOptions: [modelConfigOption, effortConfigOption],
+    });
+
+    const result = await rt.resumeSession({
+      ...makeStartInput({ model: 'm1', effort: 'high' }),
+      sessionId: 'session-old',
+    });
+
+    expect(isOk(result)).toBe(true);
+    expect(h.agent.setSessionConfigOption).toHaveBeenCalledTimes(2);
+    expect(h.agent.setSessionConfigOption).toHaveBeenNthCalledWith(1, {
+      sessionId: 'session-old',
+      configId: 'model',
+      value: 'm1',
+    });
+    expect(h.agent.setSessionConfigOption).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-old',
+      configId: 'reasoning_effort',
+      value: 'high',
+    });
+  });
+
+  it('keeps the launch successful when applying an invalid effort fails (best-effort)', async () => {
+    const h = makeAcpHarness();
+    const rt = new AcpRuntime(h.deps);
+    h.agent.newSession.mockResolvedValueOnce({
+      sessionId: 'session-1',
+      configOptions: [effortConfigOption],
+    });
+    h.agent.setSessionConfigOption.mockRejectedValueOnce(new Error('invalid effort value'));
+
+    const result = await rt.startSession(makeStartInput({ model: null, effort: 'bogus' }));
+
+    expect(isOk(result)).toBe(true);
+    expect(result).toEqual({ success: true, data: { sessionId: 'session-1' } });
+  });
+
+  it('keeps the launch successful when applying an invalid model fails (best-effort)', async () => {
+    const h = makeAcpHarness();
+    const rt = new AcpRuntime(h.deps);
+    h.agent.newSession.mockResolvedValueOnce({
+      sessionId: 'session-1',
+      configOptions: [modelConfigOption, effortConfigOption],
+    });
+    h.agent.setSessionConfigOption.mockRejectedValueOnce(new Error('invalid model value'));
+
+    const result = await rt.startSession(makeStartInput({ model: 'bogus', effort: 'high' }));
+
+    expect(isOk(result)).toBe(true);
+    expect(result).toEqual({ success: true, data: { sessionId: 'session-1' } });
+  });
+
+  it('does not apply config options the provider does not advertise', async () => {
+    const h = makeAcpHarness();
+    const rt = new AcpRuntime(h.deps);
+
+    const result = await rt.startSession(makeStartInput({ model: 'm1', effort: 'high' }));
+
+    expect(isOk(result)).toBe(true);
+    expect(h.agent.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+});
+
 describe('AcpRuntime session manager', () => {
   it('maps ACP auth_required JSON-RPC errors to auth_required', async () => {
     const h = makeAcpHarness();
