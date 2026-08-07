@@ -85,6 +85,7 @@ export const provider = registerPluginBehavior(plugin, {
     buildSpawn: (ctx) => ({
       command: ctx.cli,
       args: ['acp'],
+      ...(ctx.autoApprove && { env: { OPENCODE_PERMISSION: '{"*":"allow"}' } }),
     }),
     connect: (io, toClient) => {
       return connectStdioAcp(io, toClient);

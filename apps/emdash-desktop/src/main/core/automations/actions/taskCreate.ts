@@ -237,16 +237,18 @@ export async function executeTaskCreate(
       const creatingConv = await markRunCreatingConversation(run.id, Date.now());
       onStepCompleted(creatingConv);
 
+      const autoApprove = resolveAutomationAgentAutoApprove(
+        provider,
+        automation.conversationConfig?.autoApprove
+      );
+
       await createConversation({
         id: conversationId,
         projectId,
         taskId,
         provider,
         title: automation.conversationConfig?.title ?? automation.name,
-        autoApprove: resolveAutomationAgentAutoApprove(
-          provider,
-          automation.conversationConfig?.autoApprove
-        ),
+        autoApprove,
         model: automation.conversationConfig?.model || undefined,
         ...(conversationType === 'acp' ? { initialQueue } : { initialPrompt: prompt }),
         isInitialConversation: true,
@@ -264,6 +266,7 @@ export async function executeTaskCreate(
             cwd: provision.data.path,
             sessionId: null,
             model: automation.conversationConfig?.model || null,
+            autoApprove,
             initialQueue,
           },
         });

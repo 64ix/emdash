@@ -172,6 +172,30 @@ describe('AgentPluginHost', () => {
     });
   });
 
+  it('threads autoApprove into the ACP spawn context', async () => {
+    const buildSpawn = vi.fn((ctx: { autoApprove: boolean }) => ({
+      command: 'test',
+      args: [],
+      env: {},
+    }));
+    const host = createHost([
+      plugin({
+        acp: { kind: 'supported' },
+        behavior: { acp: { buildSpawn } as unknown as IAcpBehavior },
+      }),
+    ]);
+
+    await host.buildAcpSpawn('test', { cwd: '/work', autoApprove: true });
+    expect(buildSpawn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cwd: '/work', autoApprove: true })
+    );
+
+    await host.buildAcpSpawn('test', { cwd: '/work' });
+    expect(buildSpawn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cwd: '/work', autoApprove: false })
+    );
+  });
+
   it('binds machine dependencies for auth status checks', async () => {
     const checkStatus = vi.fn(async () => ({ kind: 'authenticated' as const, account: 'ada' }));
     const host = createHost([

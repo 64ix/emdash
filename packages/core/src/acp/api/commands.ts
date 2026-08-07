@@ -12,6 +12,8 @@ export const acpStartInputSchema = z.object({
   cwd: z.string(),
   sessionId: z.string().nullable(),
   model: z.string().nullable(),
+  /** Auto-approve permissions for this conversation (provider spawn lever). */
+  autoApprove: z.boolean().optional(),
   initialQueue: z.array(promptInputSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
 });
