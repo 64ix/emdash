@@ -12,6 +12,8 @@ export const acpStartInputSchema = z.object({
   cwd: z.string(),
   sessionId: z.string().nullable(),
   model: z.string().nullable(),
+  /** Launch-time effort/reasoning level; applied best-effort after session start. */
+  effort: z.string().nullable().optional(),
   initialQueue: z.array(promptInputSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
 });
