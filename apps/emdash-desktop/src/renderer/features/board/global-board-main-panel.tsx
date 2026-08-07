@@ -347,7 +347,7 @@ export const GlobalBoardMainPanel = observer(function GlobalBoardMainPanel() {
           from_stage: sourceColumn ? columnToStage(sourceColumn) : null,
           attempted_stage: destinationStage,
           governing_fact: authority.fact.kind,
-          project_id: projectIdByCardId.get(activeId) ?? null,
+          project_id: projectIdByCardId.get(activeId) ?? undefined,
         });
         return;
       }
@@ -477,7 +477,7 @@ export const GlobalBoardMainPanel = observer(function GlobalBoardMainPanel() {
     if (!alreadyShown) {
       captureTelemetry('board_inspector_opened', {
         target_kind: 'task',
-        project_id: projectIdByCardId.get(taskId) ?? null,
+        project_id: projectIdByCardId.get(taskId) ?? undefined,
       });
     }
     setPanelTarget({ kind: 'task', taskId });
