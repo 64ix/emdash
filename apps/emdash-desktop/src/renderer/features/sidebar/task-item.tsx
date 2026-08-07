@@ -8,7 +8,7 @@ import {
   getTaskStore,
   getWorkspaceForTask,
 } from '@renderer/features/tasks/stores/task-selectors';
-import { type TaskStore } from '@renderer/features/tasks/stores/task-store';
+import { registeredTaskData, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import {
   useNavigate,
   useParams,
@@ -18,9 +18,11 @@ import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { sidebarStore } from '@renderer/lib/stores/app-state';
 import { cn } from '@renderer/utils/utils';
 import { selectCurrentPr } from '@shared/core/pull-requests/pull-requests';
+import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { PrBadge } from '../../lib/components/pr-badge';
 import { useAppSettingsKey } from '../settings/use-app-settings-key';
 import { SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
+import { sidebarStageMoveOptions } from './stage-group-row-model';
 
 interface SidebarTaskItemProps {
   taskId: string;
@@ -91,6 +93,21 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
   const handleReconnect =
     workspaceStore?.connectionState != null ? () => workspaceStore.reconnect() : undefined;
 
+  // "Move to stage…" (spec #85, ticket #88): the same authority gating the
+  // board applies to cross-stage drops, computed synchronously from data
+  // already on the task. Unregistered tasks have no stage fields — no
+  // submenu. The write itself goes through the store's `updateBoardPosition`
+  // (the exact stage/rank path the board uses, optimistic update with
+  // rollback); `rank: null` is the Task Detail Panel's stage-selector
+  // gesture — a stage move carries no position, so the task lands unranked
+  // in its new group.
+  const registered = registeredTaskData(task);
+  const stageMove = registered ? sidebarStageMoveOptions(registered, branchName ?? null) : null;
+
+  const handleMoveToStage = (stage: WorkflowStage | null) => {
+    void task.updateBoardPosition(stage, null);
+  };
+
   return (
     <TaskContextMenu
       isPinned={task.data.isPinned}
@@ -110,6 +127,9 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
       // unchanged (spec user story 29).
       isHiddenFromSidebar={false}
       onHideFromSidebar={() => sidebarStore.hideTaskFromSidebar(projectId, taskId)}
+      stageMoveOptions={stageMove?.options}
+      stageMoveExplanation={stageMove?.explanation}
+      onMoveToStage={stageMove ? handleMoveToStage : undefined}
     >
       <SidebarMenuRow
         className={cn(
