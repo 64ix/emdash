@@ -9,6 +9,11 @@ export const EmdashNotifications = async () => ({
     const ptyId = process.env.EMDASH_PTY_ID;
     if (!port || !token || !ptyId) return;
 
+    const prompt = getSubmittedPrompt(event);
+    if (prompt) {
+      await postToEmdash({ port, token, ptyId, type: 'start', body: { prompt } });
+    }
+
     const sessionId = getOpenCodeSessionId(event);
     if (sessionId) {
       await postToEmdash({ port, token, ptyId, type: 'session', body: { sessionId } });
@@ -46,6 +51,30 @@ function getOpenCodeSessionId(event) {
 
   const sessionId = event.properties?.sessionID;
   if (isOpenCodeSessionId(sessionId)) return sessionId.trim();
+
+  return undefined;
+}
+
+// OpenCode publishes a user-submitted prompt as a user \`message.updated\` event
+// followed by its \`message.part.updated\` text parts. Remember the user message
+// ids and forward the first text part as a canonical \`start\` event so emdash
+// can derive an automatic conversation title, mirroring Claude/Codex.
+const userMessageIds = new Set();
+
+function getSubmittedPrompt(event) {
+  const info = event.properties?.info;
+  if (event.type === 'message.updated' && info?.role === 'user' && typeof info.id === 'string') {
+    userMessageIds.add(info.id);
+    return undefined;
+  }
+
+  const part = event.properties?.part;
+  if (event.type === 'message.part.updated' && part?.type === 'text') {
+    if (userMessageIds.delete(part.messageID)) {
+      const text = typeof part.text === 'string' ? part.text.trim() : '';
+      return text || undefined;
+    }
+  }
 
   return undefined;
 }

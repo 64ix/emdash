@@ -53,7 +53,7 @@ export const plugin = definePlugin(
     hooks: {
       kind: 'plugin',
       scope: 'workspace',
-      supportedEvents: ['notification', 'stop', 'session'],
+      supportedEvents: ['start', 'notification', 'stop', 'session'],
     },
     hostDependency: npmDependency({ id: 'opencode', package: 'opencode-ai' }),
     mcp: {
