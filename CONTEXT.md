@@ -211,3 +211,33 @@ showing the primary Usage Window's utilization. Clicking it opens a
 detail popover with every Usage Window and its reset time. A gauge
 appears only when usage data is obtainable for that provider on the local
 machine, and each gauge can be hidden in settings.
+
+## ACP Conversation
+
+A Conversation run over the Agent Client Protocol — the provider's native
+chat surface — instead of in a PTY. The runtime renders its turns as a
+typed transcript, with per-session model, effort and permission-mode
+selectors driven by whatever the provider's ACP server advertises. The
+app default whenever the provider declares ACP support and the Chat UI
+preference is enabled.
+
+## Auto-approve
+
+The conversation-level setting that lets the agent act without prompting
+the user for permission. Set at conversation creation, defaulted from a
+per-provider setting. Scoped per conversation — enabling it for one
+conversation never affects another, even in the same workspace. Only
+meaningful for providers that declare the auto-approve capability.
+
+## Managed Skill
+
+A Skill installed from the emdash Skills library into the shared skills
+root. A single copy, not provider-specific: every agent that can read
+the root is expected to pick it up through its own discovery mechanism.
+
+## Provider-Native Skill
+
+A Skill that lives in a provider's own skill directory (e.g. `.opencode/skills`,
+`.claude/skills`, `.agents/skills`) and is loaded by that provider's CLI
+itself. Emdash does not manage it: it is not installed, mirrored, or
+tracked by the Skills library.
