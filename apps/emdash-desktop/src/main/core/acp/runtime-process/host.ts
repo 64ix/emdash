@@ -15,6 +15,7 @@ import { log } from '@main/lib/logger';
 import { desktopWorkerPath } from '@main/worker-manifest';
 import { buildAcpSessionEnv } from './acp-session-env';
 import { withConversationAutoTitle } from './conversation-auto-title';
+import { applyProviderLaunchDefaults } from './start-input-defaults';
 
 const ACP_WIRE_CHANNEL = 'acp-wire';
 
@@ -59,18 +60,20 @@ function decorateAcpRuntimeHandle(handle: WorkerHandle<AcpApiContract>): AcpRunt
 }
 
 function decorateAcpRuntimeClient(client: AcpRuntimeClient): AcpRuntimeClient {
-  return withConversationAutoTitle(withSessionIdPersistence(withProviderEnv(client)));
+  return withConversationAutoTitle(withSessionIdPersistence(withProviderLaunchConfig(client)));
 }
 
 /**
- * Injects the user's per-provider environment variables (configured in Settings and
- * stored in the app DB), plus the task-scoped EMDASH_TASK_ID marker, into ACP
- * session-start inputs. The ACP runtime worker has no DB access, so this main-process
- * choke point resolves the config and threads it to the provider spawn. Any env on the
- * incoming (renderer-facing) input is discarded and replaced, so the spawn environment
- * can only come from trusted main-process settings and state — see `buildAcpSessionEnv`.
+ * Injects the user's per-provider launch configuration (configured in Settings and
+ * stored in the app DB) into ACP session-start inputs: default model/effort plus
+ * environment variables, along with the task-scoped EMDASH_TASK_ID marker. The ACP
+ * runtime worker has no DB access, so this main-process choke point resolves the
+ * config and threads it to the provider spawn. Any env on the incoming
+ * (renderer-facing) input is discarded and replaced, so the spawn environment
+ * can only come from trusted main-process settings and state — see
+ * `buildAcpSessionEnv`.
  */
-function withProviderEnv(client: AcpRuntimeClient): AcpRuntimeClient {
+function withProviderLaunchConfig(client: AcpRuntimeClient): AcpRuntimeClient {
   const enrich = async <T extends { input: AcpStartInputWire }>(input: T): Promise<T> => {
     const providerConfig = await providerOverrideSettings.getItem(input.input.providerId);
     // Spawn env must originate solely from the trusted main-process settings. Overwrite
@@ -78,10 +81,13 @@ function withProviderEnv(client: AcpRuntimeClient): AcpRuntimeClient {
     // inject variables such as PATH/HOME/proxy vars into provider process spawning.
     return {
       ...input,
-      input: {
-        ...input.input,
-        env: buildAcpSessionEnv(input.input.taskId, providerConfig?.env),
-      },
+      input: applyProviderLaunchDefaults(
+        {
+          ...input.input,
+          env: buildAcpSessionEnv(input.input.taskId, providerConfig?.env),
+        },
+        providerConfig
+      ),
     };
   };
   return {

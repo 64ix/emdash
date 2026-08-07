@@ -166,16 +166,7 @@ export class SessionManager implements InboundRouter {
             modes: response.modes,
             configOptions: response.configOptions,
           });
-          if (input.model) {
-            const modelResult = await record.cell.setConfigOption('model', input.model);
-            if (!modelResult.success) {
-              this.deps.logger.warn('SessionManager: failed to apply initial model', {
-                conversationId: input.conversationId,
-                providerId: input.providerId,
-                error: modelResult.error,
-              });
-            }
-          }
+          await this.applyInitialConfigOptions(record);
           const queueResult = this.queueInitialPrompts(record);
           if (!queueResult.success) return queueResult;
           record.cell.endReplay();
@@ -211,16 +202,7 @@ export class SessionManager implements InboundRouter {
           modes: response.modes,
           configOptions: response.configOptions,
         });
-        if (input.model) {
-          const modelResult = await record.cell.setConfigOption('model', input.model);
-          if (!modelResult.success) {
-            this.deps.logger.warn('SessionManager: failed to apply initial model', {
-              conversationId: input.conversationId,
-              providerId: input.providerId,
-              error: modelResult.error,
-            });
-          }
-        }
+        await this.applyInitialConfigOptions(record);
         const queueResult = this.queueInitialPrompts(record);
         if (!queueResult.success) return queueResult;
         record.cell.applySessionReady();
@@ -515,6 +497,32 @@ export class SessionManager implements InboundRouter {
       if (!result.success) return result;
     }
     return ok();
+  }
+
+  /**
+   * Applies launch-time model/effort from the start input through the same
+   * config-option path the in-session selectors use. Best-effort: an invalid
+   * value for the current provider keeps the provider's own default and the
+   * launch never fails.
+   */
+  private async applyInitialConfigOptions(record: SessionRecord): Promise<void> {
+    const input = record.input;
+    const candidates: ReadonlyArray<['model' | 'effort', string | null | undefined]> = [
+      ['model', input.model],
+      ['effort', input.effort],
+    ];
+    for (const [dimension, value] of candidates) {
+      if (!value) continue;
+      const result = await record.cell.setConfigOption(dimension, value);
+      if (!result.success) {
+        this.deps.logger.warn('SessionManager: failed to apply initial config option', {
+          conversationId: input.conversationId,
+          providerId: input.providerId,
+          dimension,
+          error: result.error,
+        });
+      }
+    }
   }
 
   private syncRecord(record: SessionRecord): void {

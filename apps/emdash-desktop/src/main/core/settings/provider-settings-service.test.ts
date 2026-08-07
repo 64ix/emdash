@@ -15,10 +15,20 @@ describe('providerCustomConfigEntrySchema', () => {
     expect(providerCustomConfigEntrySchema.parse(input)).toEqual(input);
   });
 
+  it('accepts per-provider default model and effort fields', () => {
+    const input = {
+      defaultModel: 'gpt-5-codex',
+      defaultEffort: 'high',
+    };
+    expect(providerCustomConfigEntrySchema.parse(input)).toEqual(input);
+  });
+
   it('treats absent fields as undefined', () => {
     const result = providerCustomConfigEntrySchema.parse({});
     expect(result.extraArgs).toBeUndefined();
     expect(result.env).toBeUndefined();
+    expect(result.defaultModel).toBeUndefined();
+    expect(result.defaultEffort).toBeUndefined();
   });
 
   it('strips unknown fields like cli, path, installSource (legacy fields)', () => {
