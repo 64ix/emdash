@@ -125,7 +125,8 @@ export class SessionManager implements InboundRouter {
       return acpErr.providerUnsupported(input.providerId);
     }
 
-    const processKey = makeAcpConnectionKey(input.providerId, input.workspaceId);
+    const autoApprove = input.autoApprove ?? false;
+    const processKey = makeAcpConnectionKey(input.providerId, input.workspaceId, autoApprove);
     const acquire = await acquireAsResult(
       this.connections,
       processKey,
@@ -134,6 +135,7 @@ export class SessionManager implements InboundRouter {
         workspaceId: input.workspaceId,
         cwd: input.cwd,
         env: input.env,
+        autoApprove,
         behavior: binding.behavior,
         buildClient: (_agent, context): Client => buildAgentClient(context, this, this.ports),
       },

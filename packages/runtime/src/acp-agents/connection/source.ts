@@ -23,6 +23,7 @@ export interface AcpConnectionContext {
   providerId: string;
   workspaceId: string;
   cwd: string;
+  autoApprove: boolean;
   normalize: AcpSessionUpdateNormalizer;
 }
 
@@ -45,6 +46,9 @@ export interface AcquireAcpConnectionInput {
   workspaceId: string;
   cwd: string;
   env?: Record<string, string>;
+  /** Auto-approve permissions for the conversation; part of the pool key so the
+   * bypass never leaks across conversations in the same workspace. */
+  autoApprove?: boolean;
   behavior: IAcpBehavior;
   buildClient: (agent: AcpAgentApi, context: AcpConnectionContext) => Client;
 }
@@ -75,8 +79,12 @@ export function createAcpConnectionSource(
   return source;
 }
 
-export function makeAcpConnectionKey(providerId: string, workspaceId: string): string {
-  return `${providerId}:${workspaceId}`;
+export function makeAcpConnectionKey(
+  providerId: string,
+  workspaceId: string,
+  autoApprove: boolean
+): string {
+  return `${providerId}:${workspaceId}:${autoApprove ? 'auto-approve' : 'manual'}`;
 }
 
 export function isAcpConnectionError(error: unknown): error is AcpConnectionError {
@@ -94,12 +102,14 @@ async function provisionAcpConnection(
   const spawn = await deps.agentHost.buildAcpSpawn(input.providerId, {
     cwd: input.cwd,
     env: input.env,
+    autoApprove: input.autoApprove ?? false,
   });
   if (!spawn.success) {
     throw acpErr.spawnFailed(toSerializedError(new Error(agentHostErrorMessage(spawn.error))))
       .error;
   }
 
+  const autoApprove = input.autoApprove ?? false;
   const connection = await createAcpAgentConnection(
     {
       host: deps.host,
@@ -116,6 +126,7 @@ async function provisionAcpConnection(
           providerId: input.providerId,
           workspaceId: input.workspaceId,
           cwd: input.cwd,
+          autoApprove,
           normalize,
         }),
       onClosed: (exitCode) => deps.onClosed(key, exitCode),
@@ -128,6 +139,7 @@ async function provisionAcpConnection(
     providerId: input.providerId,
     workspaceId: input.workspaceId,
     cwd: input.cwd,
+    autoApprove,
     agent: connection.data.agent,
     normalize: connection.data.normalize,
     supportsLoadSession: connection.data.supportsLoadSession,

@@ -1,6 +1,6 @@
 import type { Client } from '@agentclientprotocol/sdk';
 import type { AgentPluginHost, IAcpBehavior } from '@emdash/core/agents/plugins';
-import { err, isErr, isOk } from '@emdash/shared';
+import { err, isErr, isOk, ok } from '@emdash/shared';
 import { noopLogger } from '@emdash/shared/logger';
 import { acquireAsResult } from '@emdash/wire/util';
 import { describe, expect, it, vi } from 'vitest';
@@ -14,11 +14,12 @@ function makeBehavior(agent: FakeAcpAgent): IAcpBehavior {
   };
 }
 
-function acquireInput(agent: FakeAcpAgent, workspaceId = 'ws-1') {
+function acquireInput(agent: FakeAcpAgent, workspaceId = 'ws-1', autoApprove = false) {
   return {
     providerId: 'claude',
     workspaceId,
     cwd: '/tmp/workspace',
+    autoApprove,
     behavior: makeBehavior(agent),
     buildClient: vi.fn(() => ({}) as Client),
   };
@@ -41,12 +42,27 @@ function sourceDeps(
   };
 }
 
+describe('makeAcpConnectionKey', () => {
+  it('composes provider, workspace and auto-approve flag', () => {
+    expect(makeAcpConnectionKey('opencode', 'ws-1', true)).toBe('opencode:ws-1:auto-approve');
+    expect(makeAcpConnectionKey('opencode', 'ws-1', false)).toBe('opencode:ws-1:manual');
+    expect(makeAcpConnectionKey('claude', 'ws-1', false)).toBe('claude:ws-1:manual');
+    expect(makeAcpConnectionKey('opencode', 'ws-2', false)).toBe('opencode:ws-2:manual');
+  });
+
+  it('distinguishes auto-approve from manual conversations in the same workspace', () => {
+    expect(makeAcpConnectionKey('opencode', 'ws-1', true)).not.toBe(
+      makeAcpConnectionKey('opencode', 'ws-1', false)
+    );
+  });
+});
+
 describe('createAcpConnectionSource', () => {
   it('dedupes acquisitions by provider/workspace and refcounts release', async () => {
     const agent = new FakeAcpAgent();
     const host = new FakeAcpProcessHost();
     const source = createAcpConnectionSource(sourceDeps(host));
-    const key = makeAcpConnectionKey('claude', 'ws-1');
+    const key = makeAcpConnectionKey('claude', 'ws-1', false);
 
     const first = await acquireAsResult(source, key, acquireInput(agent), isAcpConnectionError);
     const second = await acquireAsResult(source, key, acquireInput(agent), isAcpConnectionError);
@@ -73,13 +89,13 @@ describe('createAcpConnectionSource', () => {
 
     await acquireAsResult(
       source,
-      makeAcpConnectionKey('claude', 'ws-1'),
+      makeAcpConnectionKey('claude', 'ws-1', false),
       acquireInput(agent, 'ws-1'),
       isAcpConnectionError
     );
     await acquireAsResult(
       source,
-      makeAcpConnectionKey('claude', 'ws-2'),
+      makeAcpConnectionKey('claude', 'ws-2', false),
       acquireInput(agent, 'ws-2'),
       isAcpConnectionError
     );
@@ -92,7 +108,7 @@ describe('createAcpConnectionSource', () => {
     const host = new FakeAcpProcessHost();
     const onClosed = vi.fn();
     const source = createAcpConnectionSource(sourceDeps(host, onClosed));
-    const key = makeAcpConnectionKey('claude', 'ws-1');
+    const key = makeAcpConnectionKey('claude', 'ws-1', false);
 
     await acquireAsResult(source, key, acquireInput(agent), isAcpConnectionError);
     host.lastHandle.emitExit(7);
@@ -107,7 +123,7 @@ describe('createAcpConnectionSource', () => {
     const agent = new FakeAcpAgent();
     const host = new FakeAcpProcessHost();
     const source = createAcpConnectionSource(sourceDeps(host));
-    const key = makeAcpConnectionKey('claude', 'ws-1');
+    const key = makeAcpConnectionKey('claude', 'ws-1', false);
 
     const acquired = await acquireAsResult(source, key, acquireInput(agent), isAcpConnectionError);
     expect(isOk(acquired)).toBe(true);
@@ -128,7 +144,7 @@ describe('createAcpConnectionSource', () => {
         ),
     } as unknown as AgentPluginHost;
     const source = createAcpConnectionSource(sourceDeps(host, vi.fn(), agentHost));
-    const key = makeAcpConnectionKey('claude', 'ws-1');
+    const key = makeAcpConnectionKey('claude', 'ws-1', false);
 
     const result = await acquireAsResult(source, key, acquireInput(agent), isAcpConnectionError);
 
@@ -145,7 +161,7 @@ describe('createAcpConnectionSource', () => {
     const host = new FakeAcpProcessHost();
     const onClosed = vi.fn();
     const source = createAcpConnectionSource(sourceDeps(host, onClosed));
-    const key = makeAcpConnectionKey('claude', 'ws-1');
+    const key = makeAcpConnectionKey('claude', 'ws-1', false);
 
     const result = await acquireAsResult(source, key, acquireInput(agent), isAcpConnectionError);
 
@@ -163,7 +179,7 @@ describe('createAcpConnectionSource', () => {
     const host = new FakeAcpProcessHost();
     const onClosed = vi.fn();
     const source = createAcpConnectionSource(sourceDeps(host, onClosed));
-    const key = makeAcpConnectionKey('claude', 'ws-1');
+    const key = makeAcpConnectionKey('claude', 'ws-1', false);
 
     const [first, second] = await Promise.all([
       acquireAsResult(source, key, acquireInput(agent), isAcpConnectionError),
@@ -176,5 +192,61 @@ describe('createAcpConnectionSource', () => {
     expect(host.lastHandle.kill).toHaveBeenCalledWith('SIGTERM');
     expect(source.peek(key)).toBeUndefined();
     expect(onClosed).not.toHaveBeenCalled();
+  });
+
+  it('provisions separate pooled processes for auto-approve and manual conversations in the same workspace', async () => {
+    const agent = new FakeAcpAgent();
+    const host = new FakeAcpProcessHost();
+    const source = createAcpConnectionSource(sourceDeps(host));
+
+    const autoKey = makeAcpConnectionKey('claude', 'ws-1', true);
+    const manualKey = makeAcpConnectionKey('claude', 'ws-1', false);
+    await acquireAsResult(source, autoKey, acquireInput(agent, 'ws-1', true), isAcpConnectionError);
+    await acquireAsResult(
+      source,
+      manualKey,
+      acquireInput(agent, 'ws-1', false),
+      isAcpConnectionError
+    );
+
+    expect(host.allHandles).toHaveLength(2);
+    expect(autoKey).not.toBe(manualKey);
+  });
+
+  it('dedupes acquisitions sharing the same auto-approve flag', async () => {
+    const agent = new FakeAcpAgent();
+    const host = new FakeAcpProcessHost();
+    const source = createAcpConnectionSource(sourceDeps(host));
+    const key = makeAcpConnectionKey('claude', 'ws-1', true);
+
+    await acquireAsResult(source, key, acquireInput(agent, 'ws-1', true), isAcpConnectionError);
+    await acquireAsResult(source, key, acquireInput(agent, 'ws-1', true), isAcpConnectionError);
+
+    expect(host.allHandles).toHaveLength(1);
+  });
+
+  it('forwards the auto-approve flag into the agent-host spawn context', async () => {
+    const agent = new FakeAcpAgent();
+    const host = new FakeAcpProcessHost();
+    const buildAcpSpawn = vi
+      .fn()
+      .mockResolvedValue(ok({ command: '/fake/agent', args: [], env: {}, cwd: '/tmp/workspace' }));
+    const source = createAcpConnectionSource(
+      sourceDeps(host, vi.fn(), { buildAcpSpawn } as unknown as AgentPluginHost)
+    );
+
+    const result = await acquireAsResult(
+      source,
+      makeAcpConnectionKey('claude', 'ws-1', true),
+      acquireInput(agent, 'ws-1', true),
+      isAcpConnectionError
+    );
+
+    expect(isOk(result)).toBe(true);
+    expect(buildAcpSpawn).toHaveBeenCalledWith('claude', {
+      cwd: '/tmp/workspace',
+      env: undefined,
+      autoApprove: true,
+    });
   });
 });
