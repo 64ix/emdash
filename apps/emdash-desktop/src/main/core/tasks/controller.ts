@@ -53,6 +53,15 @@ export const taskController = createRPCController({
   async setTaskPinned(taskId: string, isPinned: boolean) {
     return taskService.setTaskPinned(taskId, isPinned);
   },
+  /**
+   * Assigns (`prUrl`) or unassigns (`null`) a task's Assigned PR (CONTEXT.md
+   * "Assigned PR", docs/adr/0009) — ticket #100. The renderer applies the
+   * change optimistically and calls this to persist it; `prUrl` must be a PR
+   * synced for the task's project.
+   */
+  async setTaskAssignedPr(taskId: string, prUrl: string | null) {
+    return taskService.setTaskAssignedPr(taskId, prUrl);
+  },
   async convertAutomationTask(taskId: string) {
     return taskService.convertAutomationTask(taskId);
   },
