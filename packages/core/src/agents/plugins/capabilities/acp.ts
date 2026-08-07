@@ -28,6 +28,8 @@ export type AcpSpawnContext = {
   env: Record<string, string>;
   /** Absolute path to the resolved host CLI binary (mirrors prompt's CommandContext.cli). */
   cli: string;
+  /** Whether the conversation auto-approves permission requests (mirrors prompt's CommandContext.autoApprove). */
+  autoApprove: boolean;
 };
 
 export type AcpSpawnResult = {

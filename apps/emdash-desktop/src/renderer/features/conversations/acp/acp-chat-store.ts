@@ -35,7 +35,7 @@ import type {
   ComposerQueuedPrompt,
 } from '@emdash/ui/react/components';
 import type { BlobSource } from '@emdash/wire';
-import { action, computed, makeObservable, observable, reaction, runInAction, toJS } from 'mobx';
+import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx';
 // TODO(conversations-extraction): Inject task/workspace lookups instead of importing task stores.
 import { asProvisioned, getTaskStore } from '@renderer/features/tasks/stores/task-selectors';
 import { workspaceRegistry } from '@renderer/features/tasks/stores/workspace-registry';
@@ -68,6 +68,7 @@ import {
   PermissionResolutionController,
   type PermissionResolutionEntry,
 } from './acp-permission-resolution';
+import { buildAcpStartInput } from './acp-start-input';
 import type {
   AcpPromptAttachment,
   AcpSubmissionSessionPort,
@@ -85,6 +86,7 @@ import {
   EMPTY_CHANGES_FOOTPRINT,
   type ChangesFootprint,
 } from './changes/acp-changes-footprint';
+import { permissionModePresentation } from './permission-mode-presentation';
 
 export type {
   AcpPromptAttachment,
@@ -422,10 +424,16 @@ export class AcpChatStore {
   get permissionModeOptions(): Record<string, ComposerPermissionModeOption> | null {
     const options = this.session?.config.current().modeOptions;
     if (!options) return null;
+    const providerId =
+      conversationRegistry.get(this.taskId)?.conversations.get(this.conversationId)?.data
+        .providerId ?? '';
     return Object.fromEntries(
       options.available.map((option) => [
         option.id,
-        { name: option.name, description: option.description },
+        {
+          ...permissionModePresentation(providerId, option.id, option.name),
+          description: option.description,
+        },
       ])
     );
   }
@@ -1209,22 +1217,14 @@ export class AcpChatStore {
     const workspace = workspaceRegistry.get(this.projectId, task.workspaceId);
     if (!workspace) throw new Error('Workspace not found');
 
-    const initialQueue =
-      conversation.sessionId === undefined && conversation.initialQueue?.length
-        ? toJS(conversation.initialQueue)
-        : undefined;
-
-    return {
+    return buildAcpStartInput({
       conversationId: this.conversationId,
       projectId: this.projectId,
       taskId: this.taskId,
-      providerId: conversation.providerId,
       workspaceId: task.workspaceId,
-      cwd: workspace.path,
-      sessionId: conversation.sessionId ?? null,
-      model: conversation.model ?? null,
-      ...(initialQueue && { initialQueue }),
-    };
+      workspacePath: workspace.path,
+      conversation,
+    });
   }
 
   private _queuedPromptModels(): QueuedPrompt[] {

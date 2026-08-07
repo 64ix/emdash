@@ -51,6 +51,8 @@ export interface InstalledAgentContentProps {
 function makeDefaultValues(cfg: ProviderCustomConfig | undefined) {
   return {
     extraArgs: cfg?.extraArgs ?? '',
+    defaultModel: cfg?.defaultModel ?? '',
+    defaultEffort: cfg?.defaultEffort ?? '',
     envEntries: cfg?.env
       ? (Object.entries(cfg.env).map(([key, value]) => ({ key, value })) as EnvEntry[])
       : ([] as EnvEntry[]),
@@ -73,11 +75,13 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
     if (isLoading) return;
     const next = makeDefaultValues(storedConfig);
     form.setFieldValue('extraArgs', next.extraArgs);
+    form.setFieldValue('defaultModel', next.defaultModel);
+    form.setFieldValue('defaultEffort', next.defaultEffort);
     form.setFieldValue('envEntries', next.envEntries);
   }, [isLoading, storedConfig, isOverridden, form]);
 
   const commit = useCallback(() => {
-    const { extraArgs, envEntries } = form.state.values;
+    const { extraArgs, defaultModel, defaultEffort, envEntries } = form.state.values;
     const envRecord: Record<string, string> = {};
     for (const { key, value } of envEntries) {
       const k = key.trim();
@@ -86,7 +90,11 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
       }
     }
 
-    const isAtDefaults = extraArgs.trim() === '' && envEntries.every((e) => !e.key.trim());
+    const isAtDefaults =
+      extraArgs.trim() === '' &&
+      defaultModel.trim() === '' &&
+      defaultEffort.trim() === '' &&
+      envEntries.every((e) => !e.key.trim());
 
     if (isAtDefaults) {
       reset(undefined, {
@@ -96,6 +104,8 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
       const config: ProviderCustomConfig = {
         ...(storedConfig ?? {}),
         extraArgs: extraArgs.trim() || undefined,
+        defaultModel: defaultModel.trim() || undefined,
+        defaultEffort: defaultEffort.trim() || undefined,
         env: Object.keys(envRecord).length > 0 ? envRecord : undefined,
       };
       update(config, {
@@ -106,6 +116,8 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
 
   const handleResetToDefaults = useCallback(() => {
     form.setFieldValue('extraArgs', '');
+    form.setFieldValue('defaultModel', '');
+    form.setFieldValue('defaultEffort', '');
     form.setFieldValue('envEntries', []);
     reset(undefined, {
       onError: (err) => log.error('Failed to reset agent config:', err),
@@ -143,6 +155,46 @@ export const InstalledAgentContent = observer(function InstalledAgentContent({
         </CollapsibleTrigger>
 
         <CollapsibleContent className="space-y-4 rounded-lg border p-3">
+          {/* Default model */}
+          <form.Field name="defaultModel">
+            {(field) => (
+              <Field>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="sheet-defaultModel">Default model</Label>
+                  <FieldTooltip content="Model applied when launching an ACP conversation/task without an explicit model. Invalid values fall back to the agent's own default." />
+                </div>
+                <Input
+                  id="sheet-defaultModel"
+                  value={field.state.value}
+                  onChange={(e) => field.handleChange(e.target.value)}
+                  onBlur={() => commit()}
+                  placeholder="e.g. gpt-5-codex"
+                  className="font-mono text-sm"
+                />
+              </Field>
+            )}
+          </form.Field>
+
+          {/* Default effort */}
+          <form.Field name="defaultEffort">
+            {(field) => (
+              <Field>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="sheet-defaultEffort">Default effort</Label>
+                  <FieldTooltip content="Effort/reasoning level applied when launching an ACP conversation/task. Invalid values fall back to the agent's own default." />
+                </div>
+                <Input
+                  id="sheet-defaultEffort"
+                  value={field.state.value}
+                  onChange={(e) => field.handleChange(e.target.value)}
+                  onBlur={() => commit()}
+                  placeholder="e.g. high"
+                  className="font-mono text-sm"
+                />
+              </Field>
+            )}
+          </form.Field>
+
           {/* Additional parameters */}
           <form.Field name="extraArgs">
             {(field) => (

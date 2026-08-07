@@ -6,6 +6,7 @@ import {
   opencodeMcpAdapter,
 } from '@emdash/core/agents/plugins/helpers';
 import { connectStdioAcp } from '../../helpers/acp-stdio';
+import { enrichOpenCodeUpdate } from './acp-transform';
 import { opencodeAuthStatus } from './auth';
 import { OPENCODE_PLUGIN_CONTENT } from './plugin-file';
 
@@ -53,7 +54,7 @@ export const plugin = definePlugin(
     hooks: {
       kind: 'plugin',
       scope: 'workspace',
-      supportedEvents: ['notification', 'stop', 'session'],
+      supportedEvents: ['start', 'notification', 'stop', 'session'],
     },
     hostDependency: npmDependency({ id: 'opencode', package: 'opencode-ai' }),
     mcp: {
@@ -84,10 +85,12 @@ export const provider = registerPluginBehavior(plugin, {
     buildSpawn: (ctx) => ({
       command: ctx.cli,
       args: ['acp'],
+      ...(ctx.autoApprove && { env: { OPENCODE_PERMISSION: '{"*":"allow"}' } }),
     }),
     connect: (io, toClient) => {
       return connectStdioAcp(io, toClient);
     },
+    enrich: enrichOpenCodeUpdate,
   },
   prompt: {
     buildCommand: (ctx) =>

@@ -38,8 +38,9 @@ must then preserve the payload's string `prompt` field on the canonical `status`
 
 Claude Code and Codex are the reference implementations. Both install a `UserPromptSubmit` hook
 that forwards stdin with `makeStdinHookCommand('start')`, and both rely on the canonical parser to
-carry `prompt`. Providers without an observable prompt-submit hook keep the default Conversation
-Title; do not scrape PTY output as a fallback.
+carry `prompt`. OpenCode's plugin-based hooks post the same canonical `start` event from the user
+message's first text part. Providers without an observable prompt-submit hook keep the default
+Conversation Title; do not scrape PTY output as a fallback.
 
 ## Provider Runtime Notes
 

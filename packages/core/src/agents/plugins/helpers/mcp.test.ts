@@ -631,6 +631,132 @@ describe('opencodeMcpAdapter', () => {
   });
 });
 
+// ── OpenCode skills.paths injection ───────────────────────────────────────
+
+describe('opencodeMcpAdapter skills.paths injection', () => {
+  const adapter = opencodeMcpAdapter('.config/opencode/opencode.json');
+
+  it('adds the shared skills root when writing a fresh config', async () => {
+    const fs = createMemoryFs();
+
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+
+    const parsed = JSON.parse((await fs.read('.config/opencode/opencode.json'))!) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.skills).toEqual({ paths: ['~/.agentskills'] });
+    expect((parsed.mcp as Record<string, unknown>).s1).toBeDefined();
+  });
+
+  it('creates only skills.paths, preserving every other key of an existing config', async () => {
+    const fs = createMemoryFs({
+      '.config/opencode/opencode.json': jsonFile({
+        model: 'anthropic/claude-sonnet-4',
+        permission: { edit: 'allow', bash: 'deny' },
+        mcp: { existing: { type: 'local', command: ['node', 'server.js'] } },
+      }),
+    });
+
+    await adapter.writeServers(fs, [
+      { name: 'existing', type: 'local', command: 'node', args: ['server.js'] },
+      { name: 's1', command: 'x' },
+    ]);
+
+    const parsed = JSON.parse((await fs.read('.config/opencode/opencode.json'))!) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.model).toBe('anthropic/claude-sonnet-4');
+    expect(parsed.permission).toEqual({ edit: 'allow', bash: 'deny' });
+    expect(parsed.skills).toEqual({ paths: ['~/.agentskills'] });
+    expect(parsed.mcp).toEqual({
+      existing: { type: 'local', command: ['node', 'server.js'], enabled: true },
+      s1: { type: 'local', command: ['x'], enabled: true },
+    });
+  });
+
+  it('concatenates with user-provided skills.paths, appended and deduplicated', async () => {
+    const fs = createMemoryFs({
+      '.config/opencode/opencode.json': jsonFile({
+        skills: { paths: ['./custom-skills', './other'] },
+      }),
+    });
+
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+
+    const parsed = JSON.parse((await fs.read('.config/opencode/opencode.json'))!) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.skills).toEqual({
+      paths: ['./custom-skills', './other', '~/.agentskills'],
+    });
+  });
+
+  it('preserves other skills keys when adding paths', async () => {
+    const fs = createMemoryFs({
+      '.config/opencode/opencode.json': jsonFile({
+        skills: { agents: { researcher: './skills/researcher' } },
+      }),
+    });
+
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+
+    const parsed = JSON.parse((await fs.read('.config/opencode/opencode.json'))!) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.skills).toEqual({
+      agents: { researcher: './skills/researcher' },
+      paths: ['~/.agentskills'],
+    });
+  });
+
+  it('is idempotent: repeated writes never duplicate or reorder the path', async () => {
+    const fs = createMemoryFs();
+
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+
+    const parsed = JSON.parse((await fs.read('.config/opencode/opencode.json'))!) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.skills).toEqual({ paths: ['~/.agentskills'] });
+  });
+
+  it('leaves the file byte-identical when skills.paths already contains the root', async () => {
+    const fs = createMemoryFs({
+      '.config/opencode/opencode.json': jsonFile({
+        model: 'gpt-5',
+        skills: { paths: ['~/.agentskills'] },
+      }),
+    });
+
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+    const first = await fs.read('.config/opencode/opencode.json');
+
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+
+    expect(await fs.read('.config/opencode/opencode.json')).toBe(first);
+  });
+
+  it('does not inject skills.paths when the adapter is configured without a skills root', async () => {
+    const plain = opencodeMcpAdapter('.config/opencode/opencode.json', [], []);
+    const fs = createMemoryFs();
+
+    await plain.writeServers(fs, [{ name: 's1', command: 'x' }]);
+
+    const parsed = JSON.parse((await fs.read('.config/opencode/opencode.json'))!) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.skills).toBeUndefined();
+  });
+});
+
 // ── MiMo Code adapter ───────────────────────────────────────────────────────
 
 describe('mimocodeMcpAdapter', () => {
@@ -713,6 +839,18 @@ describe('mimocodeMcpAdapter', () => {
         env: { LOCAL: '1' },
       },
     ]);
+  });
+
+  it('does not inject the OpenCode shared skills root into MiMo config', async () => {
+    const fs = createMemoryFs();
+
+    await adapter.writeServers(fs, [{ name: 's1', command: 'x' }]);
+
+    const parsed = JSON.parse((await fs.read('.config/mimocode/mimocode.json'))!) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.skills).toBeUndefined();
   });
 });
 

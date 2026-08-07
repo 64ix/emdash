@@ -371,6 +371,32 @@ describe('executeTaskCreate', () => {
     });
   });
 
+  it('forwards autoApprove into the eager ACP start when the automation enables it', async () => {
+    await executeTaskCreate(
+      {
+        ...automation,
+        conversationConfig: {
+          prompt: 'Check things',
+          provider: 'opencode',
+          autoApprove: true,
+          type: 'acp',
+        },
+      },
+      run,
+      noopStep
+    );
+
+    expect(createConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ autoApprove: true, type: 'acp' })
+    );
+    expect(mockAcpStartSession).toHaveBeenCalledWith({
+      input: expect.objectContaining({
+        providerId: 'opencode',
+        autoApprove: true,
+      }),
+    });
+  });
+
   it('opens the project when it is not loaded', async () => {
     vi.mocked(projectManager.getProject)
       .mockReturnValueOnce(undefined)

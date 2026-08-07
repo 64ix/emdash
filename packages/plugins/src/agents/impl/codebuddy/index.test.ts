@@ -56,6 +56,7 @@ describe('codebuddy provider', () => {
         cli: 'codebuddy',
         cwd: '/tmp/project',
         env: {},
+        autoApprove: false,
       })
     ).toEqual({
       command: 'codebuddy',

@@ -74,6 +74,12 @@ describe('claude acp behavior', () => {
       expect(result.args.length).toBeGreaterThan(0);
       expect(result.args[0]).toContain('claude-agent-acp');
     });
+
+    it('does not add an auto-approve env lever when autoApprove is on', () => {
+      const manual = acpBehavior().buildSpawn({ ...spawnCtx, autoApprove: false });
+      const bypass = acpBehavior().buildSpawn({ ...spawnCtx, autoApprove: true });
+      expect(bypass.env).toEqual(manual.env);
+    });
   });
 
   describe('connect', () => {
