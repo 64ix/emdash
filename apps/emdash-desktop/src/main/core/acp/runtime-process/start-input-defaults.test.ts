@@ -49,6 +49,24 @@ describe('applyProviderLaunchDefaults', () => {
     expect(input.effort).toBeNull();
   });
 
+  it('never applies defaults when resuming an existing session', () => {
+    const input = applyProviderLaunchDefaults(
+      { ...makeBaseInput(), sessionId: 'session-1' },
+      config
+    );
+    expect(input.model).toBeNull();
+    expect(input.effort).toBeUndefined();
+  });
+
+  it('keeps explicit values on a resumed session input untouched', () => {
+    const input = applyProviderLaunchDefaults(
+      { ...makeBaseInput(), sessionId: 'session-1', model: 'claude-sonnet-5', effort: 'low' },
+      config
+    );
+    expect(input.model).toBe('claude-sonnet-5');
+    expect(input.effort).toBe('low');
+  });
+
   it('leaves other start input fields untouched', () => {
     const input = applyProviderLaunchDefaults(
       { ...makeBaseInput(), initialQueue: [{ text: 'hello' }], env: { K: 'v' } },

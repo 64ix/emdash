@@ -25,8 +25,8 @@ const modelConfigOption = {
 };
 
 const effortConfigOption = {
-  id: 'reasoning_effort',
-  name: 'Reasoning effort',
+  id: 'effort',
+  name: 'Effort',
   category: 'thought_level',
   type: 'select',
   currentValue: 'medium',
@@ -56,7 +56,7 @@ describe('start-input config application', () => {
     });
     expect(h.agent.setSessionConfigOption).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-1',
-      configId: 'reasoning_effort',
+      configId: 'effort',
       value: 'high',
     });
   });
@@ -83,7 +83,7 @@ describe('start-input config application', () => {
     });
     expect(h.agent.setSessionConfigOption).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-old',
-      configId: 'reasoning_effort',
+      configId: 'effort',
       value: 'high',
     });
   });
