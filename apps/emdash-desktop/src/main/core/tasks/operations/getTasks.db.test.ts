@@ -123,15 +123,11 @@ describe('getTasks', () => {
   const REPO_B = 'https://github.com/acme/repo-b';
 
   function insertProject(id: string): Promise<unknown> {
-    return fixture.db
-      .insert(projects)
-      .values({ id, name: `Project ${id}`, path: `/repo/${id}` });
+    return fixture.db.insert(projects).values({ id, name: `Project ${id}`, path: `/repo/${id}` });
   }
 
   function insertRemote(projectId: string, remoteUrl: string): Promise<unknown> {
-    return fixture.db
-      .insert(projectRemotes)
-      .values({ projectId, remoteName: 'origin', remoteUrl });
+    return fixture.db.insert(projectRemotes).values({ projectId, remoteName: 'origin', remoteUrl });
   }
 
   function insertWorkspace(id: string, branchName: string | null): Promise<unknown> {
@@ -215,12 +211,10 @@ describe('getTasks', () => {
     // never one query per task.
     let pullRequestQueries = 0;
     const originalPrepare = fixture.sqlite.prepare.bind(fixture.sqlite);
-    const prepareSpy = vi
-      .spyOn(fixture.sqlite, 'prepare')
-      .mockImplementation((sql: string) => {
-        if (sql.includes('from "pull_requests"')) pullRequestQueries += 1;
-        return originalPrepare(sql);
-      });
+    const prepareSpy = vi.spyOn(fixture.sqlite, 'prepare').mockImplementation((sql: string) => {
+      if (sql.includes('from "pull_requests"')) pullRequestQueries += 1;
+      return originalPrepare(sql);
+    });
 
     const rows = await getTasks();
     prepareSpy.mockRestore();
