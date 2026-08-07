@@ -1,4 +1,4 @@
-import { Plus, SlidersHorizontal, X } from 'lucide-react';
+import { FolderKanban, Plus, SlidersHorizontal, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import {
   AGENT_STATE_FILTER_LABELS,
@@ -35,27 +35,90 @@ const LINKED_ISSUE_PRESENCE_VALUES: LinkedIssuePresenceFilterValue[] = ['linked'
 const PR_STATE_VALUES: PrStateFilterValue[] = ['open', 'merged', 'closed', 'none'];
 
 /**
+ * The project multi-select axis (spec #104, ticket #107): the only Global
+ * Board filter that persists (per workspace, `SidebarSnapshot
+ * .globalBoardProjectFilter`). Presentational — the header never imports a
+ * store; the view wires this to the sidebar store, and the Feature Board
+ * simply never passes the axis. An empty `selectedProjectIds` is the
+ * persisted default, "all projects".
+ */
+export type BoardProjectFilterAxis = {
+  /** The filter-list candidate set, in display order — every project with at
+   * least one displayable card (the module's `presentProjects`). */
+  presentProjectIds: readonly string[];
+  /** The active selection; empty = all projects. */
+  selectedProjectIds: ReadonlySet<string>;
+  /** Persists the next explicit selection (`[]` = all projects). */
+  onSelectionChange: (projectIds: string[]) => void;
+  /** Display name for a project id, falling back to the id itself. */
+  projectDisplayNameOf: (projectId: string) => string;
+};
+
+/**
  * Feature Board workspace header (ticket #45): project scope, task creation,
  * search, Needs Attention, and the compact filter categories. Active
  * filters remain visible below as clearable chips — a hidden card must never
- * be unexplained (spec #25's User Story 20).
+ * be unexplained (spec #25's User Story 20). The Global Board (spec #104,
+ * ticket #107) reuses it with `title`, an optional `projectFilter` axis and
+ * no `onCreateTask`; without those props the header is unchanged.
  */
 export function BoardHeader({
+  title = 'Feature board',
   projectName,
   filters,
   onFiltersChange,
   onCreateTask,
+  projectFilter,
 }: {
+  title?: string;
   projectName: string;
   filters: BoardFilterState;
   onFiltersChange: (next: BoardFilterState) => void;
-  onCreateTask: () => void;
+  onCreateTask?: () => void;
+  projectFilter?: BoardProjectFilterAxis;
 }) {
   const compactFilterCount =
     filters.stages.size +
     filters.agentStates.size +
     filters.linkedIssuePresence.size +
     filters.prStates.size;
+
+  // The project axis' active state: an empty selection is the "all projects"
+  // default, so a restriction is active exactly when the selection lists at
+  // least one project. Chips explain the *excluded* projects (the ones a
+  // "hidden card" reading needs explained), each individually clearable to
+  // re-include.
+  const projectSelectionIsActive =
+    projectFilter !== undefined && projectFilter.selectedProjectIds.size > 0;
+  const excludedProjectIds = projectSelectionIsActive
+    ? projectFilter!.presentProjectIds.filter((id) => !projectFilter!.selectedProjectIds.has(id))
+    : [];
+
+  /**
+   * Toggles one project in or out of the selection. From the default (empty
+   * = all), deselecting materializes the explicit list of every other
+   * present project; re-selecting them all normalizes back to the empty
+   * default so the persisted value stays canonical. Stale selected ids
+   * (projects that no longer have displayable cards) are left alone — the
+   * module's filter predicate ignores them — and are never counted above.
+   */
+  const toggleProject = (projectId: string) => {
+    if (!projectFilter) return;
+    const present = projectFilter.presentProjectIds;
+    const selected = [...projectFilter.selectedProjectIds];
+    const isAll = selected.length === 0;
+    const currentlySelected = isAll || selected.includes(projectId);
+    const next = currentlySelected
+      ? isAll
+        ? present.filter((id) => id !== projectId)
+        : selected.filter((id) => id !== projectId)
+      : [...selected, projectId];
+    const coversAll =
+      present.length > 0 &&
+      next.length === present.length &&
+      present.every((id) => next.includes(id));
+    projectFilter.onSelectionChange(coversAll ? [] : next);
+  };
 
   const setNeedsAttentionOnly = (active: boolean) => {
     onFiltersChange({ ...filters, needsAttentionOnly: active });
@@ -74,7 +137,7 @@ export function BoardHeader({
             project name on a narrow supported window could push "New task"
             (the primary action) out of the visible header entirely. */}
         <div className="flex min-w-0 items-baseline gap-2">
-          <h1 className="shrink-0 text-sm font-medium">Feature board</h1>
+          <h1 className="shrink-0 text-sm font-medium">{title}</h1>
           <span
             className="min-w-0 flex-1 truncate text-xs text-foreground-muted"
             title={projectName}
@@ -82,10 +145,15 @@ export function BoardHeader({
             {projectName}
           </span>
         </div>
-        <Button size="sm" onClick={onCreateTask}>
-          <Plus className="size-3.5" />
-          New task
-        </Button>
+        {/* Task creation is Feature Board-only (spec #104): a Global Board
+            card would have no project, so the header offers no "New task"
+            button there — the prop is simply absent. */}
+        {onCreateTask && (
+          <Button size="sm" onClick={onCreateTask}>
+            <Plus className="size-3.5" />
+            New task
+          </Button>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <SearchInput
@@ -182,9 +250,60 @@ export function BoardHeader({
             </FilterGroup>
           </PopoverContent>
         </Popover>
+        {/* Project multi-select (spec #104): the only persisted board filter,
+            per workspace. The candidate set comes from the view (projects
+            with at least one displayable card), so a project with no cards is
+            absent here too — the same omission the board itself applies. */}
+        {projectFilter && (
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button variant="outline" size="sm">
+                  <FolderKanban className="size-3.5" />
+                  Projects
+                  {projectSelectionIsActive && (
+                    <Badge
+                      variant="secondary"
+                      aria-label={`${projectFilter.selectedProjectIds.size} projects selected`}
+                    >
+                      {projectFilter.selectedProjectIds.size}
+                    </Badge>
+                  )}
+                </Button>
+              }
+            />
+            <PopoverContent align="start" className="w-64 gap-3">
+              <FilterGroup title="Projects">
+                {projectFilter.presentProjectIds.length === 0 ? (
+                  <span className="text-xs text-foreground-muted">
+                    No projects with displayable cards yet.
+                  </span>
+                ) : (
+                  projectFilter.presentProjectIds.map((projectId) => (
+                    <FilterCheckboxRow
+                      key={projectId}
+                      label={projectFilter.projectDisplayNameOf(projectId)}
+                      checked={
+                        !projectSelectionIsActive ||
+                        projectFilter.selectedProjectIds.has(projectId)
+                      }
+                      onCheckedChange={() => toggleProject(projectId)}
+                    />
+                  ))
+                )}
+              </FilterGroup>
+            </PopoverContent>
+          </Popover>
+        )}
       </div>
-      {hasActiveBoardFilters(filters) && (
-        <ActiveFilterChips filters={filters} onFiltersChange={onFiltersChange} />
+      {(hasActiveBoardFilters(filters) || excludedProjectIds.length > 0) && (
+        <ActiveFilterChips
+          filters={filters}
+          onFiltersChange={onFiltersChange}
+          excludedProjectIds={excludedProjectIds}
+          projectFilter={projectFilter}
+          onClearProjectFilter={(projectId) => toggleProject(projectId)}
+        />
       )}
     </div>
   );
@@ -236,14 +355,23 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
 /**
  * Active filters stay visible here, each individually clearable, plus a
  * "Clear all" action — a hidden card must always be explainable (spec #25's
- * User Story 20).
+ * User Story 20). On the Global Board (spec #104) the project multi-select
+ * joins as one chip per *excluded* project (the projects whose cards are
+ * hidden), each clearable to re-include; "Clear all" resets the project
+ * selection to the default (all projects) too.
  */
 function ActiveFilterChips({
   filters,
   onFiltersChange,
+  excludedProjectIds,
+  projectFilter,
+  onClearProjectFilter,
 }: {
   filters: BoardFilterState;
   onFiltersChange: (next: BoardFilterState) => void;
+  excludedProjectIds: readonly string[];
+  projectFilter: BoardProjectFilterAxis | undefined;
+  onClearProjectFilter: (projectId: string) => void;
 }) {
   const chips: { key: string; label: string; onClear: () => void }[] = [];
 
@@ -299,6 +427,13 @@ function ActiveFilterChips({
         onFiltersChange({ ...filters, prStates: toggleSetMember(filters.prStates, prState) }),
     });
   }
+  for (const projectId of excludedProjectIds) {
+    chips.push({
+      key: `project-excluded-${projectId}`,
+      label: `Projects: ${projectFilter?.projectDisplayNameOf(projectId) ?? projectId}`,
+      onClear: () => onClearProjectFilter(projectId),
+    });
+  }
 
   return (
     <div className="flex flex-wrap items-center gap-1.5" aria-label="Active filters">
@@ -309,7 +444,10 @@ function ActiveFilterChips({
         <button
           type="button"
           className="text-[11px] text-foreground-muted underline-offset-2 hover:text-foreground hover:underline"
-          onClick={() => onFiltersChange(EMPTY_BOARD_FILTERS)}
+          onClick={() => {
+            onFiltersChange(EMPTY_BOARD_FILTERS);
+            projectFilter?.onSelectionChange([]);
+          }}
         >
           Clear all
         </button>
