@@ -8,8 +8,8 @@ import type { AgentStatus } from '@shared/core/agents/agentEvents';
  * 'working' and idle (`null`) never count.
  *
  * A dependency-free leaf module: no store import, so this can be imported
- * from both `board-attention.ts` (the sidebar Board row's attention count,
- * ticket #43) and `board-filters.ts` (the board's own Needs Attention
+ * from both `board-attention.ts` (the sidebar project row's attention count)
+ * and `board-filters.ts` (the board's own Needs Attention
  * filter, ticket #45 — which must stay importable from a plain `node` unit
  * test with no browser globals) without either pulling in
  * `task-store.ts`'s much heavier transitive chain (`workspace-view-model.tsx`

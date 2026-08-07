@@ -124,8 +124,6 @@ function shape(rows: SidebarStore['sidebarRows']): string[] {
     switch (row.kind) {
       case 'project':
         return `project:${row.projectId}`;
-      case 'board':
-        return `board:${row.projectId}`;
       case 'task':
         return `task:${row.taskId}`;
       case 'stage-group':
@@ -182,7 +180,6 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Idea:2',
       'task:idea-1',
       'task:idea-2',
@@ -193,7 +190,7 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     ]);
   });
 
-  it('keeps Unstaged tasks as loose rows between the Board row and the first group', () => {
+  it('keeps Unstaged tasks as loose rows between the project row and the first group', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([
         {
@@ -212,7 +209,6 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'task:unstaged-2',
       'task:unstaged-1',
       'group:Spec:1',
@@ -256,7 +252,6 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Spec:4',
       'task:awaiting',
       'task:ranked-a',
@@ -308,7 +303,6 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Idea:1',
       'task:i1',
       'group:Spec:2',
@@ -331,12 +325,7 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     store.toggleStageGroupCollapsed('project-1', 'spec');
 
     expect(store.isStageGroupCollapsed('project-1', 'spec')).toBe(false);
-    expect(shape(store.sidebarRows)).toEqual([
-      'project:project-1',
-      'board:project-1',
-      'group:Spec:1',
-      'task:s1',
-    ]);
+    expect(shape(store.sidebarRows)).toEqual(['project:project-1', 'group:Spec:1', 'task:s1']);
   });
 
   it('persists collapsed groups in the snapshot and restores them', () => {
@@ -374,7 +363,6 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     restored.ensureProjectExpanded('project-1');
     expect(shape(restored.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Idea:1',
       'task:i1',
       'group:Spec:1',
@@ -426,12 +414,7 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
       store.toggleProjectExpanded('project-1');
     });
     expect(store.isStageGroupCollapsed('project-1', 'spec')).toBe(false);
-    expect(shape(store.sidebarRows)).toEqual([
-      'project:project-1',
-      'board:project-1',
-      'group:Spec:1',
-      'task:s2',
-    ]);
+    expect(shape(store.sidebarRows)).toEqual(['project:project-1', 'group:Spec:1', 'task:s2']);
   });
 
   it('leaves the pinned strip unchanged and keeps pinned tasks out of the rows', () => {
@@ -456,7 +439,6 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Spec:1',
       'task:regular-1',
     ]);
@@ -491,14 +473,13 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Spec:2',
       'task:spec-1',
       'task:spec-2',
     ]);
   });
 
-  it('omits the board row for a collapsed project', () => {
+  it('omits task rows for a collapsed project', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([
         {
@@ -512,7 +493,7 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     expect(store.sidebarRows).toEqual([{ kind: 'project', projectId: 'project-1' }]);
   });
 
-  it('omits the board row for an expanded project that has not mounted yet', () => {
+  it('omits task rows for an expanded project that has not mounted yet', () => {
     const store = new SidebarStore(
       projectManager([{ id: 'project-1', createdAt: '2026-01-01T00:00:00.000Z' }])
     );
@@ -591,7 +572,6 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'task:u1',
       'group:Spec:1',
       'task:s2',
@@ -613,10 +593,7 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
     store.ensureProjectExpanded('project-1');
     store.hideTaskFromSidebar('project-1', 'u1');
 
-    expect(store.sidebarRows).toEqual([
-      { kind: 'project', projectId: 'project-1' },
-      { kind: 'board', projectId: 'project-1' },
-    ]);
+    expect(store.sidebarRows).toEqual([{ kind: 'project', projectId: 'project-1' }]);
   });
 
   it('drops the group header entirely when every task of a stage is hidden', () => {
@@ -632,10 +609,7 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
     store.ensureProjectExpanded('project-1');
     store.hideTaskFromSidebar('project-1', 's1');
 
-    expect(store.sidebarRows).toEqual([
-      { kind: 'project', projectId: 'project-1' },
-      { kind: 'board', projectId: 'project-1' },
-    ]);
+    expect(store.sidebarRows).toEqual([{ kind: 'project', projectId: 'project-1' }]);
   });
 
   it('showing a hidden task restores its row', () => {
@@ -653,12 +627,7 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
     store.showTaskInSidebar('project-1', 's1');
 
     expect(store.isTaskHidden('project-1', 's1')).toBe(false);
-    expect(shape(store.sidebarRows)).toEqual([
-      'project:project-1',
-      'board:project-1',
-      'group:Spec:1',
-      'task:s1',
-    ]);
+    expect(shape(store.sidebarRows)).toEqual(['project:project-1', 'group:Spec:1', 'task:s1']);
     // Showing a task that was never hidden is a no-op.
     expect(() => store.showTaskInSidebar('project-1', 's1')).not.toThrow();
   });
@@ -684,12 +653,7 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
 
     expect(restored.hiddenTaskIdsByProject).toEqual({ 'project-1': ['s1'] });
     // s1 is the only Spec task, so its group drops its header entirely.
-    expect(shape(restored.sidebarRows)).toEqual([
-      'project:project-1',
-      'board:project-1',
-      'group:Idea:1',
-      'task:i1',
-    ]);
+    expect(shape(restored.sidebarRows)).toEqual(['project:project-1', 'group:Idea:1', 'task:i1']);
     expect(restored.isTaskHidden('project-1', 's1')).toBe(true);
   });
 
@@ -790,7 +754,6 @@ describe('SidebarStore Shipped Fade (spec #85, ticket #87)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Shipped:1',
       'task:fresh',
     ]);
@@ -828,7 +791,6 @@ describe('SidebarStore Shipped Fade (spec #85, ticket #87)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Shipped:1',
       'task:recent',
     ]);
@@ -869,7 +831,6 @@ describe('SidebarStore Shipped Fade (spec #85, ticket #87)', () => {
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Shipped:1',
       'task:visible',
     ]);
@@ -917,7 +878,6 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Spec:2',
       'task:idea-1',
       'task:spec-1',
@@ -945,7 +905,6 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'task:idea-1',
       'group:Spec:1',
       'task:spec-1',
@@ -978,7 +937,6 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
     });
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Idea:1',
       'task:idea-1',
       'group:Spec:1',
@@ -1027,7 +985,6 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'group:Idea:1',
       'task:idea-1',
       'group:Spec:2',
@@ -1065,7 +1022,6 @@ describe('SidebarStore — a stage move re-groups the rows (spec #85, ticket #88
 
     expect(shape(store.sidebarRows)).toEqual([
       'project:project-1',
-      'board:project-1',
       'task:idea-1',
       'task:u2',
       'task:u1',

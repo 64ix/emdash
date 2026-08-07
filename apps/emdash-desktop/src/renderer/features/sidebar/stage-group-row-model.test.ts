@@ -24,8 +24,6 @@ function shape(rows: SidebarRow[]): string[] {
     switch (row.kind) {
       case 'project':
         return `project:${row.projectId}`;
-      case 'board':
-        return `board:${row.projectId}`;
       case 'task':
         return `task:${row.taskId}`;
       case 'stage-group':
@@ -41,8 +39,8 @@ function build(
 }
 
 describe('buildStageGroupedRows', () => {
-  it('leads every project with its project row and Board row', () => {
-    expect(shape(build({ tasks: [] }))).toEqual(['project:p1', 'board:p1']);
+  it('leads every project with its project row', () => {
+    expect(shape(build({ tasks: [] }))).toEqual(['project:p1']);
   });
 
   it('groups tasks by stage in board column order, skipping empty stages', () => {
@@ -58,7 +56,6 @@ describe('buildStageGroupedRows', () => {
     });
     expect(shape(rows)).toEqual([
       'project:p1',
-      'board:p1',
       'group:Idea:2',
       'task:idea-1',
       'task:idea-2',
@@ -71,7 +68,7 @@ describe('buildStageGroupedRows', () => {
     ]);
   });
 
-  it('keeps Unstaged tasks as loose rows under the Board row, with no header', () => {
+  it('keeps Unstaged tasks as loose rows under the project row, with no header', () => {
     const rows = build({
       tasks: [
         task('spec-1', { workflowStage: 'spec' }),
@@ -81,7 +78,6 @@ describe('buildStageGroupedRows', () => {
     });
     expect(shape(rows)).toEqual([
       'project:p1',
-      'board:p1',
       'task:unstaged-2',
       'task:unstaged-1',
       'group:Spec:1',
@@ -100,7 +96,6 @@ describe('buildStageGroupedRows', () => {
     });
     expect(shape(rows)).toEqual([
       'project:p1',
-      'board:p1',
       'group:Spec:4',
       'task:r-a',
       'task:r-z',
@@ -120,7 +115,6 @@ describe('buildStageGroupedRows', () => {
     });
     expect(shape(rows)).toEqual([
       'project:p1',
-      'board:p1',
       'group:Spec:3',
       'task:awaiting-ranked',
       'task:ranked-a',
@@ -133,13 +127,7 @@ describe('buildStageGroupedRows', () => {
       tasks: [task('u1'), task('awaiting-u', { boardRank: 'b' }), task('u2')],
       awaitingInputIds: new Set(['awaiting-u']),
     });
-    expect(shape(rows)).toEqual([
-      'project:p1',
-      'board:p1',
-      'task:awaiting-u',
-      'task:u1',
-      'task:u2',
-    ]);
+    expect(shape(rows)).toEqual(['project:p1', 'task:awaiting-u', 'task:u1', 'task:u2']);
   });
 
   it('shows the visible-task count on each group header', () => {
@@ -163,13 +151,7 @@ describe('buildStageGroupedRows', () => {
       ],
       collapsedStages: new Set(['spec']),
     });
-    expect(shape(rows)).toEqual([
-      'project:p1',
-      'board:p1',
-      'group:Idea:1',
-      'task:i1',
-      'group:Spec:2',
-    ]);
+    expect(shape(rows)).toEqual(['project:p1', 'group:Idea:1', 'task:i1', 'group:Spec:2']);
   });
 
   it('ignores collapsed ids for stages with no visible tasks (stale ids)', () => {
@@ -177,7 +159,7 @@ describe('buildStageGroupedRows', () => {
       tasks: [task('i1', { workflowStage: 'idea' })],
       collapsedStages: new Set(['review', 'shipped']),
     });
-    expect(shape(rows)).toEqual(['project:p1', 'board:p1', 'group:Idea:1', 'task:i1']);
+    expect(shape(rows)).toEqual(['project:p1', 'group:Idea:1', 'task:i1']);
   });
 
   it('applies the visibility filter to group membership and counts (ticket #87 seam)', () => {
@@ -191,7 +173,7 @@ describe('buildStageGroupedRows', () => {
       ],
       isVisible: (t) => !hidden.has(t.id),
     });
-    expect(shape(rows)).toEqual(['project:p1', 'board:p1', 'task:u1', 'group:Spec:1', 'task:s1']);
+    expect(shape(rows)).toEqual(['project:p1', 'task:u1', 'group:Spec:1', 'task:s1']);
   });
 
   it('drops the Shipped group header entirely when the visibility filter hides every shipped task', () => {
@@ -205,7 +187,7 @@ describe('buildStageGroupedRows', () => {
       // past the window — an empty Shipped group is not rendered at all.
       isVisible: (t) => t.workflowStage !== 'shipped',
     });
-    expect(shape(rows)).toEqual(['project:p1', 'board:p1', 'group:Spec:1', 'task:spec-1']);
+    expect(shape(rows)).toEqual(['project:p1', 'group:Spec:1', 'task:spec-1']);
   });
 
   it('counts only non-faded tasks in the Shipped group, mirroring the board column', () => {
@@ -228,7 +210,6 @@ describe('buildStageGroupedRows', () => {
     });
     expect(shape(rows)).toEqual([
       'project:p1',
-      'board:p1',
       'group:Shipped:2',
       'task:recent',
       'task:unranked-recent',

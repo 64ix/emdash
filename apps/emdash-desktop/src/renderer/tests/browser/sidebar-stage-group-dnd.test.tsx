@@ -11,11 +11,11 @@
  * - a cross-stage drop a governing GitHub fact would overwrite is rejected
  *   with the board's gating feedback (toast), and the insertion indicator
  *   never promises it;
- * - Stage Group headers and the Board row are not draggable; the stale
+ * - Stage Group headers are not draggable; the stale
  *   manual task-order write never fires.
  *
  * Mounts the real `SidebarVirtualList` (dnd-kit + react-virtual, same
- * harness pattern as `sidebar-board-row.test.tsx` and the drag driver of
+ * harness pattern as `sidebar-project-row.test.tsx` and the drag driver of
  * `board-dnd.test.tsx`) with `SidebarProjectItem`/`SidebarTaskItem` stubbed
  * out — the drag targets are the sortable row wrappers themselves, so the
  * gesture is fully real.
@@ -203,13 +203,6 @@ function groupHeader(label: string): HTMLElement {
   return action.closest('div') as HTMLElement;
 }
 
-/** The Board row (real `SidebarBoardItem`, never sortable). */
-function boardRow(): HTMLElement {
-  const button = host.querySelector('button[aria-label="Open Feature Board"]');
-  if (!button) throw new Error('no board row');
-  return button.closest('div') as HTMLElement;
-}
-
 /** The insertion indicator line, portaled to the body mid-drag. */
 function insertionIndicator(): HTMLElement | null {
   return document.querySelector<HTMLElement>('div.bg-primary');
@@ -240,7 +233,6 @@ async function dragTo(from: Element, toX: number, toY: number, hoverFrames = 6) 
 function defaultRows(): SidebarRow[] {
   return [
     { kind: 'project', projectId: 'p1' },
-    { kind: 'board', projectId: 'p1' },
     { kind: 'task', projectId: 'p1', taskId: 'u1' },
     { kind: 'task', projectId: 'p1', taskId: 'u2' },
     { kind: 'stage-group', projectId: 'p1', stage: 'idea', label: 'Idea', count: 3 },
@@ -319,7 +311,6 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
     // sidebar-store.test.ts covers that seam) and the rendered list follows.
     (mocks.sidebarRows as unknown as { replace(rows: SidebarRow[]): void }).replace([
       { kind: 'project', projectId: 'p1' },
-      { kind: 'board', projectId: 'p1' },
       { kind: 'task', projectId: 'p1', taskId: 'u1' },
       { kind: 'task', projectId: 'p1', taskId: 'u2' },
       { kind: 'stage-group', projectId: 'p1', stage: 'idea', label: 'Idea', count: 2 },
@@ -466,7 +457,6 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
     storesById.set('hidden-5', makeStore('hidden-5', { workflowStage: 'idea', boardRank: '5' }));
     (mocks.sidebarRows as unknown as { replace(rows: SidebarRow[]): void }).replace([
       { kind: 'project', projectId: 'p1' },
-      { kind: 'board', projectId: 'p1' },
       { kind: 'stage-group', projectId: 'p1', stage: 'idea', label: 'Idea', count: 3 },
       { kind: 'task', projectId: 'p1', taskId: 'v4' },
       { kind: 'task', projectId: 'p1', taskId: 'v6' },
@@ -487,7 +477,7 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
     expect(rank > '4' && rank < '5').toBe(true);
   });
 
-  it('does not let Stage Group headers or the Board row start a drag', async () => {
+  it('does not let Stage Group headers start a drag', async () => {
     await mount();
 
     // A full gesture from the Idea header onto a task row: nothing may
@@ -500,11 +490,5 @@ describe('sidebar drag & drop between Stage Groups (spec #85, ticket #89)', () =
     expect(insertionIndicator()).toBeNull();
     // The host renders 7 task stubs; a drag overlay would add an 8th.
     expect(document.querySelectorAll('[data-row="task"]').length).toBe(7);
-
-    // Same for the Board row.
-    const spec1Center = center(taskRow('spec-1'));
-    await dragTo(boardRow(), spec1Center.x, spec1Center.y);
-    expect(storesById.get('spec-1')!.updateBoardPosition).not.toHaveBeenCalled();
-    expect(mocks.toast).not.toHaveBeenCalled();
   });
 });

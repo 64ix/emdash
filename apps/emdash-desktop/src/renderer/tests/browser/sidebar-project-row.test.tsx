@@ -1,14 +1,15 @@
 /**
- * Browser-mode tests for the sidebar's Board row (ticket #43): row ordering
- * in the sidebar's ordered row model, active-state parity with the board
- * view, the attention count, and the click-to-navigate + telemetry-source
- * affordance.
+ * Browser-mode tests for the sidebar's project row: it is the canonical
+ * entry point to a project's Feature Board — clicking it navigates to the
+ * board (there is no dedicated Board row under the project anymore) — and it
+ * carries the project's Needs Attention count, the same count the board's
+ * own Needs Attention filter uses (Hidden Tasks excluded).
  *
  * Mounts the real `SidebarVirtualList` (dnd-kit + react-virtual, same
- * harness pattern as `board-dnd.test.tsx`) with `SidebarProjectItem` and
- * `SidebarTaskItem` stubbed out — this suite exercises the new Board row and
- * its effect on the surrounding row model, not those components' own
- * (separately covered) behavior.
+ * harness pattern as `board-dnd.test.tsx`) with the real `SidebarProjectItem`
+ * and `SidebarTaskItem` stubbed out — this suite exercises the project row's
+ * own affordances and its effect on the surrounding row model, not the task
+ * row's (separately covered) behavior.
  */
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -39,6 +40,11 @@ const mocks = vi.hoisted(() => ({
   boardProjectId: undefined as string | undefined,
   sidebarRows: [] as SidebarRow[],
   hiddenTaskIdsByProject: {} as Record<string, string[]>,
+  getProjectStore: vi.fn(),
+  loadLocalData: vi.fn(),
+  loadRemoteData: vi.fn(),
+  showCreateTaskModal: vi.fn(),
+  confirmDeleteProject: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
@@ -51,6 +57,11 @@ vi.mock('@renderer/lib/layout/navigation-provider', () => ({
 }));
 
 vi.mock('@renderer/lib/stores/app-state', () => ({
+  appState: {
+    sshConnections: {
+      stateFor: () => 'connected',
+    },
+  },
   sidebarStore: {
     get sidebarRows() {
       return mocks.sidebarRows;
@@ -66,28 +77,71 @@ vi.mock('@renderer/lib/stores/app-state', () => ({
   },
 }));
 
+vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
+  getProjectStore: mocks.getProjectStore,
+  projectViewKind: () => 'ready',
+  getGitRepositoryStore: () => ({
+    localData: { load: mocks.loadLocalData },
+    remoteData: { load: mocks.loadRemoteData },
+  }),
+  // The remaining exports are read by the real `task-store` import chain;
+  // never exercised here.
+  getProjectManagerStore: () => undefined,
+  asMounted: () => undefined,
+  firstMountedProjectId: () => undefined,
+  mountedProjectData: () => null,
+  getProjectSshConnectionId: () => undefined,
+  projectDisplayName: () => undefined,
+  unmountedMountErrorMessage: () => undefined,
+  getProjectSettingsStore: () => undefined,
+  getPrSyncStore: () => undefined,
+  getProjectViewStore: () => undefined,
+}));
+
+vi.mock('@renderer/features/projects/hooks/use-confirm-delete-project', () => ({
+  useConfirmDeleteProject: () => mocks.confirmDeleteProject,
+}));
+
+vi.mock('@renderer/lib/modal/modal-provider', () => ({
+  useShowModal: () => mocks.showCreateTaskModal,
+  // Imported by real modules in the `task-store` chain (see `getTaskView`
+  // stub below); never called here.
+  showModal: vi.fn(),
+}));
+
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   getTaskManagerStore: (projectId: string) => {
     const tasks = managersByProject.get(projectId);
     return tasks ? { tasks } : undefined;
   },
+  // `taskNeedsAttention` (via `board-attention.ts`) reads agent status off
+  // the store; the real implementation needs full conversation stores.
   taskAgentStatus: (store: MockTaskStore) => store.status,
+  // The remaining exports are read by the real `task-store` import chain
+  // (conversation/workspace view models); never exercised here.
   getTaskStore: () => undefined,
+  getRegisteredTaskData: () => undefined,
+  getTaskView: () => undefined,
+  getEditorView: () => undefined,
+  getDiffView: () => undefined,
   getTaskGitWorktreeStore: () => undefined,
+  taskViewKind: () => 'ready',
+  asProvisioned: () => undefined,
+  getWorkspaceForTask: () => undefined,
+  getWorkspaceViewModel: () => undefined,
+  getConversationsForTask: () => [],
+  getTerminalsForTask: () => [],
+  taskDisplayName: () => undefined,
+  taskErrorMessage: () => undefined,
+  projectMountErrorMessage: () => undefined,
 }));
 
-vi.mock('@renderer/features/tasks/stores/task-store', () => ({
-  registeredTaskData: (store: MockTaskStore) => store.data,
+vi.mock('@renderer/features/settings/use-app-settings-key', () => ({
+  useAppSettingsKey: () => ({ value: {} }),
 }));
 
 vi.mock('@renderer/utils/telemetryClient', () => ({
   captureTelemetry: mocks.captureTelemetry,
-}));
-
-vi.mock('@renderer/features/sidebar/project-item', () => ({
-  SidebarProjectItem: ({ projectId }: { projectId: string }) => (
-    <div data-row="project">{`project:${projectId}`}</div>
-  ),
 }));
 
 vi.mock('@renderer/features/sidebar/task-item', () => ({
@@ -137,19 +191,24 @@ async function mount() {
   await settle();
 }
 
-function boardButton(): HTMLButtonElement {
-  return host.querySelector('button[aria-label="Open Feature Board"]') as HTMLButtonElement;
+function projectButton(): HTMLButtonElement {
+  return host.querySelector('button[aria-label^="Open project"]') as HTMLButtonElement;
 }
 
-/** Row kinds in rendered (document) order, mixing the real Board row with the stubbed rows. */
+/** The project row is the button's `SidebarMenuRow` ancestor (`data-active`). */
+function projectRow(): HTMLElement | null {
+  return projectButton()?.closest('[data-active]') ?? null;
+}
+
+/** Row kinds in rendered (document) order, mixing the real project row with the stubbed task rows. */
 function renderedRowKinds(): string[] {
   const els = Array.from(
-    host.querySelectorAll<HTMLElement>('[data-row], [aria-label="Open Feature Board"]')
+    host.querySelectorAll<HTMLElement>('button[aria-label^="Open project"], [data-row="task"]')
   );
-  return els.map((el) => el.getAttribute('data-row') ?? 'board');
+  return els.map((el) => (el.matches('button') ? 'project' : 'task'));
 }
 
-describe('sidebar Board row (ticket #43)', () => {
+describe('sidebar project row: board entry point', () => {
   beforeEach(async () => {
     await page.viewport(400, 800);
     style = document.createElement('style');
@@ -169,10 +228,15 @@ describe('sidebar Board row (ticket #43)', () => {
     mocks.hiddenTaskIdsByProject = {};
     mocks.sidebarRows = [
       { kind: 'project', projectId: 'p1' },
-      { kind: 'board', projectId: 'p1' },
       { kind: 'task', projectId: 'p1', taskId: 't1' },
       { kind: 'task', projectId: 'p1', taskId: 't2' },
     ];
+    mocks.getProjectStore.mockReturnValue({
+      state: 'mounted',
+      id: 'p1',
+      name: 'Project One',
+      data: { id: 'p1', name: 'Project One', type: 'local' },
+    });
   });
 
   afterEach(() => {
@@ -181,22 +245,23 @@ describe('sidebar Board row (ticket #43)', () => {
     style.remove();
   });
 
-  it('places the Board row before task rows, right after its project row', async () => {
+  it('renders the project row followed by task rows, with no Board row beneath the project', async () => {
     await mount();
-    expect(renderedRowKinds()).toEqual(['project', 'board', 'task', 'task']);
+    expect(renderedRowKinds()).toEqual(['project', 'task', 'task']);
+    expect(host.querySelector('button[aria-label="Open Feature Board"]')).toBeNull();
   });
 
   it('is inactive while the project view is open', async () => {
     mocks.currentView = 'project';
     await mount();
-    expect(boardButton().parentElement?.getAttribute('data-active')).toBeNull();
+    expect(projectButton().closest('[data-active="true"]')).toBeNull();
   });
 
   it('shows an active state, and expands its project, when its board is the open view', async () => {
     mocks.currentView = 'board';
     mocks.boardProjectId = 'p1';
     await mount();
-    expect(boardButton().parentElement?.getAttribute('data-active')).toBe('true');
+    expect(projectRow()?.getAttribute('data-active')).toBe('true');
     expect(mocks.ensureProjectExpanded).toHaveBeenCalledWith('p1');
   });
 
@@ -204,12 +269,12 @@ describe('sidebar Board row (ticket #43)', () => {
     mocks.currentView = 'board';
     mocks.boardProjectId = 'some-other-project';
     await mount();
-    expect(boardButton().parentElement?.getAttribute('data-active')).toBeNull();
+    expect(projectButton().closest('[data-active="true"]')).toBeNull();
   });
 
   it('navigates to the project board and records the sidebar entry source on click', async () => {
     await mount();
-    boardButton().click();
+    projectButton().click();
     expect(mocks.navigate).toHaveBeenCalledWith('board', { projectId: 'p1' });
     expect(mocks.captureTelemetry).toHaveBeenCalledWith('board_opened', {
       source: 'sidebar',

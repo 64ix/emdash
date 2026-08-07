@@ -10,7 +10,7 @@
  *
  * Mounts the real `SidebarStageGroupItem` and `TaskRow` with the surrounding
  * providers and presentational children stubbed out, following the harness
- * pattern of `sidebar-board-row.test.tsx`.
+ * pattern of `sidebar-project-row.test.tsx`.
  */
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';

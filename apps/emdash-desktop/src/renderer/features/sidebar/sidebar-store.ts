@@ -191,7 +191,7 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
       const projectId = project.id;
       if (this.expandedProjectIds.has(projectId) && project.mountedProject) {
         // Grouped rows replace the flat task list (spec #85, ticket #86):
-        // project row, Board row, Unstaged loose rows, then one header row
+        // project row, Unstaged loose rows, then one header row
         // per non-empty stage in board column order, each followed by its
         // task rows (omitted for collapsed groups).
         rows.push(...this.groupedRowsForProject(projectId));
@@ -204,8 +204,8 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
 
   /**
    * The stage-grouped rows for one project, independent of expand state.
-   * The row-model builder (stage-group-row-model.ts) emits the project and
-   * Board rows plus the grouped content; it never writes stages or ranks —
+   * The row-model builder (stage-group-row-model.ts) emits the project row
+   * plus the grouped content; it never writes stages or ranks —
    * read-only ordering only (ADR 0006).
    */
   private groupedRowsForProject(projectId: string): SidebarRow[] {

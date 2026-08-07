@@ -30,27 +30,19 @@ import { workflowStages, type StageHoldingPr, type WorkflowStage } from '@shared
  * stage and rank fields).
  *
  * Row layout for an expanded project (CONTEXT.md "Stage Group",
- * "Unstaged"): project row, Board row, Unstaged loose task rows (no
- * header), then one header row per non-empty stage in `COLUMNS` order,
- * each followed by its task rows. Group membership at this stage is *all*
- * tasks of that stage; ticket #87 injects Shipped Fade and Hidden Task
- * filtering through the `isVisible` input without reshaping this API.
+ * "Unstaged"): project row, Unstaged loose task rows (no header), then one
+ * header row per non-empty stage in `COLUMNS` order, each followed by its
+ * task rows. Group membership at this stage is *all* tasks of that stage;
+ * ticket #87 injects Shipped Fade and Hidden Task filtering through the
+ * `isVisible` input without reshaping this API.
  */
 export type SidebarRow =
   | { kind: 'project'; projectId: string }
-  /**
-   * The project's Feature Board destination (ticket #43): rendered right
-   * after its project row and before its task rows, so it reads as a
-   * project-level view rather than an individual task. Never sortable —
-   * unlike project and task rows it never participates in manual drag
-   * reordering.
-   */
-  | { kind: 'board'; projectId: string }
   | { kind: 'task'; projectId: string; taskId: string }
   /**
    * One collapsible Stage Group header per non-empty Workflow Stage, in
-   * board column order (spec #85). Fixed anchor like the Board row: never
-   * draggable, never a drop target for the project/task sortable set.
+   * board column order (spec #85). Fixed anchor: never draggable, never a
+   * drop target for the project/task sortable set.
    * Task rows of a collapsed group are omitted from the row list; the
    * header (and its count) stays.
    */
@@ -127,8 +119,8 @@ export type SidebarTaskRowVariant = 'underProject' | 'grouped';
  * use the deeper `grouped` indent, Unstaged loose rows keep the current
  * `underProject` indent (spec #85 Implementation Decisions). Derived from the
  * row sequence — a task row belongs to the group whose header precedes it,
- * so every task row after a `stage-group` header (until the next project or
- * Board row) is `grouped`, not just the first one. Collapsed groups emit no
+ * so every task row after a `stage-group` header (until the next project
+ * row) is `grouped`, not just the first one. Collapsed groups emit no
  * task rows, so nothing to derive there. Keyed by `projectId:taskId`.
  */
 export function taskRowVariants(rows: readonly SidebarRow[]): Map<string, SidebarTaskRowVariant> {
@@ -137,7 +129,7 @@ export function taskRowVariants(rows: readonly SidebarRow[]): Map<string, Sideba
   for (const row of rows) {
     if (row.kind === 'stage-group') {
       inGroup = true;
-    } else if (row.kind === 'project' || row.kind === 'board') {
+    } else if (row.kind === 'project') {
       inGroup = false;
     } else if (row.kind === 'task') {
       variants.set(`${row.projectId}:${row.taskId}`, inGroup ? 'grouped' : 'underProject');
@@ -148,12 +140,12 @@ export function taskRowVariants(rows: readonly SidebarRow[]): Map<string, Sideba
 
 /**
  * Builds the ordered sidebar rows for one expanded project: project row,
- * Board row, Unstaged loose task rows, then one `stage-group` header row
- * per non-empty stage in `COLUMNS` order, each followed by its task rows
- * unless the group is collapsed. Task order within a group (and within the
- * Unstaged rows) mirrors the board column: Board Rank first, unranked
- * after in input order, Awaiting Input elevated at render time. Read-only:
- * never assigns a rank or stage.
+ * Unstaged loose task rows, then one `stage-group` header row per non-empty
+ * stage in `COLUMNS` order, each followed by its task rows unless the group
+ * is collapsed. Task order within a group (and within the Unstaged rows)
+ * mirrors the board column: Board Rank first, unranked after in input
+ * order, Awaiting Input elevated at render time. Read-only: never assigns a
+ * rank or stage.
  */
 export function buildStageGroupedRows(input: StageGroupRowsInput): SidebarRow[] {
   const { projectId, tasks, collapsedStages, awaitingInputIds } = input;
@@ -174,10 +166,7 @@ export function buildStageGroupedRows(input: StageGroupRowsInput): SidebarRow[] 
     entries.push({ id: task.id, rank: task.boardRank ?? null });
   }
 
-  const rows: SidebarRow[] = [
-    { kind: 'project', projectId },
-    { kind: 'board', projectId },
-  ];
+  const rows: SidebarRow[] = [{ kind: 'project', projectId }];
 
   for (const column of COLUMNS) {
     const entries = entriesByColumn.get(column);
@@ -189,7 +178,7 @@ export function buildStageGroupedRows(input: StageGroupRowsInput): SidebarRow[] 
     const sorted = partitionAwaitingInput(sortColumn(entries), awaiting, false);
 
     if (column === 'unstaged') {
-      // Loose rows directly under the Board row — no "Unstaged" header.
+      // Loose rows directly under the project row — no "Unstaged" header.
       for (const entry of sorted) {
         rows.push({ kind: 'task', projectId, taskId: entry.id });
       }

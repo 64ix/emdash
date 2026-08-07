@@ -11,12 +11,11 @@ import { SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
 
 /**
  * Sidebar Stage Group header (spec #85, ticket #86): the collapsible folder
- * row for one non-empty Workflow Stage, rendered between the project's Board
- * row (above) and its group's task rows. Shows the stage label and the count
+ * row for one non-empty Workflow Stage, rendered between the project row
+ * (above) and its group's task rows. Shows the stage label and the count
  * of visible tasks; clicking toggles the group's collapse state, persisted in
- * the sidebar snapshot via `SidebarStore`. Never draggable — a fixed anchor
- * like the Board row, so the stage sequence cannot be scrambled.
- *
+ * the sidebar snapshot via `SidebarStore`. Never draggable — a fixed anchor,
+ * so the stage sequence cannot be scrambled.
  * The Shipped group carries the same Shipped Fade disclosure as the board's
  * Shipped column (ticket #87): `shipped` tasks past the window leave the
  * group, so the caption explains why the set shrank without the tasks ever

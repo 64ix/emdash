@@ -4,10 +4,9 @@
 
 The kanban view (fork-only) that shows a project's tasks as cards grouped in
 columns by **Workflow Stage**. Project-scoped: every entry point resolves an
-explicit project, never an implicit or last-used one. Reached from the
-project's Board row in the left sidebar (shown before its task rows while
-the project is expanded), the command palette's Open Feature Board command,
-or a task's Workflow Stage chip in its titlebar. Not part of the
+explicit project, never an implicit or last-used one. Reached by clicking a
+project in the left sidebar, the command palette's Open Feature Board
+command, or a task's Workflow Stage chip in its titlebar. Not part of the
 settings/options UI.
 
 Navigation into the Feature Board may carry an optional focused task. The
@@ -126,7 +125,7 @@ always derived from the Spec.
 
 The state of a task whose Workflow Stage is unset. Displayed as the first
 column of the Feature Board, and as ungrouped rows at the top of the
-project's sidebar task list (below the Board row, above the Stage Groups);
+project's sidebar task list (above the Stage Groups);
 not itself a Workflow Stage.
 
 ## Stage Group

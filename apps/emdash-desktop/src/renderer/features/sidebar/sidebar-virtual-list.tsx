@@ -44,7 +44,6 @@ import { activeProjectIdForView } from '@renderer/lib/layout/active-project';
 import { useParams, useWorkspaceSlots } from '@renderer/lib/layout/navigation-provider';
 import { sidebarStore } from '@renderer/lib/stores/app-state';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
-import { SidebarBoardItem } from './board-item';
 import { SidebarProjectItem } from './project-item';
 import { SidebarStageGroupItem } from './stage-group-item';
 import { SidebarTaskItem } from './task-item';
@@ -71,8 +70,8 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
     currentView === 'task' && taskParams.projectId
       ? sidebarStore.expandedProjectIds.has(taskParams.projectId)
       : null;
-  // Board rows (ticket #43) are a fixed anchor, never sortable — dnd-kit's
-  // sortable id list only ever contains project and task rows.
+  // Stage Group headers (spec #85) are fixed anchors, never sortable —
+  // dnd-kit's sortable id list only ever contains project and task rows.
   const allDndIds = useMemo(() => rows.filter(isSortableRow).map(rowToDndId), [rows]);
 
   // Per-task render indent: `grouped` inside a Stage Group, `underProject`
@@ -98,8 +97,8 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
     sidebarStore.ensureProjectExpanded(targetProjectId);
   }, [currentView, taskParams.projectId, taskParams.taskId]);
 
-  // Same expansion guarantee for the board (ticket #43 acceptance criterion:
-  // opening a board keeps its parent project expanded, not just active).
+  // Same expansion guarantee for the board: opening a board keeps its parent
+  // project expanded, not just active.
   useEffect(() => {
     if (currentView !== 'board') return;
     const targetProjectId = boardParams.projectId;
@@ -115,9 +114,9 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   useEffect(() => {
-    // `activeProjectIdForView` also resolves `board` (ticket #43) — opening a
-    // project's board scrolls that project's row into view exactly like
-    // opening its task list does.
+    // `activeProjectIdForView` also resolves `board` — opening a project's
+    // board scrolls that project's row into view exactly like opening its
+    // task list does.
     const targetProjectId = activeProjectIdForView(currentView, {
       task: taskParams.projectId,
       project: projectParams.projectId,
@@ -337,18 +336,9 @@ export const SidebarVirtualList = observer(function SidebarVirtualList() {
                 width: '100%',
                 height: `${vItem.size}px`,
               };
-              if (row.kind === 'board') {
-                // Fixed anchor, not part of the sortable set (see `allDndIds`)
-                // — rendered as a plain row rather than a `SortableRow`.
-                return (
-                  <div key={`board:${row.projectId}`} style={vStyle}>
-                    <SidebarBoardItem projectId={row.projectId} />
-                  </div>
-                );
-              }
               if (row.kind === 'stage-group') {
-                // Stage Group headers (spec #85) are fixed anchors like the
-                // Board row: never draggable, never part of the sortable set.
+                // Stage Group headers (spec #85) are fixed anchors: never
+                // draggable, never part of the sortable set.
                 return (
                   <div key={`stage-group:${row.projectId}:${row.stage}`} style={vStyle}>
                     <SidebarStageGroupItem
@@ -403,14 +393,12 @@ type SidebarDndId =
   | { kind: 'project'; projectId: string }
   | { kind: 'task'; projectId: string; taskId: string };
 
-/** Board rows and Stage Group headers (spec #85) never enter dnd-kit's sortable id list. */
-function isSortableRow(
-  row: SidebarRow
-): row is Exclude<SidebarRow, { kind: 'board' | 'stage-group' }> {
-  return row.kind !== 'board' && row.kind !== 'stage-group';
+/** Stage Group headers (spec #85) never enter dnd-kit's sortable id list. */
+function isSortableRow(row: SidebarRow): row is Exclude<SidebarRow, { kind: 'stage-group' }> {
+  return row.kind !== 'stage-group';
 }
 
-function rowToDndId(row: Exclude<SidebarRow, { kind: 'board' | 'stage-group' }>): string {
+function rowToDndId(row: Exclude<SidebarRow, { kind: 'stage-group' }>): string {
   if (row.kind === 'project') return toProjectDndId(row.projectId);
   return toTaskDndId(row.projectId, row.taskId);
 }
@@ -428,14 +416,14 @@ function parseDndId(id: string): SidebarDndId | null {
  * The Workflow Stage of the task row at `rowIndex` — derived from the row
  * model's own layout ("a task row belongs to the group whose header precedes
  * it", `taskRowVariants`): walk up to the nearest `stage-group` header;
- * hitting the project or Board row first (or the top) means Unstaged (`null`).
+ * hitting the project row first (or the top) means Unstaged (`null`).
  * The same walk classifies both a drag's source row and its target row.
  */
 function taskRowStage(rows: readonly SidebarRow[], rowIndex: number): WorkflowStage | null {
   for (let i = rowIndex - 1; i >= 0; i--) {
     const row = rows[i];
     if (row.kind === 'stage-group') return row.stage;
-    if (row.kind === 'project' || row.kind === 'board') return null;
+    if (row.kind === 'project') return null;
   }
   return null;
 }
