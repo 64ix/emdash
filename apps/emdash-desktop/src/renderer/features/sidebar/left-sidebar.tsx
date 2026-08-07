@@ -13,6 +13,7 @@ import { BoundShortcut } from '@renderer/lib/ui/shortcut';
 import { cn } from '@renderer/utils/utils';
 import { SidebarPinnedTaskList } from './pinned-task-list';
 import { ProjectsGroupLabel } from './projects-group-label';
+import { SidebarBoardTrigger } from './sidebar-board-trigger';
 import {
   SidebarContainer,
   SidebarContent,
@@ -57,6 +58,12 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
       <SidebarSpace />
       <SidebarContainer className="min-h-0 w-full flex-1 border-r-0">
         <SidebarContent className="flex flex-col">
+          {/* Global Board entry point (spec #104, ticket #108): above the
+              pinned-task list, below the space switcher — CONTEXT.md
+              "Global Board". A plain button, no attention badge. */}
+          <SidebarMenu className="px-3 pt-2 pb-1">
+            <SidebarBoardTrigger />
+          </SidebarMenu>
           <SidebarPinnedTaskList />
           <SidebarGroup className="mb-0 flex min-h-0 flex-1 flex-col">
             <ProjectsGroupLabel />
