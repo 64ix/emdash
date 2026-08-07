@@ -17,9 +17,11 @@ vi.mock('@renderer/features/tasks/stores/task-store', () => ({
 // `agentStatusNeedsAttention` itself is covered by `agent-attention.test.ts`
 // next to its dependency-free leaf module (see that module's docstring for
 // why `board-filters.ts` and this module share it instead of each declaring
-// a copy). This file covers only the two things specific to this module:
-// `isBoardDisplayable` gating and the per-project count.
-import { countTasksNeedingAttention, taskNeedsAttention } from './board-attention';
+// a copy). This file covers the one thing specific to this module:
+// `isBoardDisplayable` gating. The sidebar's attention badge and the board's
+// Needs Attention filter both apply `taskNeedsAttention` per task; neither
+// needs a counting helper (the sidebar also filters Hidden Tasks).
+import { taskNeedsAttention } from './board-attention';
 
 type FakeStore = { data: Task | undefined };
 
@@ -69,23 +71,5 @@ describe('taskNeedsAttention', () => {
     mocks.taskAgentStatus.mockReturnValue('error');
     const store: FakeStore = { data: undefined };
     expect(taskNeedsAttention(asStore(store))).toBe(false);
-  });
-});
-
-describe('countTasksNeedingAttention', () => {
-  it('counts only the tasks needing attention, matching the per-task predicate', () => {
-    mocks.taskAgentStatus.mockImplementation((store: FakeStore) =>
-      store.data?.id === 't1' ? 'awaiting-input' : 'working'
-    );
-    const tasks = new Map<string, TaskStore>([
-      ['t1', asStore({ data: makeTask({ id: 't1' }) })],
-      ['t2', asStore({ data: makeTask({ id: 't2' }) })],
-      ['t3', asStore({ data: makeTask({ id: 't3', archivedAt: '2026-01-02T00:00:00.000Z' }) })],
-    ]);
-    expect(countTasksNeedingAttention(tasks)).toBe(1);
-  });
-
-  it('is zero for an empty task map', () => {
-    expect(countTasksNeedingAttention(new Map<string, TaskStore>())).toBe(0);
   });
 });
