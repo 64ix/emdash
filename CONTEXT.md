@@ -27,7 +27,8 @@ Board.
 
 Stage authority is hybrid: GitHub is authoritative for every stage it can
 prove (`exploring` = open Map, `spec` = open Spec issue, `review` = open
-PR referencing the Spec, `shipped` = that PR merged); the agent or user
+PR — the task's [Assigned PR](#assigned-pr) when one is set, else one
+referencing the Spec, `shipped` = that PR merged); the agent or user
 declares the rest (`idea`, `implementing`). A GitHub fact always wins over
 a manual placement.
 
@@ -118,8 +119,21 @@ feature goes through Wayfinder. Optional.
 
 The `[Spec] <feature>` issue for a task. The anchor link: once a task has
 a Spec, everything downstream (tickets, PR, shipped) is derived from
-GitHub by walking from the Spec. A PR is never a stored link — it is
-always derived from the Spec.
+GitHub by walking from the Spec. A PR is derived from the Spec by default
+— unless the user assigns one explicitly, which overrides derivation (see
+[Assigned PR](#assigned-pr)).
+
+## Assigned PR
+
+The Pull Request a user has explicitly attached to a task. Persisted on
+the task, at most one per task. When set, it overrides every derived PR
+(branch match or Spec reference) for display and for the Workflow Stage:
+an open Assigned PR proves `review`, a merged one proves `shipped`, a
+closed unmerged one sends the task to Triage — the same semantics as the
+Spec-derived PR. Unassigning reverts to derivation. Any PR synced for the
+task's project can be assigned; it need not reference the Spec nor match
+the task's branch, and it stays displayed even when derivation finds
+nothing.
 
 ## Unstaged
 
@@ -180,6 +194,10 @@ deleted) is a no-op — the task view still opens, with nothing focused.
 Not shown in ghost mode — a Ghost Card is not a task and has no
 Conversations.
 
+The panel shows the task's PR — its [Assigned PR](#assigned-pr) when one
+is set, else the derived PR — as a clickable row opening the PR
+externally, with the assign and unassign controls.
+
 ## Context Usage
 
 The per-conversation measure of how full one agent session's context
@@ -210,3 +228,33 @@ showing the primary Usage Window's utilization. Clicking it opens a
 detail popover with every Usage Window and its reset time. A gauge
 appears only when usage data is obtainable for that provider on the local
 machine, and each gauge can be hidden in settings.
+
+## ACP Conversation
+
+A Conversation run over the Agent Client Protocol — the provider's native
+chat surface — instead of in a PTY. The runtime renders its turns as a
+typed transcript, with per-session model, effort and permission-mode
+selectors driven by whatever the provider's ACP server advertises. The
+app default whenever the provider declares ACP support and the Chat UI
+preference is enabled.
+
+## Auto-approve
+
+The conversation-level setting that lets the agent act without prompting
+the user for permission. Set at conversation creation, defaulted from a
+per-provider setting. Scoped per conversation — enabling it for one
+conversation never affects another, even in the same workspace. Only
+meaningful for providers that declare the auto-approve capability.
+
+## Managed Skill
+
+A Skill installed from the emdash Skills library into the shared skills
+root. A single copy, not provider-specific: every agent that can read
+the root is expected to pick it up through its own discovery mechanism.
+
+## Provider-Native Skill
+
+A Skill that lives in a provider's own skill directory (e.g. `.opencode/skills`,
+`.claude/skills`, `.agents/skills`) and is loaded by that provider's CLI
+itself. Emdash does not manage it: it is not installed, mirrored, or
+tracked by the Skills library.
