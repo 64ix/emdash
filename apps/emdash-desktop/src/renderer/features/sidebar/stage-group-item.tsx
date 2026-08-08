@@ -26,17 +26,24 @@ export const SidebarStageGroupItem = observer(function SidebarStageGroupItem({
   stage,
   label,
   count,
+  className,
 }: {
   projectId: string;
   stage: WorkflowStage;
   label: string;
   count: number;
+  /**
+   * Indent override (spec #120): the card list nests the group headers
+   * under the project's left rail, so the flat-list `pl-8` gives way to a
+   * shallower indent there (`cn` merge lets the caller's padding win).
+   */
+  className?: string;
 }) {
   const isCollapsed = sidebarStore.isStageGroupCollapsed(projectId, stage);
   const isShipped = stage === 'shipped';
   return (
     <SidebarMenuRow
-      className="group/row h-8 justify-between gap-1 px-1 pl-8"
+      className={cn('group/row h-8 justify-between gap-1 px-1 pl-8', className)}
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => sidebarStore.toggleStageGroupCollapsed(projectId, stage)}
     >

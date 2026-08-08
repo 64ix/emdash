@@ -23,9 +23,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
 } from './sidebar-primitives';
+import { SidebarCardList } from './sidebar-card-list';
 import { SidebarSearchTrigger } from './sidebar-search-trigger';
 import { SidebarSpace } from './sidebar-space';
-import { SidebarVirtualList } from './sidebar-virtual-list';
 import { UpdateSection } from './update-section';
 import { useSidebarDrop } from './use-sidebar-drop';
 
@@ -69,7 +69,7 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
             <ProjectsGroupLabel />
             <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
               <SidebarMenu className="flex min-h-0 flex-1 flex-col">
-                <SidebarVirtualList />
+                <SidebarCardList />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

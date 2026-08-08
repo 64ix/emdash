@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { TaskSidebarTrailingSlot } from '@renderer/features/sidebar/task-sidebar-agent-status';
+import { getProjectStore } from '@renderer/features/projects/stores/project-selectors';
 import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
 import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
 import {
@@ -21,8 +22,13 @@ import { selectCurrentPr } from '@shared/core/pull-requests/pull-requests';
 import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { PrBadge } from '../../lib/components/pr-badge';
 import { useAppSettingsKey } from '../settings/use-app-settings-key';
+import { projectHue } from './project-card-model';
 import { SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
+import { SidebarSignalDot, taskSidebarSignal } from './sidebar-signal-dot';
 import { sidebarStageMoveOptions } from './stage-group-row-model';
+
+/** The active task-row tint (spec #120 US15): jade, both themes. */
+const JADE_ACTIVE_BACKGROUND = 'color-mix(in srgb, var(--jade-9) 8%, transparent)';
 
 interface SidebarTaskItemProps {
   taskId: string;
@@ -30,9 +36,11 @@ interface SidebarTaskItemProps {
   /**
    * Pinned strip uses tighter padding than tasks nested under a project;
    * tasks inside a Stage Group (spec #85) are indented one level deeper
-   * than Unstaged loose rows.
+   * than Unstaged loose rows. Inside a project card (spec #120), the card's
+   * left rail already provides the indent, so the row only needs a shallow
+   * one.
    */
-  rowVariant?: 'underProject' | 'pinned' | 'grouped';
+  rowVariant?: 'underProject' | 'pinned' | 'grouped' | 'card';
 }
 
 export const SidebarTaskItem = observer(function SidebarTaskItem({
@@ -54,6 +62,7 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
   const taskManager = getTaskManagerStore(projectId);
 
   const taskName = task.data.name;
+  const signal = taskSidebarSignal(task);
 
   const handleProvision = () => {
     if (task.state !== 'unprovisioned' || task.phase !== 'idle') return;
@@ -92,6 +101,11 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
   const branchName = git?.branchName ?? undefined;
   const handleReconnect =
     workspaceStore?.connectionState != null ? () => workspaceStore.reconnect() : undefined;
+
+  // Pinned strip (spec #120 US13): the task keeps its project identity — hue
+  // dot and project name — so pinned tasks stay attributable across projects.
+  const pinnedProjectName =
+    rowVariant === 'pinned' ? (getProjectStore(projectId)?.name ?? 'project') : null;
 
   // "Move to stage…" (spec #85, ticket #88): the same authority gating the
   // board applies to cross-stage drops, computed synchronously from data
@@ -134,9 +148,16 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
       <SidebarMenuRow
         className={cn(
           'group/row flex items-center justify-between px-1 py-1.5 h-8 gap-1',
-          rowVariant === 'pinned' ? 'pl-2' : rowVariant === 'grouped' ? 'pl-12' : 'pl-8'
+          rowVariant === 'pinned'
+            ? 'pl-2'
+            : rowVariant === 'card'
+              ? 'pl-1'
+              : rowVariant === 'grouped'
+                ? 'pl-12'
+                : 'pl-8'
         )}
         isActive={isActive}
+        style={isActive ? { backgroundColor: JADE_ACTIVE_BACKGROUND } : undefined}
         onMouseDown={(e) => e.preventDefault()}
         onClick={openTask}
       >
@@ -144,15 +165,28 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
           aria-label={`Open task ${taskName || 'task'}`}
           className="gap-1 overflow-hidden"
         >
+          {rowVariant === 'pinned' && (
+            <span
+              className="size-2 shrink-0 rounded-full"
+              style={{ backgroundColor: projectHue(projectId).dot }}
+            />
+          )}
+          <SidebarSignalDot signal={signal} />
           <span
             className={cn(
               'min-w-0 truncate text-left transition-colors',
-              task.isBootstrapping && 'text-foreground/40'
+              task.isBootstrapping && 'text-foreground/40',
+              isActive && 'font-medium text-[var(--jade-11)]'
             )}
           >
             {taskName}
           </span>
         </SidebarMenuAction>
+        {pinnedProjectName && (
+          <span className="max-w-24 shrink-0 truncate text-[11px] text-foreground-tertiary-passive">
+            {pinnedProjectName}
+          </span>
+        )}
         <div className="ml-2 flex shrink-0 items-center justify-end gap-1.5">
           {showLineChanges && <TaskGitDiffStats task={task} />}
           {showPrStatus && <RenderPrBadge task={task} />}
