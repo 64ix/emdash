@@ -14,6 +14,7 @@ import { cn } from '@renderer/utils/utils';
 import { SidebarPinnedTaskList } from './pinned-task-list';
 import { ProjectsGroupLabel } from './projects-group-label';
 import { SidebarBoardTrigger } from './sidebar-board-trigger';
+import { SidebarCardList } from './sidebar-card-list';
 import {
   SidebarContainer,
   SidebarContent,
@@ -23,7 +24,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
 } from './sidebar-primitives';
-import { SidebarCardList } from './sidebar-card-list';
 import { SidebarSearchTrigger } from './sidebar-search-trigger';
 import { SidebarSpace } from './sidebar-space';
 import { UpdateSection } from './update-section';

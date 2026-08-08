@@ -138,9 +138,7 @@ export const SidebarCardList = observer(function SidebarCardList() {
     if (!container) return;
     const target = targetTaskId
       ? container.querySelector<HTMLElement>(`[data-sidebar-task-id="${targetTaskId}"]`)
-      : container.querySelector<HTMLElement>(
-          `[data-sidebar-project-id="${targetProjectId}"]`
-        );
+      : container.querySelector<HTMLElement>(`[data-sidebar-project-id="${targetProjectId}"]`);
     target?.scrollIntoView({ block: 'nearest' });
   }, [
     currentView,
@@ -348,10 +346,7 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
             >
               {(projectLabel[0] ?? '?').toUpperCase()}
             </span>
-            <SidebarMenuAction
-              aria-label={`Open project ${projectLabel}`}
-              className="gap-1.5"
-            >
+            <SidebarMenuAction aria-label={`Open project ${projectLabel}`} className="gap-1.5">
               <span
                 className={cn(
                   'min-w-0 truncate text-left font-semibold transition-colors select-none',
@@ -465,10 +460,7 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
         </ContextMenuContent>
       </ContextMenu>
       {isExpanded && (
-        <div
-          className="mr-1.5 ml-[18px] border-l-2 pb-1.5 pl-3"
-          style={{ borderColor: hue.rail }}
-        >
+        <div className="mr-1.5 ml-[18px] border-l-2 pb-1.5 pl-3" style={{ borderColor: hue.rail }}>
           {card.stageGroups.map((group) => (
             <SidebarStageGroupItem
               key={group.stage}
@@ -481,11 +473,7 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
           ))}
           {card.tasks.map((task) => (
             <div key={task.taskId} data-sidebar-task-id={task.taskId}>
-              <SidebarTaskItem
-                projectId={task.projectId}
-                taskId={task.taskId}
-                rowVariant="card"
-              />
+              <SidebarTaskItem projectId={task.projectId} taskId={task.taskId} rowVariant="card" />
             </div>
           ))}
           {card.stageGroups.length === 0 && card.tasks.length === 0 && (

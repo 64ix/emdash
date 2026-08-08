@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
-import { TaskSidebarTrailingSlot } from '@renderer/features/sidebar/task-sidebar-agent-status';
 import { getProjectStore } from '@renderer/features/projects/stores/project-selectors';
+import { TaskSidebarTrailingSlot } from '@renderer/features/sidebar/task-sidebar-agent-status';
 import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
 import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
 import {
