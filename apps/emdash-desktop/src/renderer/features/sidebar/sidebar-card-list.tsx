@@ -1,4 +1,27 @@
 import {
+  closestCenter,
+  DndContext,
+  DragOverlay,
+  MeasuringStrategy,
+  PointerSensor,
+  pointerWithin,
+  useDndContext,
+  useSensor,
+  useSensors,
+  type ClientRect,
+  type CollisionDetection,
+  type DragEndEvent,
+  type DragMoveEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
   CableIcon,
   ChevronRight,
   FolderClosed,
@@ -8,7 +31,8 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { taskNeedsAttention } from '@renderer/features/board/board-attention';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import {
@@ -88,6 +112,16 @@ export const SidebarCardList = observer(function SidebarCardList() {
   const { params: projectParams } = useParams('project');
   const { params: boardParams } = useParams('board');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const initialPointerYRef = useRef<number | null>(null);
+  const dragPointerYRef = useRef<number | null>(null);
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [dragPointerY, setDragPointerY] = useState<number | null>(null);
+
+  // The project-card port of the old row drags (ticket #123): the same
+  // PointerSensor distance-6 activation the project rows used, so a plain
+  // click never starts a drag (header click keeps opening the board) and a
+  // real drag never trips the click.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const activeTaskProjectExpanded =
     currentView === 'task' && taskParams.projectId
@@ -149,10 +183,6 @@ export const SidebarCardList = observer(function SidebarCardList() {
     activeTaskProjectExpanded,
   ]);
 
-  if (sidebarStore.isEmpty) {
-    return <SidebarEmptyState />;
-  }
-
   const cards = buildProjectCards({
     rows,
     signalByTaskId: collectSignals(),
@@ -160,14 +190,88 @@ export const SidebarCardList = observer(function SidebarCardList() {
     collapsedTaskIdsByProjectId: collapsedProjectTaskRefs(),
   });
 
+  // Only the card headers are sortable (spec #120: task rows stay
+  // non-sortable — task order is Board Rank driven since spec #85) and every
+  // card is a droppable node, so the sortable id list is exactly the cards.
+  const allDndIds = useMemo(() => cards.map((card) => toProjectDndId(card.projectId)), [cards]);
+
+  if (sidebarStore.isEmpty) {
+    return <SidebarEmptyState />;
+  }
+
+  function setCurrentDragPointerY(pointerY: number | null) {
+    dragPointerYRef.current = pointerY;
+    setDragPointerY(pointerY);
+  }
+
+  function handleDragStart(event: DragStartEvent) {
+    const pointerY = getEventClientY(event.activatorEvent);
+    initialPointerYRef.current = pointerY;
+    setActiveDragId(String(event.active.id));
+    setCurrentDragPointerY(pointerY);
+  }
+
+  function handleDragMove(event: DragMoveEvent) {
+    const initialPointerY = initialPointerYRef.current;
+    if (initialPointerY === null) return;
+    setCurrentDragPointerY(initialPointerY + event.delta.y);
+  }
+
+  function clearDragPointerY() {
+    initialPointerYRef.current = null;
+    setActiveDragId(null);
+    setCurrentDragPointerY(null);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    const pointerY = dragPointerYRef.current;
+    clearDragPointerY();
+    if (!over || active.id === over.id) return;
+    const activeProjectId = parseDndId(String(active.id));
+    const overProjectId = parseDndId(String(over.id));
+    if (!activeProjectId || !overProjectId) return;
+
+    const oldIdx = cards.findIndex((card) => card.projectId === activeProjectId);
+    const overIdx = cards.findIndex((card) => card.projectId === overProjectId);
+    if (oldIdx === -1 || overIdx === -1) return;
+
+    // The same drop math as the old project rows (ticket #123 port): the
+    // destination slot is the over card's position, above or below per the
+    // pointer, and the persisted order is the store's existing
+    // `setProjectOrder` — one reorder source, snapshot-persisted (ADR 0006).
+    const isAbove = isCursorAbove(pointerY, active.rect.current.translated, over.rect);
+    let newIdx = isAbove ? overIdx : overIdx + 1;
+    if (newIdx > oldIdx) newIdx -= 1;
+    if (newIdx === oldIdx) return;
+    sidebarStore.setProjectOrder(arrayMove(cards.map((card) => card.projectId), oldIdx, newIdx));
+  }
+
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3">
-      <div className="space-y-2">
-        {cards.map((card) => (
-          <SidebarProjectCard key={card.projectId} card={card} />
-        ))}
-      </div>
-    </div>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={cardCollision}
+      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+      autoScroll={{ threshold: { x: 0, y: 0.18 }, acceleration: 8, interval: 5 }}
+      onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd}
+      onDragCancel={clearDragPointerY}
+    >
+      <SortableContext items={allDndIds} strategy={verticalListSortingStrategy}>
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3">
+          <div className="space-y-2">
+            {cards.map((card) => (
+              <SidebarProjectCard key={card.projectId} card={card} />
+            ))}
+          </div>
+        </div>
+      </SortableContext>
+      <DragOverlay dropAnimation={null}>
+        {activeDragId ? <CardDragOverlayContent projectId={parseDndId(activeDragId) ?? ''} /> : null}
+      </DragOverlay>
+      <InsertionIndicator pointerY={dragPointerY} />
+    </DndContext>
   );
 });
 
@@ -268,6 +372,15 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
   const hue = projectHue(projectId);
   const isExpanded = sidebarStore.expandedProjectIds.has(projectId);
 
+  // The card is the sortable node; only its header carries the drag handle
+  // (the pointer listeners), so a drag can only start from the header —
+  // never from a nested task row or the chevron (which stops pointerdown
+  // propagation itself) — while header clicks keep their click-to-board
+  // navigation: the distance-6 activation never fires for a plain click.
+  const { setNodeRef, transform, transition, isDragging, listeners } = useSortable({
+    id: toProjectDndId(projectId),
+  });
+
   // `board` resolves here too — opening a project's board keeps its card
   // looking active, same as opening its task list.
   const currentProjectId = activeProjectIdForView(currentView, {
@@ -328,12 +441,20 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
 
   return (
     <div
+      ref={setNodeRef}
       className="overflow-hidden rounded-xl border border-border/60 bg-background-tertiary-1/40"
       data-sidebar-project-id={projectId}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+        zIndex: isDragging ? 1 : 'auto',
+      }}
     >
       <ContextMenu>
         <ContextMenuTrigger>
           <SidebarMenuRow
+            {...listeners}
             className="group/row h-9 cursor-pointer justify-between gap-2 px-2"
             isActive={isProjectActive}
             style={isProjectActive ? { backgroundColor: JADE_ACTIVE_BACKGROUND } : undefined}
@@ -486,3 +607,112 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
     </div>
   );
 });
+
+const PROJECT_DND_PREFIX = 'proj::';
+
+const toProjectDndId = (projectId: string) => `${PROJECT_DND_PREFIX}${projectId}`;
+
+/**
+ * The project id behind a card dnd id, or `null` for anything else. Only
+ * cards are sortable (spec #120: task rows are non-sortable), so a non-
+ * project id can only be a stale event.
+ */
+function parseDndId(id: string): string | null {
+  return id.startsWith(PROJECT_DND_PREFIX) ? id.slice(PROJECT_DND_PREFIX.length) : null;
+}
+
+/**
+ * Card drags consider every card container except the active one (dnd-kit's
+ * own convention: an item is never a drop target for itself). The pointer's
+ * card wins when the pointer is inside one, the nearest card otherwise —
+ * the old row collision shape, with nothing to filter (no task droppables
+ * in the card list).
+ */
+const cardCollision: CollisionDetection = (args) => {
+  const activeId = String(args.active.id);
+  const containers = args.droppableContainers.filter((c) => String(c.id) !== activeId);
+  const filteredArgs = { ...args, droppableContainers: containers };
+  const pointerCollisions = pointerWithin(filteredArgs);
+  return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(filteredArgs);
+};
+
+function getEventClientY(event: Event): number | null {
+  if ('clientY' in event && typeof event.clientY === 'number') return event.clientY;
+  if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
+    const touch = event.touches[0] ?? event.changedTouches[0];
+    return touch?.clientY ?? null;
+  }
+  return null;
+}
+
+function isCursorAbove(
+  pointerY: number | null,
+  translated: ClientRect | null,
+  overRect: ClientRect
+): boolean {
+  if (pointerY !== null) return pointerY < overRect.top + overRect.height / 2;
+  if (!translated) return true;
+  const cursorY = translated.top + translated.height / 2;
+  const overCenterY = overRect.top + overRect.height / 2;
+  return cursorY < overCenterY;
+}
+
+/**
+ * The drag overlay (ticket #123): a compact replica of the dragged card's
+ * header — identity chip and name on the project hue — portaled by dnd-kit
+ * to the body while the source card dims in place (opacity 0.4), exactly
+ * like the old row drags. Rendered statically: the overlay must not carry
+ * live handlers.
+ */
+function CardDragOverlayContent({ projectId }: { projectId: string }) {
+  const project = getProjectStore(projectId);
+  if (!project) return null;
+  const projectLabel = project.name ?? 'project';
+  const hue = projectHue(projectId);
+  return (
+    <div className="rounded-xl border border-border/60 bg-background-tertiary-1 shadow-md">
+      <div className="flex h-9 items-center gap-2 px-2">
+        <span
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-[11px] font-bold"
+          style={{ backgroundColor: hue.chipBg, color: hue.fg }}
+        >
+          {(projectLabel[0] ?? '?').toUpperCase()}
+        </span>
+        <span className="min-w-0 truncate text-left font-semibold select-none">
+          {projectLabel}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The insertion line between cards (spec #120, ticket #123): drawn at the
+ * over card's top edge when the pointer is above its midline, at its bottom
+ * edge otherwise — i.e. always in the gap between cards, never over one.
+ */
+function InsertionIndicator({ pointerY }: { pointerY: number | null }) {
+  const { active, over } = useDndContext();
+  if (!active || !over || active.id === over.id) return null;
+  if (parseDndId(String(active.id)) === null || parseDndId(String(over.id)) === null) return null;
+  const overRect = over.rect;
+  if (!overRect) return null;
+  const isAbove = isCursorAbove(pointerY, active.rect.current.translated, overRect);
+  const top = isAbove ? overRect.top : overRect.top + overRect.height;
+  return createPortal(
+    <div
+      className="bg-primary"
+      style={{
+        position: 'fixed',
+        left: overRect.left + 8,
+        top: top - 1.5,
+        width: Math.max(0, overRect.width - 16),
+        height: 3,
+        borderRadius: 2,
+        pointerEvents: 'none',
+        zIndex: 9999,
+      }}
+    />,
+    document.body
+  );
+}
