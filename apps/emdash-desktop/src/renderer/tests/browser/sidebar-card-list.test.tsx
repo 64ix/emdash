@@ -92,6 +92,10 @@ const mocks = vi.hoisted(() => ({
   loadLocalData: vi.fn(),
   loadRemoteData: vi.fn(),
   sidebarStore: null as unknown as MockSidebarStore,
+  interfaceSettings: {} as Record<string, boolean>,
+  TaskGitDiffStats: vi.fn(() => null),
+  PrBadge: vi.fn(() => null),
+  RelativeTime: vi.fn(() => null),
 }));
 
 vi.mock('@renderer/lib/layout/navigation-provider', () => ({
@@ -248,7 +252,7 @@ vi.mock('@renderer/features/tasks/stores/task-store', () => ({
 }));
 
 vi.mock('@renderer/features/settings/use-app-settings-key', () => ({
-  useAppSettingsKey: () => ({ value: {} }),
+  useAppSettingsKey: () => ({ value: mocks.interfaceSettings }),
 }));
 
 vi.mock('@renderer/lib/hooks/use-toast', () => ({
@@ -260,16 +264,17 @@ vi.mock('@renderer/utils/telemetryClient', () => ({
   captureTelemetry: mocks.captureTelemetry,
 }));
 
-// Presentational children of the task row — separately covered, not under
-// test here (the settings-gated metadata is their own component's behavior).
+// Presentational children of the task row — spied here so the
+// settings-gated trailing metadata (showLeftSidebar*, spec #120 US12) can be
+// asserted to mount and unmount with its settings.
 vi.mock('@renderer/features/tasks/components/task-git-diff-stats', () => ({
-  TaskGitDiffStats: () => null,
+  TaskGitDiffStats: mocks.TaskGitDiffStats,
 }));
 vi.mock('@renderer/lib/components/pr-badge', () => ({
-  PrBadge: () => null,
+  PrBadge: mocks.PrBadge,
 }));
 vi.mock('@renderer/lib/ui/relative-time', () => ({
-  RelativeTime: () => null,
+  RelativeTime: mocks.RelativeTime,
 }));
 
 import { SidebarCardList } from '@renderer/features/sidebar/sidebar-card-list';
@@ -372,6 +377,10 @@ describe('SidebarCardList (spec #120, ticket #122)', () => {
     mocks.projectViewKind = 'ready';
     mocks.sshState = 'connected';
     mocks.getProjectStore.mockReturnValue(defaultProject());
+    mocks.interfaceSettings = {};
+    mocks.TaskGitDiffStats.mockClear();
+    mocks.PrBadge.mockClear();
+    mocks.RelativeTime.mockClear();
 
     const s = store();
     s.rawSidebarRows = [];
@@ -583,6 +592,10 @@ describe('SidebarTaskItem inside cards (spec #120, ticket #122)', () => {
     mocks.currentView = 'project';
     mocks.taskParams = {};
     mocks.getProjectStore.mockReturnValue(defaultProject());
+    mocks.interfaceSettings = {};
+    mocks.TaskGitDiffStats.mockClear();
+    mocks.PrBadge.mockClear();
+    mocks.RelativeTime.mockClear();
   });
 
   afterEach(() => {
@@ -610,6 +623,41 @@ describe('SidebarTaskItem inside cards (spec #120, ticket #122)', () => {
     expect(host.querySelector('[aria-label="Needs input"]')).toBeNull();
     expect(host.querySelector('[aria-label="Error"]')).toBeNull();
     expect(host.querySelector('[aria-label="Done"]')).toBeNull();
+  });
+
+  it('gates the trailing metadata by the showLeftSidebar* settings (spec #120 US12)', async () => {
+    // A task with an open PR, so the PR badge would render when enabled.
+    managersByProject.set(
+      'p1',
+      new Map([
+        [
+          't1',
+          makeTask('t1', 'idle', {
+            prs: [{ status: 'open', createdAt: '2026-01-02T00:00:00.000Z' }],
+          }),
+        ],
+      ])
+    );
+
+    mocks.interfaceSettings = {
+      showLeftSidebarLineChanges: false,
+      showLeftSidebarPrStatus: false,
+      showLeftSidebarTimestamps: false,
+    };
+    await mount(<SidebarTaskItem projectId="p1" taskId="t1" rowVariant="card" />);
+    expect(mocks.TaskGitDiffStats).not.toHaveBeenCalled();
+    expect(mocks.PrBadge).not.toHaveBeenCalled();
+    expect(mocks.RelativeTime).not.toHaveBeenCalled();
+
+    mocks.interfaceSettings = {
+      showLeftSidebarLineChanges: true,
+      showLeftSidebarPrStatus: true,
+      showLeftSidebarTimestamps: true,
+    };
+    await mount(<SidebarTaskItem key="all-on" projectId="p1" taskId="t1" rowVariant="card" />);
+    expect(mocks.TaskGitDiffStats).toHaveBeenCalled();
+    expect(mocks.PrBadge).toHaveBeenCalled();
+    expect(mocks.RelativeTime).toHaveBeenCalled();
   });
 
   it('pinned rows keep the project hue dot and project name', async () => {
