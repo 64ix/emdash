@@ -182,7 +182,9 @@ export type SidebarSnapshot = {
   /**
    * Global Board project multi-select (spec #104, ticket #105): the project
    * ids whose cards the Global Board shows. Absent (or `undefined`) means
-   * "all projects" — the default; an empty array means "no projects". The
+   * "all projects" — the default; an empty array behaves the same way (the
+   * header's toggle normalizes a full re-selection back to the empty
+   * "all projects" default, so the persisted value stays canonical). The
    * only Global Board filter that persists; the Board Header's other filters
    * stay ephemeral view state. Scoped per workspace: the sidebar snapshot is
    * app-global today (a single workspace), so this flat field holds that

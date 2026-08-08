@@ -681,7 +681,7 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
     expect(restored.globalBoardProjectFilter).toEqual(['project-1', 'project-2']);
   });
 
-  it('round-trips an empty Global Board project selection (no projects)', () => {
+  it('round-trips an empty Global Board project selection (all projects)', () => {
     const store = new SidebarStore(projectManager([]));
     store.setGlobalBoardProjectFilter([]);
 
