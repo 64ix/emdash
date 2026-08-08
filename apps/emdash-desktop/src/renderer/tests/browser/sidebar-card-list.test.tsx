@@ -454,7 +454,7 @@ describe('SidebarCardList (spec #120, ticket #122)', () => {
     expect(host.querySelector('button[aria-label="Collapse Project One"]')).not.toBeNull();
     expect(rail()).not.toBeNull();
 
-    host.querySelector('button[aria-label="Collapse Project One"]')!.click();
+    (host.querySelector('button[aria-label="Collapse Project One"]') as HTMLElement).click();
     await settle();
     expect(store().expandedProjectIds.has('p1')).toBe(false);
     expect(rail()).toBeNull();
