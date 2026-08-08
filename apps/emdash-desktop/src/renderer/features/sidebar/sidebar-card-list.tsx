@@ -244,7 +244,13 @@ export const SidebarCardList = observer(function SidebarCardList() {
     let newIdx = isAbove ? overIdx : overIdx + 1;
     if (newIdx > oldIdx) newIdx -= 1;
     if (newIdx === oldIdx) return;
-    sidebarStore.setProjectOrder(arrayMove(cards.map((card) => card.projectId), oldIdx, newIdx));
+    sidebarStore.setProjectOrder(
+      arrayMove(
+        cards.map((card) => card.projectId),
+        oldIdx,
+        newIdx
+      )
+    );
   }
 
   return (
@@ -268,7 +274,9 @@ export const SidebarCardList = observer(function SidebarCardList() {
         </div>
       </SortableContext>
       <DragOverlay dropAnimation={null}>
-        {activeDragId ? <CardDragOverlayContent projectId={parseDndId(activeDragId) ?? ''} /> : null}
+        {activeDragId ? (
+          <CardDragOverlayContent projectId={parseDndId(activeDragId) ?? ''} />
+        ) : null}
       </DragOverlay>
       <InsertionIndicator pointerY={dragPointerY} />
     </DndContext>
@@ -678,9 +686,7 @@ function CardDragOverlayContent({ projectId }: { projectId: string }) {
         >
           {(projectLabel[0] ?? '?').toUpperCase()}
         </span>
-        <span className="min-w-0 truncate text-left font-semibold select-none">
-          {projectLabel}
-        </span>
+        <span className="min-w-0 truncate text-left font-semibold select-none">{projectLabel}</span>
       </div>
     </div>
   );

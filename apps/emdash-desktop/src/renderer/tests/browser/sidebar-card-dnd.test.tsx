@@ -375,8 +375,8 @@ function dragOverlay(): HTMLElement | null {
 }
 
 function renderedCardOrder(): string[] {
-  return Array.from(host.querySelectorAll('[data-sidebar-project-id]')).map((el) =>
-    el.getAttribute('data-sidebar-project-id')!
+  return Array.from(host.querySelectorAll('[data-sidebar-project-id]')).map(
+    (el) => el.getAttribute('data-sidebar-project-id')!
   );
 }
 
@@ -494,15 +494,20 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
     const gammaLayout = cardContainer('p3').getBoundingClientRect();
     let indicatorTop: number | null = null;
     let overlayText: string | null = null;
-    await dragCardTo(cardHeader('p1'), () => cardContainer('p3'), 'bottom', () => {
-      const indicator = insertionIndicator();
-      expect(indicator).not.toBeNull();
-      indicatorTop = indicator ? parseFloat(indicator.style.top) : null;
-      // The overlay replica shows the dragged card's identity while the
-      // source card dims in place (still in the host, opacity 0.4).
-      overlayText = dragOverlay()?.textContent ?? null;
-      expect(cardContainer('p1').style.opacity).toBe('0.4');
-    });
+    await dragCardTo(
+      cardHeader('p1'),
+      () => cardContainer('p3'),
+      'bottom',
+      () => {
+        const indicator = insertionIndicator();
+        expect(indicator).not.toBeNull();
+        indicatorTop = indicator ? parseFloat(indicator.style.top) : null;
+        // The overlay replica shows the dragged card's identity while the
+        // source card dims in place (still in the host, opacity 0.4).
+        overlayText = dragOverlay()?.textContent ?? null;
+        expect(cardContainer('p1').style.opacity).toBe('0.4');
+      }
+    );
     expect(indicatorTop).not.toBeNull();
     expect(Math.abs(indicatorTop! - (gammaLayout.bottom - 1.5))).toBeLessThan(3);
     expect(overlayText).toContain('Alpha');
@@ -538,10 +543,15 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
 
     const betaLayout = cardContainer('p2').getBoundingClientRect();
     let indicatorTop: number | null = null;
-    await dragCardTo(cardHeader('p1'), () => cardContainer('p2'), 'top', () => {
-      const indicator = insertionIndicator();
-      indicatorTop = indicator ? parseFloat(indicator.style.top) : null;
-    });
+    await dragCardTo(
+      cardHeader('p1'),
+      () => cardContainer('p2'),
+      'top',
+      () => {
+        const indicator = insertionIndicator();
+        indicatorTop = indicator ? parseFloat(indicator.style.top) : null;
+      }
+    );
     expect(indicatorTop).not.toBeNull();
     expect(Math.abs(indicatorTop! - (betaLayout.top - 1.5))).toBeLessThan(3);
   });
@@ -567,9 +577,7 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     await settle();
 
-    const action = host.querySelector<HTMLElement>(
-      'button[aria-label="Open project Alpha"]'
-    )!;
+    const action = host.querySelector<HTMLElement>('button[aria-label="Open project Alpha"]')!;
     action.click();
     await settle();
 
