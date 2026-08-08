@@ -28,6 +28,17 @@ import type { SidebarRow } from './stage-group-row-model';
  * `taskNeedsAttention` predicate from board-attention.ts into them). This
  * module stays import-safe for node unit tests — it never imports a
  * `TaskStore` or the renderer store graph.
+ *
+ * Collapsed projects (spec #120 US4-6): a collapsed project's stream row
+ * is just the `project` row — its tasks are omitted — so the card body is
+ * empty and the header aggregates (count, live signal, attention) cannot
+ * come from membership. The caller supplies the project's visible task
+ * ids through `collapsedTaskIdsByProjectId` and the module folds them
+ * with the exact membership aggregation rules, so the header of a
+ * collapsed card still says how many tasks the project has and which of
+ * them need the user. Stream membership always wins for projects that
+ * have task rows, so collapsed *group* omission inside expanded cards is
+ * unchanged.
  */
 
 /** The statuses that light a task-row signal dot (spinner / amber / red / green). */
@@ -83,20 +94,24 @@ export type SidebarCardModel = {
   /**
    * The highest-priority live signal among the card's tasks, or `null`
    * when none is live (`working`/`awaiting-input`/`error` only — a
-   * `completed` or idle task never lights the header).
+   * `completed` or idle task never lights the header). For a collapsed
+   * project, "the card's tasks" means the caller-supplied
+   * `collapsedTaskIdsByProjectId` refs (spec #120 US5).
    */
   aggregateSignal: LiveSidebarSignal | null;
   /**
    * Number of the card's tasks the caller's Needs Attention lookup marks —
    * the caller applies the shared `taskNeedsAttention` predicate
    * (board-attention.ts) once per task; this module never re-implements it.
+   * Collapsed-project refs count the same way (spec #120 US6).
    */
   attentionCount: number;
   /**
-   * Number of visible (rendered) tasks — exactly `tasks.length`. A
-   * collapsed project emits no task rows, so its card reports 0; surfacing
-   * a collapsed project's true task count on the header is the caller's
-   * call (the stream carries no such data for a collapsed project).
+   * Number of the project's visible tasks. For an expanded card this is
+   * exactly the rendered task rows (`tasks.length`); for a collapsed
+   * project — whose tasks the stream omits — it is the caller-supplied
+   * refs length (spec #120 US4: a collapsed card still shows how many
+   * tasks it contains).
    */
   visibleTaskCount: number;
   /** The project's stable palette member (hash of the project id). */
@@ -127,7 +142,43 @@ export type ProjectCardModelInput = {
    * never imports); the module only counts its own membership against it.
    */
   attentionTaskIds?: ReadonlySet<string>;
+  /**
+   * Task refs for projects whose tasks the row stream omits — collapsed
+   * projects, whose only stream row is the `project` row. Spec #120
+   * US4-6: a collapsed card's header still shows how many tasks the
+   * project contains, its aggregate live signal and its attention count,
+   * so the caller (ticket #122) supplies each collapsed project's visible
+   * task ids — the same list the store feeds `buildStageGroupedRows`. The
+   * module folds them with the exact stream-membership aggregation rules;
+   * stream membership always wins for projects that have task rows, so
+   * collapsed-group omission inside expanded cards is unchanged.
+   */
+  collapsedTaskIdsByProjectId?: ReadonlyMap<string, readonly string[]>;
 };
+
+/**
+ * Folds one task id into the card-header aggregates: live signal by
+ * priority (`LIVE_SIGNAL_PRIORITY`; `completed` never lights the header)
+ * and the Needs Attention count through the caller's set. One aggregation
+ * rule for stream membership and collapsed-project refs alike.
+ */
+function foldTaskHeader(
+  card: SidebarCardModel,
+  taskId: string,
+  signalByTaskId: ReadonlyMap<string, SidebarSignal | null> | undefined,
+  attentionTaskIds: ReadonlySet<string> | undefined
+): void {
+  const signal = signalByTaskId?.get(taskId) ?? null;
+  if (signal !== null && signal !== 'completed') {
+    if (
+      card.aggregateSignal === null ||
+      LIVE_SIGNAL_PRIORITY[signal] < LIVE_SIGNAL_PRIORITY[card.aggregateSignal]
+    ) {
+      card.aggregateSignal = signal;
+    }
+  }
+  if (attentionTaskIds?.has(taskId)) card.attentionCount += 1;
+}
 
 /**
  * Builds one card model per project from the ordered row stream: iterate
@@ -140,6 +191,7 @@ export function buildProjectCards(input: ProjectCardModelInput): SidebarCardMode
   const { rows } = input;
   const signalByTaskId = input.signalByTaskId;
   const attentionTaskIds = input.attentionTaskIds;
+  const collapsedTaskIdsByProjectId = input.collapsedTaskIdsByProjectId;
 
   const cards: SidebarCardModel[] = [];
   const cardByProjectId = new Map<string, SidebarCardModel>();
@@ -166,21 +218,21 @@ export function buildProjectCards(input: ProjectCardModelInput): SidebarCardMode
     if (row.kind !== 'task') continue;
 
     card.tasks.push({ projectId: row.projectId, taskId: row.taskId });
-    const signal = signalByTaskId?.get(row.taskId) ?? null;
-    if (signal !== null && signal !== 'completed') {
-      if (
-        card.aggregateSignal === null ||
-        LIVE_SIGNAL_PRIORITY[signal] < LIVE_SIGNAL_PRIORITY[card.aggregateSignal]
-      ) {
-        card.aggregateSignal = signal;
-      }
-    }
-    if (attentionTaskIds?.has(row.taskId)) card.attentionCount += 1;
+    foldTaskHeader(card, row.taskId, signalByTaskId, attentionTaskIds);
   }
 
-  // Single definition of the visible count: exactly the rendered task rows.
+  // Header aggregates finish in a second pass: the visible count is the
+  // stream membership for projects that have task rows; a collapsed
+  // project's tasks never reach the stream, so its header folds the
+  // caller-supplied refs instead (spec #120 US4-6) — same aggregation
+  // rules, pure projection of the input either way.
   for (const card of cards) {
-    card.visibleTaskCount = card.tasks.length;
+    const refs =
+      card.tasks.length === 0 ? (collapsedTaskIdsByProjectId?.get(card.projectId) ?? []) : [];
+    for (const taskId of refs) {
+      foldTaskHeader(card, taskId, signalByTaskId, attentionTaskIds);
+    }
+    card.visibleTaskCount = card.tasks.length + refs.length;
   }
   return cards;
 }

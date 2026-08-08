@@ -247,6 +247,65 @@ describe('buildProjectCards aggregates', () => {
     expect(card.attentionCount).toBe(0);
   });
 
+  it('folds caller-supplied refs into the header aggregates of a collapsed project', () => {
+    // `sidebarRows` emits only the `project` row for a collapsed project
+    // (sidebar-store.ts), so the card body is empty; ticket #122 supplies
+    // the project's visible task ids and the header still carries count,
+    // live signal and attention (spec #120 US4-6).
+    const rows: SidebarRow[] = [{ kind: 'project', projectId: 'p1' }];
+    const card = build({
+      rows,
+      collapsedTaskIdsByProjectId: new Map([['p1', ['a', 'b', 'c']]]),
+      signalByTaskId: new Map([
+        ['a', 'working'],
+        ['b', 'error'],
+        ['c', 'completed'],
+      ]),
+      attentionTaskIds: new Set(['b']),
+    })[0];
+    expect(card.tasks).toEqual([]); // no task rows render in the collapsed body
+    expect(card.stageGroups).toEqual([]);
+    expect(card.visibleTaskCount).toBe(3);
+    expect(card.aggregateSignal).toBe('error'); // the same priority over the refs
+    expect(card.attentionCount).toBe(1);
+  });
+
+  it('keeps the collapsed header at null/0 when the refs carry no live signal', () => {
+    const rows: SidebarRow[] = [{ kind: 'project', projectId: 'p1' }];
+    const card = build({
+      rows,
+      collapsedTaskIdsByProjectId: new Map([['p1', ['a', 'b']]]),
+      signalByTaskId: new Map([
+        ['a', 'completed'],
+        ['b', 'completed'],
+      ]),
+    })[0];
+    expect(card.visibleTaskCount).toBe(2); // the count badge still shows
+    expect(card.aggregateSignal).toBeNull(); // completed never lights the header
+    expect(card.attentionCount).toBe(0);
+  });
+
+  it('stream membership wins over refs for projects with task rows', () => {
+    // The caller may supply refs for every project; only projects whose
+    // tasks the stream omits (collapsed) ever fold them in, so a
+    // collapsed group inside an expanded card still never lights the
+    // header (implementer's stream-membership decision, kept).
+    const rows = stream([
+      { projectId: 'p1', tasks: [task('stream-a', { workflowStage: 'spec' })] },
+    ]);
+    const card = build({
+      rows,
+      collapsedTaskIdsByProjectId: new Map([['p1', ['ref-a']]]),
+      signalByTaskId: new Map([
+        ['stream-a', 'working'],
+        ['ref-a', 'error'],
+      ]),
+    })[0];
+    expect(card.tasks.map((t) => t.taskId)).toEqual(['stream-a']);
+    expect(card.visibleTaskCount).toBe(1);
+    expect(card.aggregateSignal).toBe('working'); // ref-a never folds in
+  });
+
   it("counts attention only for the card's visible tasks, via the supplied attention set", () => {
     const rows = stream([
       {
