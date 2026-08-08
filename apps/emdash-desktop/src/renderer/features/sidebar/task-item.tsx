@@ -23,12 +23,9 @@ import type { WorkflowStage } from '@shared/core/tasks/tasks';
 import { PrBadge } from '../../lib/components/pr-badge';
 import { useAppSettingsKey } from '../settings/use-app-settings-key';
 import { projectHue } from './project-card-model';
-import { SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
+import { JADE_ACTIVE_BACKGROUND, SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
 import { SidebarSignalDot, taskSidebarSignal } from './sidebar-signal-dot';
 import { sidebarStageMoveOptions } from './stage-group-row-model';
-
-/** The active task-row tint (spec #120 US15): jade, both themes. */
-const JADE_ACTIVE_BACKGROUND = 'color-mix(in srgb, var(--jade-9) 8%, transparent)';
 
 interface SidebarTaskItemProps {
   taskId: string;

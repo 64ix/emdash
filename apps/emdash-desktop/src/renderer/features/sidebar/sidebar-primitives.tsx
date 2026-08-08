@@ -1,6 +1,13 @@
 import * as React from 'react';
 import { cn } from '@renderer/utils/utils';
 
+/**
+ * The active project/task tint (spec #120 US15): jade, both themes, derived
+ * from the theme tokens — the single definition shared by the card header
+ * (`sidebar-card-list.tsx`) and the task rows (`task-item.tsx`).
+ */
+export const JADE_ACTIVE_BACKGROUND = 'color-mix(in srgb, var(--jade-9) 8%, transparent)';
+
 export const SidebarContainer = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>

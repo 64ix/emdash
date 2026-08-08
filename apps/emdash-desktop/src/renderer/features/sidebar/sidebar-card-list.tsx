@@ -73,7 +73,12 @@ import {
   type SidebarCardModel,
   type SidebarSignal,
 } from './project-card-model';
-import { SidebarItemMiniButton, SidebarMenuAction, SidebarMenuRow } from './sidebar-primitives';
+import {
+  SidebarItemMiniButton,
+  JADE_ACTIVE_BACKGROUND,
+  SidebarMenuAction,
+  SidebarMenuRow,
+} from './sidebar-primitives';
 import { SidebarSignalDot, taskSidebarSignal } from './sidebar-signal-dot';
 import { SidebarStageGroupItem } from './stage-group-item';
 import { SidebarTaskItem } from './task-item';
@@ -84,9 +89,6 @@ const UNREGISTERED_PHASE_LABEL: Record<UnregisteredProject['phase'], string> = {
   registering: 'Registering…',
   error: 'Failed',
 };
-
-/** The active card/task tint (spec #120 US15): jade, both themes, never hardcoded. */
-const JADE_ACTIVE_BACKGROUND = 'color-mix(in srgb, var(--jade-9) 8%, transparent)';
 
 /**
  * The grouped project-card list (spec #120, ticket #122): replaces the flat
