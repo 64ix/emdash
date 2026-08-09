@@ -3,9 +3,7 @@ import { formatRunError } from './automation-run-format';
 
 describe('formatRunError', () => {
   it('renders the project_unattached failure (ticket #138) as a user-facing message', () => {
-    expect(
-      formatRunError({ step: 'create_task', code: 'project_unattached' })
-    ).toBe(
+    expect(formatRunError({ step: 'create_task', code: 'project_unattached' })).toBe(
       'This project has no repository workspace on this machine — attach it before running'
     );
   });
