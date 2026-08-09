@@ -1,7 +1,5 @@
 import { observer } from 'mobx-react-lite';
-import { taskAgentStatus } from '@renderer/features/tasks/stores/task-selectors';
 import { type TaskStore } from '@renderer/features/tasks/stores/task-store';
-import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { CLISpinner } from '@renderer/lib/components/cliSpinner';
 import { useDelayedBoolean } from '@renderer/lib/hooks/use-delay-boolean';
 import { sidebarStore } from '@renderer/lib/stores/app-state';
@@ -10,11 +8,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/toolti
 import { getSortInstant, sortKindFor } from './sidebar-store';
 
 /**
- * Sidebar trailing slot: spinner while bootstrapping, the live agent status
- * indicator while an agent is active (non-idle), otherwise the relative
- * timestamp. The whole metadata cluster is right-aligned by the parent, so
- * the slot just hugs its content — no fixed width to avoid an empty gap
- * between the timestamp and the line-changes / PR icon to its left.
+ * Sidebar trailing slot (spec #120): the leading status dot
+ * (`SidebarSignalDot`, sidebar-signal-dot.tsx) carries the task's live
+ * signal now, so this slot is just the bootstrapping spinner and the
+ * relative timestamp. The whole metadata cluster is right-aligned by the
+ * parent, so the slot just hugs its content — no fixed width to avoid an
+ * empty gap between the timestamp and the line-changes / PR icon to its
+ * left.
  */
 function Slot({ children }: { children: React.ReactNode }) {
   return <span className="flex w-[3ch] shrink-0 items-center justify-end">{children}</span>;
@@ -40,16 +40,6 @@ export const TaskSidebarTrailingSlot = observer(function TaskSidebarTrailingSlot
           </TooltipTrigger>
           <TooltipContent>Creating task workspace...</TooltipContent>
         </Tooltip>
-      </Slot>
-    );
-  }
-
-  // Show the agent status indicator for any active/unseen state; fall back to timestamp for null (idle).
-  const status = taskAgentStatus(task);
-  if (status !== null) {
-    return (
-      <Slot>
-        <AgentStatusIndicator status={status} />
       </Slot>
     );
   }

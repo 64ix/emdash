@@ -14,6 +14,7 @@ import { cn } from '@renderer/utils/utils';
 import { SidebarPinnedTaskList } from './pinned-task-list';
 import { ProjectsGroupLabel } from './projects-group-label';
 import { SidebarBoardTrigger } from './sidebar-board-trigger';
+import { SidebarCardList } from './sidebar-card-list';
 import {
   SidebarContainer,
   SidebarContent,
@@ -25,7 +26,6 @@ import {
 } from './sidebar-primitives';
 import { SidebarSearchTrigger } from './sidebar-search-trigger';
 import { SidebarSpace } from './sidebar-space';
-import { SidebarVirtualList } from './sidebar-virtual-list';
 import { UpdateSection } from './update-section';
 import { useSidebarDrop } from './use-sidebar-drop';
 
@@ -69,7 +69,7 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
             <ProjectsGroupLabel />
             <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
               <SidebarMenu className="flex min-h-0 flex-1 flex-col">
-                <SidebarVirtualList />
+                <SidebarCardList />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
