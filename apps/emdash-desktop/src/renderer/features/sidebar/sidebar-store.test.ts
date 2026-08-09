@@ -550,6 +550,86 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
 
     expect(store.visibleTaskIdsForProject('project-1')).toEqual(['i1']);
   });
+
+  it('folds the tasks of collapsed Stage Groups into the header refs of an expanded project', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 's2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+            { id: 'i1', createdAt: '2026-01-01T00:00:03.000Z', workflowStage: 'idea' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+
+    // The stream omits the two Spec tasks (collapsed group); the header refs
+    // fold exactly those — the visible Unstaged/Idea rows are already in the
+    // stream, so they never double-count.
+    expect(store.headerFoldTaskIdsForProject('project-1')).toEqual(['s1', 's2']);
+  });
+
+  it('returns no header refs for an expanded project with no collapsed groups', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'u1', createdAt: '2026-01-01T00:00:02.000Z' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+
+    expect(store.headerFoldTaskIdsForProject('project-1')).toEqual([]);
+  });
+
+  it('folds every displayable task id for a collapsed project', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 'i1', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'idea' },
+          ],
+        },
+      ])
+    );
+    // Never expanded — the stream carries only the `project` row.
+
+    expect(store.visibleTaskIdsForProject('project-1')).toEqual(['i1', 's1']);
+    expect(store.headerFoldTaskIdsForProject('project-1')).toEqual(['i1', 's1']);
+  });
+
+  it('excludes hidden, faded, pinned and archived tasks from the header refs', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            { id: 's1', createdAt: '2026-01-01T00:00:01.000Z', workflowStage: 'spec' },
+            { id: 's2', createdAt: '2026-01-01T00:00:02.000Z', workflowStage: 'spec' },
+          ],
+        },
+      ])
+    );
+    store.ensureProjectExpanded('project-1');
+    store.hideTaskFromSidebar('project-1', 's2');
+    store.toggleStageGroupCollapsed('project-1', 'spec');
+
+    expect(store.headerFoldTaskIdsForProject('project-1')).toEqual(['s1']);
+  });
 });
 
 describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {

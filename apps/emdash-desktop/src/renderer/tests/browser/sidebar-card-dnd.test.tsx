@@ -74,6 +74,7 @@ type MockSidebarStore = {
   toggleStageGroupCollapsed(projectId: string, stage: string): void;
   isStageGroupCollapsed(projectId: string, stage: string): boolean;
   visibleTaskIdsForProject(projectId: string): string[];
+  headerFoldTaskIdsForProject(projectId: string): string[];
   hideTaskFromSidebar: ReturnType<typeof vi.fn>;
   showTaskInSidebar: ReturnType<typeof vi.fn>;
 };
@@ -162,6 +163,19 @@ vi.mock('@renderer/lib/stores/app-state', async () => {
     },
     visibleTaskIdsForProject(projectId: string) {
       return this.visibleTaskIdsByProject[projectId] ?? [];
+    },
+    // Mirrors `SidebarStore.headerFoldTaskIdsForProject`: the task ids the
+    // stream omits for the project — collapsed-group tasks of expanded
+    // projects, every displayable task of collapsed projects.
+    headerFoldTaskIdsForProject(projectId: string) {
+      const collapsedStages = this.collapsedStageGroupIdsByProject[projectId] ?? [];
+      if (collapsedStages.length === 0 && this.expandedProjectIds.has(projectId)) return [];
+      const taskIds = this.rawSidebarRows
+        .filter((row) => row.kind === 'task' && row.projectId === projectId)
+        .map((row) => (row as { taskId: string }).taskId);
+      if (!this.expandedProjectIds.has(projectId)) return taskIds;
+      const visible = new Set(this.visibleTaskIdsByProject[projectId] ?? []);
+      return taskIds.filter((id) => !visible.has(id));
     },
     hideTaskFromSidebar: vi.fn(),
     showTaskInSidebar: vi.fn(),
