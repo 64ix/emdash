@@ -17,6 +17,8 @@ import { openFixture, type FixtureDb } from '@tooling/utils/db';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  automations,
+  conversations,
   projectRemotes,
   projects,
   projectSettings,
@@ -280,6 +282,23 @@ describe('attachProject (spec #130, ticket #136)', () => {
         name: 'Fix bug',
         status: 'todo',
       });
+      await fixture.db.insert(conversations).values({
+        id: 'conv-1',
+        projectId: 'synced-local',
+        taskId: 'task-1',
+        title: 'Synced conversation',
+      });
+      await fixture.db.insert(automations).values({
+        id: 'automation-1',
+        projectId: 'synced-local',
+        name: 'Synced automation',
+        triggerConfig: { kind: 'interval', minutes: 5 } as never,
+        conversationConfig: {} as never,
+        taskConfig: {} as never,
+        enabled: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      });
       remotesByPath.set(dir, [{ name: 'origin', url: 'git@github.com:org/repo.git' }]);
 
       const result = expectOk(
@@ -294,6 +313,16 @@ describe('attachProject (spec #130, ticket #136)', () => {
       // The synced row's children travelled with it.
       const [task] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'));
       expect(task.projectId).toBe('local-winner');
+      const [conversation] = await fixture.db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, 'conv-1'));
+      expect(conversation.projectId).toBe('local-winner');
+      const [automation] = await fixture.db
+        .select()
+        .from(automations)
+        .where(eq(automations.id, 'automation-1'));
+      expect(automation.projectId).toBe('local-winner');
       const [settings] = await fixture.db
         .select()
         .from(projectSettings)

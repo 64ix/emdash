@@ -1115,6 +1115,34 @@ describe('SyncEngine', () => {
       expect(hookCalls).toEqual([PROJECT_A]);
     });
 
+    it('swallows a throwing projectAttachHook: the pull still succeeds and the row is imported', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b', {
+        projectAttachHook: async () => {
+          throw new Error('auto-attach exploded');
+        },
+      });
+
+      await seedProject(fixtureA, PROJECT_A, { workspaceProvider: 'local' });
+      expectOk(await engineA.syncNow());
+      // The hook failure must not wedge the pull: syncNow succeeds and the
+      // project row is imported regardless.
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)?.id).toBe(
+        PROJECT_A
+      );
+      // A later pull on B still works after the hook failure.
+      await fixtureA.db.update(projects).set({ name: 'Renamed' }).where(eq(projects.id, PROJECT_A));
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Renamed'
+      );
+    });
+
     it('nulls assigned_pr_url on import when the PR row is absent, preserves it when present', async () => {
       fixtureA = await openDb();
       fixtureB = await openDb();
