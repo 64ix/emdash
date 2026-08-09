@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
 import { openFixture } from '@tooling/utils/db';
+import Database from 'better-sqlite3';
 import { eq, count } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { initializeDatabase } from '@main/db/initialize';
@@ -46,7 +46,9 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
     const [{ value: settingsCount }] = await fixture.db
       .select({ value: count() })
       .from(projectSettings);
-    const [{ value: remotesCount }] = await fixture.db.select({ value: count() }).from(projectRemotes);
+    const [{ value: remotesCount }] = await fixture.db
+      .select({ value: count() })
+      .from(projectRemotes);
 
     expect(projectCount).toBe(2);
     expect(taskCount).toBe(4);
@@ -81,15 +83,17 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
 
       await initializeDatabase(sqlite);
 
-      const counts = (sqlite
-        .prepare(
-          `SELECT 'terminals' AS t, count(*) AS n FROM terminals
+      const counts = (
+        sqlite
+          .prepare(
+            `SELECT 'terminals' AS t, count(*) AS n FROM terminals
            UNION ALL SELECT 'editor_buffers', count(*) FROM editor_buffers
            UNION ALL SELECT 'messages', count(*) FROM messages
            UNION ALL SELECT 'automations', count(*) FROM automations
            UNION ALL SELECT 'automation_runs', count(*) FROM automation_runs`
-        )
-        .all() as { t: string; n: number }[]).map((r) => [r.t, r.n]);
+          )
+          .all() as { t: string; n: number }[]
+      ).map((r) => [r.t, r.n]);
 
       expect(counts).toEqual([
         ['terminals', 1],
@@ -112,12 +116,14 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
   it('rewrites renamed-table FK references to the final table names', async () => {
     fixture = await openFixture('pre-0025');
 
-    const fkTargets = (fixture.sqlite
-      .prepare(
-        `SELECT name, sql FROM sqlite_master
+    const fkTargets = (
+      fixture.sqlite
+        .prepare(
+          `SELECT name, sql FROM sqlite_master
          WHERE type = 'table' AND name IN ('messages', 'automation_runs', 'conversations', 'tasks', 'automations')`
-      )
-      .all() as { name: string; sql: string }[]).map((r) => [r.name, r.sql]);
+        )
+        .all() as { name: string; sql: string }[]
+    ).map((r) => [r.name, r.sql]);
 
     const byName = Object.fromEntries(fkTargets);
     expect(byName.messages).toContain('REFERENCES "conversations"');
@@ -140,10 +146,7 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
     });
 
     // An existing project may lose its local path.
-    await fixture.db
-      .update(projects)
-      .set({ path: null })
-      .where(eq(projects.id, PROJECT_A_ID));
+    await fixture.db.update(projects).set({ path: null }).where(eq(projects.id, PROJECT_A_ID));
 
     const rows = await fixture.db.select().from(projects);
     const nullPaths = rows.filter((r) => r.path === null);
@@ -205,7 +208,10 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
     expect(afterUpdate.syncTs).toBeGreaterThan(afterInsert.syncTs);
 
     // Plain SELECTs must not touch the clock.
-    await fixture.db.select().from(tasks).where(eq(tasks.id, 'dddd0001-0000-0000-0000-000000000000'));
+    await fixture.db
+      .select()
+      .from(tasks)
+      .where(eq(tasks.id, 'dddd0001-0000-0000-0000-000000000000'));
     const [afterSelect] = await fixture.db
       .select({ syncTs: tasks.syncTs })
       .from(tasks)
@@ -231,9 +237,11 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
   it('creates the sync_ts triggers for exactly the portable tables', async () => {
     fixture = await openFixture('pre-0025');
 
-    const triggers = (fixture.sqlite
-      .prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`)
-      .all() as { name: string }[]).map((r) => r.name);
+    const triggers = (
+      fixture.sqlite
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`)
+        .all() as { name: string }[]
+    ).map((r) => r.name);
 
     const expected = [
       'trg_automations_sync_ts_ins',
@@ -252,8 +260,22 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
     expect(triggers).toEqual(expected);
 
     // sync_ts exists only on the six portable tables.
-    const portable = ['projects', 'project_remotes', 'project_settings', 'tasks', 'conversations', 'automations'];
-    const nonPortable = ['terminals', 'editor_buffers', 'messages', 'automation_runs', 'kv', 'app_settings'];
+    const portable = [
+      'projects',
+      'project_remotes',
+      'project_settings',
+      'tasks',
+      'conversations',
+      'automations',
+    ];
+    const nonPortable = [
+      'terminals',
+      'editor_buffers',
+      'messages',
+      'automation_runs',
+      'kv',
+      'app_settings',
+    ];
     for (const table of portable) {
       const cols = fixture.sqlite.prepare(`PRAGMA table_info(${table})`).all() as {
         name: string;

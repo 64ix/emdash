@@ -1,5 +1,5 @@
-import { eq } from 'drizzle-orm';
 import { openFixture } from '@tooling/utils/db';
+import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppDb } from '@main/db/client';
 import { kv } from '@main/db/schema';
@@ -57,7 +57,10 @@ describe('device identity', () => {
 
     await getOrCreateDeviceIdentity();
 
-    const telemetryRows = await fixture.db.select().from(kv).where(eq(kv.key, 'telemetry:instanceId'));
+    const telemetryRows = await fixture.db
+      .select()
+      .from(kv)
+      .where(eq(kv.key, 'telemetry:instanceId'));
     expect(telemetryRows).toHaveLength(0);
   });
 });
