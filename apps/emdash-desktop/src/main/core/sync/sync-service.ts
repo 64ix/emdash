@@ -1,0 +1,367 @@
+/**
+ * SyncService (spec #130, ticket #137): owns the SyncEngine lifecycle for the
+ * running app.
+ *
+ * The service is the daily-sync heart behind the sidebar status widget:
+ *
+ * - It builds the engine transport stack from the machine's current pairing:
+ *   `HttpRelayTransport` with the stored device token, wrapped in
+ *   `EncryptingRelayTransport` whenever a space key (K0) is stored.
+ * - `start()` runs a launch sync (after the window is up) and then a
+ *   near-continuous long-poll loop (`transport.poll`, relay clamp 25 s); the
+ *   loop reconnects with exponential backoff after failures.
+ * - Local-first offline behavior: writes always stay local (the engine keeps
+ *   dirty rows); an unreachable relay marks the status
+ *   `offline-with-pending` with the pending row count, and any successful
+ *   interaction (poll success, OS `online` event, manual "Sync now") triggers
+ *   a push+pull that drains the backlog.
+ * - Concurrent syncs are serialized: `syncNow()` is single-flight — a second
+ *   call while a cycle runs coalesces onto the running cycle.
+ * - Every state transition is pushed through `onStatusChange` (production:
+ *   the `sync:status` event, whose main-process emitter already guards window
+ *   liveness by iterating live windows).
+ *
+ * The service is fully injectable so behavior tests drive it against a fake
+ * RelayTransport with fake timers.
+ */
+import type { Result } from '@emdash/shared';
+import type BetterSqlite3 from 'better-sqlite3';
+import { createProjectAutoAttachHook } from '@main/core/projects/auto-attach';
+import { log } from '@main/lib/logger';
+import type { SyncStatus } from '@shared/core/sync/status';
+import type { DeviceIdentity } from './device-identity';
+import { EncryptingRelayTransport } from './encrypting-transport';
+import { SyncEngine, type SyncEngineOptions, type SyncError } from './engine';
+import type { SpaceKey, SpaceKeyStoreError } from './space-key-store';
+import type { SyncCredential, SyncCredentialError } from './sync-credentials';
+import type { RelayTransport } from './transport';
+
+/** Relay long-poll clamp (apps/sync-relay README): 25 s. */
+export const DEFAULT_POLL_TIMEOUT_MS = 25_000;
+/** Safety pacing between no-op poll cycles (production polls hold 25 s). */
+export const DEFAULT_POLL_IDLE_DELAY_MS = 1_000;
+/** First reconnect delay after a failed sync/poll. */
+export const RETRY_BASE_MS = 2_000;
+/** Reconnect backoff cap. */
+export const RETRY_MAX_MS = 60_000;
+/** How often an unpaired service re-checks for a freshly created/joined space. */
+export const NOT_PAIRED_RECHECK_MS = 30_000;
+
+export type SyncServiceDeps = {
+  /** The app's singleton better-sqlite3 connection (the engine's DB). */
+  sqlite: BetterSqlite3.Database;
+  /** Machine-local sync credential (device token + space id), or none. */
+  getCredentials: () => Promise<Result<SyncCredential | null, SyncCredentialError>>;
+  /** Machine-local space data key K0, or none. */
+  getSpaceKey: () => Promise<Result<SpaceKey | null, SpaceKeyStoreError>>;
+  /** Stable device identity recorded in every pushed body. */
+  getDeviceIdentity: () => Promise<DeviceIdentity>;
+  /** Builds the base transport for a device token (production: HttpRelayTransport). */
+  createTransport: (token: string) => RelayTransport;
+  /** Freshly imported projects get a chance to re-anchor (ticket #136). */
+  projectAttachHook?: SyncEngineOptions['projectAttachHook'];
+  /** Status sink; production wires `events.emit(syncStatusChannel, status)`. */
+  onStatusChange: (status: SyncStatus) => void;
+  /** Injectable clock (defaults to Date.now). */
+  now?: () => number;
+  /** Injectable sleep for backoff (fake timers in tests). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Long-poll wait. Defaults to the relay clamp (25 s). */
+  pollTimeoutMs?: number;
+  /** Reconnect backoff base/cap. Defaults 2 s / 60 s. */
+  retryBaseMs?: number;
+  retryMaxMs?: number;
+  /** How often an unpaired service re-checks for a newly created/joined space. */
+  notPairedRecheckMs?: number;
+  /**
+   * Pause between successful poll cycles that produced no work. Production
+   * poll holds the relay connection for `pollTimeoutMs`, so this is only a
+   * safety pacing (and what keeps fake-transport loops from spinning).
+   */
+  pollIdleDelayMs?: number;
+  /** OS connectivity notifications (production: `app.on('online'|'offline')`). */
+  connectivity?: {
+    onOnline: (callback: () => void) => () => void;
+    onOffline: (callback: () => void) => () => void;
+  };
+};
+
+/** The one string the HTTP transport produces for an unreachable relay. */
+const RELAY_UNREACHABLE_MARKER = 'relay unreachable';
+
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
+}
+
+function isRelayUnreachable(error: unknown): boolean {
+  return messageOf(error).includes(RELAY_UNREACHABLE_MARKER);
+}
+
+/** User-facing message for a failed sync; details stay in the logs. */
+export function userFacingSyncMessage(error: SyncError): string {
+  if (error.type === 'apply') {
+    return 'Some synced changes could not be applied on this machine.';
+  }
+  if (error.message.includes(RELAY_UNREACHABLE_MARKER)) {
+    return 'Could not reach the sync relay. Your changes stay saved on this machine and will sync when you reconnect.';
+  }
+  if (error.message.includes('encryption key')) {
+    return 'This machine is missing the sync space encryption key. Re-join the space to restore syncing.';
+  }
+  return 'The sync relay returned an error. Try again in a moment.';
+}
+
+const IDLE_STATUS: SyncStatus = {
+  state: 'idle',
+  paired: false,
+  lastSyncAt: null,
+  lastError: null,
+  pendingCount: 0,
+};
+
+export class SyncService {
+  private status: SyncStatus = { ...IDLE_STATUS };
+  private started = false;
+  private stopped = true;
+  private inFlight: Promise<void> | null = null;
+  private loopPromise: Promise<void> | null = null;
+  private retryDelayMs: number;
+  private deviceIdentity: DeviceIdentity | null = null;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly pollTimeoutMs: number;
+  private readonly retryBaseMs: number;
+  private readonly retryMaxMs: number;
+  private readonly notPairedRecheckMs: number;
+  private readonly pollIdleDelayMs: number;
+  private readonly unsubscribes: Array<() => void> = [];
+
+  constructor(private readonly deps: SyncServiceDeps) {
+    this.now = deps.now ?? (() => Date.now());
+    this.sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.pollTimeoutMs = deps.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
+    this.retryBaseMs = deps.retryBaseMs ?? RETRY_BASE_MS;
+    this.retryMaxMs = deps.retryMaxMs ?? RETRY_MAX_MS;
+    this.notPairedRecheckMs = deps.notPairedRecheckMs ?? NOT_PAIRED_RECHECK_MS;
+    this.pollIdleDelayMs = deps.pollIdleDelayMs ?? DEFAULT_POLL_IDLE_DELAY_MS;
+    this.retryDelayMs = this.retryBaseMs;
+  }
+
+  getStatus(): SyncStatus {
+    return { ...this.status };
+  }
+
+  /**
+   * Starts the service: a launch sync (push+pull) immediately, then the
+   * long-poll loop with reconnect backoff, and OS connectivity hooks. Safe to
+   * call once; subsequent calls are no-ops.
+   */
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    this.stopped = false;
+    this.retryDelayMs = this.retryBaseMs;
+    // Launch sync: run after the window is up so the renderer receives the
+    // first status snapshot (spec #130: sync at launch).
+    void this.syncNow();
+    this.loopPromise = this.runLoop();
+    if (this.deps.connectivity !== undefined) {
+      this.unsubscribes.push(
+        this.deps.connectivity.onOnline(() => {
+          // A returned connection: drop the backoff wait and sync right away.
+          this.kick();
+        })
+      );
+      this.unsubscribes.push(this.deps.connectivity.onOffline(() => undefined));
+    }
+  }
+
+  /** Stops the loop; in-flight work completes, no new cycles are scheduled. */
+  stop(): void {
+    this.stopped = true;
+    this.started = false;
+    for (const unsubscribe of this.unsubscribes.splice(0)) {
+      unsubscribe();
+    }
+  }
+
+  /**
+   * Runs a push+pull cycle, single-flight: concurrent callers coalesce onto
+   * the running cycle (the #133 review guard — syncs are always serialized).
+   */
+  syncNow(): Promise<void> {
+    if (this.inFlight !== null) return this.inFlight;
+    const run = (async () => {
+      try {
+        await this.runCycle();
+      } catch (error) {
+        // The cycle swallows expected failures; this is a last-resort guard.
+        log.error('[sync] unexpected cycle failure', error);
+        this.updateStatus({
+          state: 'error',
+          lastError: 'Sync failed unexpectedly.',
+        });
+      }
+    })().finally(() => {
+      this.inFlight = null;
+    });
+    this.inFlight = run;
+    return run;
+  }
+
+  /**
+   * Requests an immediate sync (used by the sync RPC after pairing and by the
+   * OS `online` event). No-op before `start()` or after `stop()`.
+   */
+  kick(): void {
+    if (!this.started || this.stopped) return;
+    void this.syncNow();
+  }
+
+  // -------------------------------------------------------------------------
+  // Cycle
+  // -------------------------------------------------------------------------
+
+  private async runCycle(): Promise<void> {
+    const engine = await this.buildEngine();
+    if (engine === null) {
+      this.updateStatus({ ...IDLE_STATUS });
+      return;
+    }
+    this.updateStatus({ state: 'syncing', paired: true });
+    const result = await engine.syncNow();
+    if (result.success) {
+      this.retryDelayMs = this.retryBaseMs;
+      this.updateStatus({
+        state: 'up-to-date',
+        lastSyncAt: this.now(),
+        lastError: null,
+        pendingCount: engine.pendingCount(),
+      });
+      return;
+    }
+    await this.applyFailure(result.error, engine);
+  }
+
+  private async applyFailure(error: SyncError, engine: SyncEngine): Promise<void> {
+    const pendingCount = engine.pendingCount();
+    const offline = isRelayUnreachable(error);
+    this.updateStatus({
+      state: offline && pendingCount > 0 ? 'offline-with-pending' : 'error',
+      lastError: userFacingSyncMessage(error),
+      pendingCount,
+    });
+    log.warn('[sync] cycle failed', { offline, pendingCount, error: error.message });
+  }
+
+  private async buildEngine(): Promise<SyncEngine | null> {
+    const credential = await this.deps.getCredentials();
+    if (!credential.success || credential.data === null) {
+      return null;
+    }
+    if (this.deviceIdentity === null) {
+      this.deviceIdentity = await this.deps.getDeviceIdentity();
+    }
+    const base = this.deps.createTransport(credential.data.token);
+    const keyResult = await this.deps.getSpaceKey();
+    const key = keyResult.success ? keyResult.data : null;
+    const transport =
+      key !== null
+        ? new EncryptingRelayTransport(base, { get: () => this.deps.getSpaceKey() })
+        : base;
+    return new SyncEngine({
+      sqlite: this.deps.sqlite,
+      transport,
+      deviceId: this.deviceIdentity.deviceId,
+      projectAttachHook: this.deps.projectAttachHook ?? createProjectAutoAttachHook(),
+      now: this.now,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Long-poll loop
+  // -------------------------------------------------------------------------
+
+  private async runLoop(): Promise<void> {
+    while (!this.stopped) {
+      const credential = await this.deps.getCredentials();
+      if (!credential.success || credential.data === null) {
+        // Not paired (yet): keep the status honest, re-check periodically.
+        this.updateStatus({ ...IDLE_STATUS });
+        await this.sleep(this.notPairedRecheckMs);
+        continue;
+      }
+      try {
+        const transport = await this.buildPollTransport(credential.data.token);
+        const engine = await this.buildEngine();
+        const cursor = engine === null ? 0 : engine.lastCursor;
+        const result = await transport.poll(cursor, this.pollTimeoutMs);
+        const reconnected = this.retryDelayMs > this.retryBaseMs;
+        this.retryDelayMs = this.retryBaseMs;
+        this.updateStatus({ paired: true });
+        // A wake-up with patches needs applying; a successful poll after any
+        // failure means the connection is back — drain local pending rows.
+        if (reconnected || result.patches.length > 0) {
+          await this.syncNow();
+        } else {
+          await this.sleep(this.pollIdleDelayMs);
+        }
+      } catch (error) {
+        await this.markPollFailure(error);
+        await this.sleep(this.retryDelayMs);
+        this.retryDelayMs = Math.min(this.retryDelayMs * 2, this.retryMaxMs);
+      }
+    }
+  }
+
+  private async buildPollTransport(token: string): Promise<RelayTransport> {
+    const base = this.deps.createTransport(token);
+    // Poll is read-only: wrap only when a key exists (matching buildEngine) so
+    // body-carrying patches decrypt; without a key they would all be flagged
+    // undecryptable and never applied.
+    const keyResult = await this.deps.getSpaceKey();
+    const key = keyResult.success ? keyResult.data : null;
+    return key !== null
+      ? new EncryptingRelayTransport(base, { get: () => this.deps.getSpaceKey() })
+      : base;
+  }
+
+  private async markPollFailure(error: unknown): Promise<void> {
+    const engine = await this.buildEngine();
+    const pendingCount = engine === null ? 0 : engine.pendingCount();
+    const offline = isRelayUnreachable(error);
+    const syncError: SyncError = {
+      type: 'transport',
+      message: error instanceof Error ? error.message : String(error),
+    };
+    this.updateStatus({
+      state: offline && pendingCount > 0 ? 'offline-with-pending' : 'error',
+      lastError: userFacingSyncMessage(syncError),
+      pendingCount,
+    });
+    log.warn('[sync] poll failed', { offline, pendingCount, error: syncError.message });
+  }
+
+  // -------------------------------------------------------------------------
+  // Status
+  // -------------------------------------------------------------------------
+
+  private updateStatus(patch: Partial<SyncStatus>): void {
+    const next: SyncStatus = { ...this.status, ...patch };
+    if (
+      next.state === this.status.state &&
+      next.paired === this.status.paired &&
+      next.lastSyncAt === this.status.lastSyncAt &&
+      next.lastError === this.status.lastError &&
+      next.pendingCount === this.status.pendingCount
+    ) {
+      return;
+    }
+    this.status = next;
+    this.deps.onStatusChange(next);
+  }
+}

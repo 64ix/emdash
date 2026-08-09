@@ -168,6 +168,44 @@ export class SyncEngine {
     });
   }
 
+  /**
+   * The pull cursor (the relay version up to which this machine is caught up),
+   * for long-polling transports: the sync service passes it to
+   * `transport.poll()` and re-syncs when patches arrive.
+   */
+  get lastCursor(): number {
+    return this.readCursor();
+  }
+
+  /**
+   * How many rows the next push would send: unpushed edits (rows whose sync
+   * clock advanced past the per-table watermark and are not recorded as
+   * applied-and-untouched) plus pending tombstones. Used by the sync service
+   * for the offline-with-pending badge; 0 when everything is acked.
+   */
+  pendingCount(): number {
+    let count = 0;
+    for (const statements of this.statements) {
+      const config = statements.config;
+      if (isInitialOnly(config)) continue;
+      const watermark = this.readWatermark(config);
+      const rows = statements.selectRows.all(watermark) as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const pk = this.rowPk(config, row);
+        const rowSyncTs = Number(row.sync_ts);
+        const state = getRowState(this.sqlite, config.table, pk);
+        // Applied-then-untouched rows (clock matches the recorded value) are
+        // not candidates — the same filter `push()` applies.
+        if (state !== null && !state.dirty && state.rowSyncTs === rowSyncTs) continue;
+        count += 1;
+      }
+    }
+    // `collectTombstones` also drops stale bookkeeping rows as a side effect;
+    // benign here — they would be dropped on the next push anyway.
+    count += this.collectTombstones().length;
+    return count;
+  }
+
   /** Push every row whose clock advanced past the per-table watermark. */
   async push(): Promise<Result<SyncSummary, SyncError>> {
     const pending: PendingUpsert[] = [];

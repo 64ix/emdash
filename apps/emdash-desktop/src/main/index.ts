@@ -45,6 +45,7 @@ import {
   argvJoinDeepLink,
   handleJoinDeepLink,
 } from './core/sync/deep-link';
+import { syncService } from './core/sync/sync-service-instance';
 import { boardSyncService } from './core/tasks/board-sync-service';
 import { updateService } from './core/updates/update-service';
 import { viewStateService } from './core/view-state/view-state-service';
@@ -221,6 +222,13 @@ void app.whenReady().then(async () => {
   setupAppProtocol(join(app.getAppPath(), 'out', 'renderer'));
   setupApplicationMenu();
   createMainWindow();
+
+  // Sync at launch (spec #130, ticket #137): start the sync service after the
+  // window is up so the renderer receives the first `sync:status` snapshot.
+  // On macOS the app keeps running with no window and the service stays
+  // active; on Windows/Linux the app quits with the window and launch sync is
+  // covered by this start on the next run.
+  syncService.start();
 
   githubAccountReconciliationService
     .reconcileAtStartup()

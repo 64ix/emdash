@@ -10,6 +10,7 @@ import { remoteTmuxReaperService } from '@main/core/pty/remote-tmux-reaper-servi
 import { prSyncScheduler } from '@main/core/pull-requests/pr-sync-scheduler';
 import { stopResourceSampler } from '@main/core/resource-monitor/resource-sampler';
 import { runtimeManager } from '@main/core/runtime/runtime-manager';
+import { syncService } from '@main/core/sync/sync-service-instance';
 import { boardSyncService } from '@main/core/tasks/board-sync-service';
 import { updateService } from '@main/core/updates/update-service';
 import { log } from '@main/lib/logger';
@@ -54,6 +55,7 @@ export async function runQuitCleanup(): Promise<void> {
   issuesSyncScheduler.dispose();
   remoteTmuxReaperService.dispose();
   disposeProviderUsageService();
+  syncService.stop();
 
   // critical phase
   const criticalSteps: Array<[string, () => Promise<void>]> = [
