@@ -243,23 +243,39 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
         .all() as { name: string }[]
     ).map((r) => r.name);
 
+    // The 12 clock triggers from 0025, plus 0026's clocks for the kv-style
+    // tables (app_settings, kv) and the deletion-tombstone triggers on every
+    // allowlisted table.
     const expected = [
+      'trg_app_settings_sync_ts_del',
+      'trg_app_settings_sync_ts_ins',
+      'trg_app_settings_sync_ts_upd',
+      'trg_automations_sync_ts_del',
       'trg_automations_sync_ts_ins',
       'trg_automations_sync_ts_upd',
+      'trg_conversations_sync_ts_del',
       'trg_conversations_sync_ts_ins',
       'trg_conversations_sync_ts_upd',
+      'trg_kv_sync_ts_del',
+      'trg_kv_sync_ts_ins',
+      'trg_kv_sync_ts_upd',
+      'trg_project_remotes_sync_ts_del',
       'trg_project_remotes_sync_ts_ins',
       'trg_project_remotes_sync_ts_upd',
+      'trg_project_settings_sync_ts_del',
       'trg_project_settings_sync_ts_ins',
       'trg_project_settings_sync_ts_upd',
+      'trg_projects_sync_ts_del',
       'trg_projects_sync_ts_ins',
       'trg_projects_sync_ts_upd',
+      'trg_tasks_sync_ts_del',
       'trg_tasks_sync_ts_ins',
       'trg_tasks_sync_ts_upd',
     ];
     expect(triggers).toEqual(expected);
 
-    // sync_ts exists only on the six portable tables.
+    // sync_ts exists on all eight portable tables (the 0025 six plus the
+    // kv-style tables clocked by 0026).
     const portable = [
       'projects',
       'project_remotes',
@@ -267,15 +283,10 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
       'tasks',
       'conversations',
       'automations',
-    ];
-    const nonPortable = [
-      'terminals',
-      'editor_buffers',
-      'messages',
-      'automation_runs',
       'kv',
       'app_settings',
     ];
+    const nonPortable = ['terminals', 'editor_buffers', 'messages', 'automation_runs'];
     for (const table of portable) {
       const cols = fixture.sqlite.prepare(`PRAGMA table_info(${table})`).all() as {
         name: string;

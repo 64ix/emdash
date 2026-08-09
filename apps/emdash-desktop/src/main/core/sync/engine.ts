@@ -1,0 +1,684 @@
+/**
+ * SyncEngine (spec #130, ticket #133): moves the portable allowlist of rows
+ * between the local SQLite database and the relay, through an injectable
+ * RelayTransport.
+ *
+ * Push detection uses the per-row sync clock (`sync_ts > lastPushed`, stamped
+ * by AFTER INSERT/UPDATE triggers on genuine app writes) plus the
+ * sync_row_state side table: a row whose clock matches the value recorded at
+ * its last push-ack or remote apply is *not* a candidate — this is what breaks
+ * the trigger re-stamp loop (an applied remote row must never be pushed back).
+ *
+ * Pull applies server-authoritative last-write-wins: a patch is applied only
+ * when its server version is newer than the recorded one AND the local row is
+ * not dirty (has unpushed local edits). Ordering is strictly push-then-pull:
+ * in `syncNow()` the push must be acknowledged before anything is pulled, so
+ * local edits are never clobbered by a concurrent pull. Deletions travel as
+ * tombstones (rows with `deleted` at a new version); a newer upsert
+ * resurrects. Stale pushes are never rejected by the relay and the engine
+ * never rejects a push ack, so retry loops cannot form.
+ *
+ * The engine talks to the database exclusively through the raw
+ * better-sqlite3 connection with raw SQL: versioned-JSON columns travel as
+ * exact strings and are applied verbatim (guarded writes — never through the
+ * ORM's toDriver serialization, which would destroy future-version blobs).
+ */
+import type BetterSqlite3 from 'better-sqlite3';
+import { err, ok, type Result } from '@emdash/shared';
+import { log } from '@main/lib/logger';
+import {
+  isInitialOnly,
+  SYNC_TABLES,
+  SYNC_TABLES_BY_NAME,
+  type SyncTableConfig,
+} from './allowlist';
+import {
+  deleteTombstones,
+  encodePk,
+  getRowState,
+  listTombstones,
+  upsertRowState,
+} from './row-state';
+import type { RelayTransport, SyncMutation, SyncPatch, SyncPushResult } from './transport';
+
+export type SyncError =
+  | { type: 'transport'; message: string }
+  | { type: 'apply'; message: string };
+
+export interface SyncSummary {
+  /** Upserts acknowledged by the relay in the push phase. */
+  pushed: number;
+  /** Tombstones acknowledged by the relay in the push phase. */
+  tombstonesPushed: number;
+  /** Patches fetched in the pull phase. */
+  pulled: number;
+  /** Patches written locally (upserts applied + rows deleted by tombstones). */
+  applied: number;
+  /** Patches skipped because the local row has unpushed edits. */
+  skippedDirty: number;
+  /** Patches skipped because their server version was already seen. */
+  skippedSeen: number;
+}
+
+export interface SyncEngineOptions {
+  /** Raw better-sqlite3 connection (the app's singleton in production). */
+  sqlite: BetterSqlite3.Database;
+  transport: RelayTransport;
+  /** Stable device identity; recorded in every upsert body. */
+  deviceId: string;
+  /** Injectable clock (defaults to Date.now). */
+  now?: () => number;
+  /** Max patches per pull request. Defaults to the relay's limit (1000). */
+  pullLimit?: number;
+}
+
+const EMPTY_SUMMARY: SyncSummary = {
+  pushed: 0,
+  tombstonesPushed: 0,
+  pulled: 0,
+  applied: 0,
+  skippedDirty: 0,
+  skippedSeen: 0,
+};
+
+interface PendingUpsert {
+  config: SyncTableConfig;
+  pk: string;
+  body: string;
+  /** The row's clock value read when the mutation was built. */
+  syncTs: number;
+}
+
+interface PendingTombstone {
+  table: string;
+  pk: string;
+}
+
+interface PreparedTableStatements {
+  config: SyncTableConfig;
+  selectRows: BetterSqlite3.Statement;
+  selectLocal: BetterSqlite3.Statement;
+  deleteRow: BetterSqlite3.Statement;
+  exists: BetterSqlite3.Statement;
+}
+
+export class SyncEngine {
+  private readonly sqlite: BetterSqlite3.Database;
+  private readonly transport: RelayTransport;
+  private readonly deviceId: string;
+  private readonly now: () => number;
+  private readonly pullLimit: number;
+  private readonly statements: PreparedTableStatements[] = [];
+  private readonly fkExistsStatements: Array<{
+    config: SyncTableConfig;
+    column: string;
+    stmt: BetterSqlite3.Statement;
+  }> = [];
+
+  constructor(options: SyncEngineOptions) {
+    this.sqlite = options.sqlite;
+    this.transport = options.transport;
+    this.deviceId = options.deviceId;
+    this.now = options.now ?? (() => Date.now());
+    this.pullLimit = options.pullLimit ?? 1000;
+    this.prepareStatements();
+  }
+
+  /**
+   * Push-then-pull: local changes are acknowledged by the relay before any
+   * remote patch is applied, so unpushed local edits always win the cycle.
+   */
+  async syncNow(): Promise<Result<SyncSummary, SyncError>> {
+    const pushResult = await this.push();
+    if (!pushResult.success) return pushResult;
+    const pullResult = await this.pull();
+    if (!pullResult.success) return pullResult;
+    return ok({
+      ...EMPTY_SUMMARY,
+      pushed: pushResult.data.pushed,
+      tombstonesPushed: pushResult.data.tombstonesPushed,
+      pulled: pullResult.data.pulled,
+      applied: pullResult.data.applied,
+      skippedDirty: pullResult.data.skippedDirty,
+      skippedSeen: pullResult.data.skippedSeen,
+    });
+  }
+
+  /** Push every row whose clock advanced past the per-table watermark. */
+  async push(): Promise<Result<SyncSummary, SyncError>> {
+    const pending: PendingUpsert[] = [];
+    try {
+      const firstPushProjectPks = new Set<string>();
+
+      for (const statements of this.statements) {
+        const config = statements.config;
+        const watermark = this.readWatermark(config);
+        if (isInitialOnly(config)) continue;
+
+        const rows = statements.selectRows.all(watermark) as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          const pk = this.rowPk(config, row);
+          const rowSyncTs = Number(row.sync_ts);
+          const state = getRowState(this.sqlite, config.table, pk);
+          // Applied-then-untouched rows (clock matches the recorded value) are
+          // not candidates — this is the trigger re-stamp loop guard.
+          if (state !== null && !state.dirty && state.rowSyncTs === rowSyncTs) continue;
+          const columns = this.buildColumns(config, row);
+          pending.push({
+            config,
+            pk,
+            body: JSON.stringify({ deviceId: this.deviceId, columns }),
+            syncTs: rowSyncTs,
+          });
+          if (config.table === 'projects' && state === null) {
+            firstPushProjectPks.add(pk);
+          }
+        }
+      }
+
+      // initial-only: project_remotes are carried once, with the project's
+      // creation/attach payload (the first push of that project ever).
+      if (firstPushProjectPks.size > 0) {
+        const remotesConfig = SYNC_TABLES_BY_NAME.get('project_remotes');
+        if (remotesConfig !== undefined) {
+          const placeholders = Array.from(firstPushProjectPks, () => '?').join(', ');
+          const rows = this.sqlite
+            .prepare(
+              `SELECT ${this.selectColumns(remotesConfig)} FROM project_remotes WHERE project_id IN (${placeholders})`
+            )
+            .all(...firstPushProjectPks) as Array<Record<string, unknown>>;
+          for (const row of rows) {
+            const pk = this.rowPk(remotesConfig, row);
+            const columns = this.buildColumns(remotesConfig, row);
+            pending.push({
+              config: remotesConfig,
+              pk,
+              body: JSON.stringify({ deviceId: this.deviceId, columns }),
+              syncTs: Number(row.sync_ts),
+            });
+          }
+        }
+      }
+
+      // Tombstones: deletion triggers already recorded the rows. Never push
+      // tombstones for rows that still exist locally (they are either acked or
+      // about to be pushed as upserts), for initial-only tables, or for
+      // non-portable keys.
+      const pendingTombstones = this.collectTombstones();
+
+      const summary: SyncSummary = { ...EMPTY_SUMMARY };
+      if (pending.length === 0 && pendingTombstones.length === 0) {
+        return ok(summary);
+      }
+
+      const mutations: SyncMutation[] = [
+        ...pending.map(
+          (item): SyncMutation => ({
+            table: item.config.table,
+            pk: item.pk,
+            body: item.body,
+            op: 'upsert',
+          })
+        ),
+        ...pendingTombstones.map(
+          (item): SyncMutation => ({
+            table: item.table,
+            pk: item.pk,
+            body: null,
+            op: 'delete',
+          })
+        ),
+      ];
+
+      let result: SyncPushResult;
+      try {
+        result = await this.transport.push(mutations);
+      } catch (error) {
+        return err({ type: 'transport', message: String(error) });
+      }
+      const acked = new Map(result.results.map((r) => [`${r.table}:${r.pk}`, r.version]));
+
+      // Acknowledge everything in one transaction: row state, tombstone drain
+      // and the advanced per-table watermarks.
+      const now = this.now();
+      try {
+        this.sqlite.transaction(() => {
+          for (const item of pending) {
+            const version = acked.get(`${item.config.table}:${item.pk}`);
+            if (version === undefined) continue;
+            upsertRowState(this.sqlite, item.config.table, item.pk, version, false, item.syncTs);
+          }
+          deleteTombstones(
+            this.sqlite,
+            pendingTombstones.map((t) => ({ table: t.table, pk: t.pk }))
+          );
+          for (const statements of this.statements) {
+            const config = statements.config;
+            const pushedSyncTs = pending
+              .filter((item) => item.config.table === config.table)
+              .map((item) => item.syncTs);
+            if (pushedSyncTs.length === 0) continue;
+            this.writeWatermark(config, Math.max(...pushedSyncTs), now);
+          }
+        })();
+      } catch (error) {
+        return err({ type: 'apply', message: String(error) });
+      }
+
+      summary.pushed = pending.length;
+      summary.tombstonesPushed = pendingTombstones.length;
+      log.debug('[sync] push complete', {
+        pushed: summary.pushed,
+        tombstones: summary.tombstonesPushed,
+      });
+      return ok(summary);
+    } catch (error) {
+      return err({ type: 'apply', message: String(error) });
+    }
+  }
+
+  /** Apply every patch newer than the pull cursor, server-authoritative LWW. */
+  async pull(): Promise<Result<SyncSummary, SyncError>> {
+    const summary: SyncSummary = { ...EMPTY_SUMMARY };
+    const lastPushed = new Map<string, number>();
+    for (const statements of this.statements) {
+      lastPushed.set(statements.config.table, this.readWatermark(statements.config));
+    }
+    let cursor = this.readCursor();
+
+    try {
+      for (;;) {
+        let result;
+        try {
+          result = await this.transport.pull(cursor, this.pullLimit);
+        } catch (error) {
+          return err({ type: 'transport', message: String(error) });
+        }
+        if (result.patches.length === 0) break;
+        const nextCursor = Math.max(cursor, result.cursor);
+        const now = this.now();
+        try {
+          this.sqlite.transaction(() => {
+            for (const patch of result.patches) {
+              this.applyPatch(patch, lastPushed, summary);
+            }
+            this.writeCursor(nextCursor, now);
+          })();
+        } catch (error) {
+          return err({ type: 'apply', message: String(error) });
+        }
+        summary.pulled += result.patches.length;
+        cursor = nextCursor;
+        if (result.patches.length < this.pullLimit) break;
+      }
+      log.debug('[sync] pull complete', {
+        pulled: summary.pulled,
+        applied: summary.applied,
+        skippedDirty: summary.skippedDirty,
+        skippedSeen: summary.skippedSeen,
+      });
+      return ok(summary);
+    } catch (error) {
+      return err({ type: 'apply', message: String(error) });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Apply (pull side)
+  // -------------------------------------------------------------------------
+
+  private applyPatch(
+    patch: SyncPatch,
+    lastPushed: Map<string, number>,
+    summary: SyncSummary
+  ): void {
+    const statements = this.statements.find((s) => s.config.table === patch.table);
+    if (statements === undefined) {
+      // Not (or no longer) allowlisted: skip but keep the cursor moving.
+      summary.skippedSeen += 1;
+      return;
+    }
+    const config = statements.config;
+    // Non-portable rows (kv keys outside prompt-library, excluded app_settings
+    // keys) are never applied — they exist only on their own machine.
+    if (config.isPortablePk !== undefined && !config.isPortablePk(patch.pk)) {
+      summary.skippedSeen += 1;
+      return;
+    }
+    const state = getRowState(this.sqlite, config.table, patch.pk);
+    if (state !== null && state.serverVersion >= patch.version) {
+      summary.skippedSeen += 1;
+      return;
+    }
+    const localRow = statements.selectLocal.get(...this.pkParams(config, patch.pk)) as
+      | Record<string, unknown>
+      | undefined;
+    const rowSyncTs = localRow === undefined ? 0 : Number(localRow.sync_ts);
+    const watermark = lastPushed.get(config.table) ?? 0;
+    if (this.isDirty(rowSyncTs, watermark, state)) {
+      // Local unpushed edits win: record the patch's version as dirty so a
+      // later re-pull of it is skipped, then let the next push decide.
+      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, true, rowSyncTs);
+      summary.skippedDirty += 1;
+      return;
+    }
+
+    if (patch.op === 'delete' || patch.deleted) {
+      if (localRow !== undefined) {
+        statements.deleteRow.run(...this.pkParams(config, patch.pk));
+        // The AFTER DELETE trigger recorded a tombstone for our own apply;
+        // clear it so the deletion is not echoed back to the relay.
+        deleteTombstones(this.sqlite, [{ table: config.table, pk: patch.pk }]);
+      }
+      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+      summary.applied += 1;
+      return;
+    }
+
+    const columns = this.decodeBody(patch.body);
+    if (columns === null) {
+      log.warn('[sync] ignoring unparseable patch body', { table: patch.table, pk: patch.pk });
+      summary.skippedSeen += 1;
+      return;
+    }
+    const transformed = this.applyImportTransforms(config, patch.pk, columns, localRow);
+    this.upsertRow(config, patch.pk, transformed, localRow !== undefined, this.now());
+    // Read back the clock the trigger stamped so the next push sees the row
+    // as applied-and-untouched rather than dirty.
+    const appliedRow = statements.selectLocal.get(...this.pkParams(config, patch.pk)) as
+      | { sync_ts: unknown }
+      | undefined;
+    const appliedSyncTs = appliedRow === undefined ? 0 : Number(appliedRow.sync_ts);
+    upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, appliedSyncTs);
+    summary.applied += 1;
+  }
+
+  private isDirty(
+    rowSyncTs: number,
+    watermark: number,
+    state: { dirty: boolean; rowSyncTs: number } | null
+  ): boolean {
+    if (rowSyncTs <= watermark) return false;
+    if (state !== null && !state.dirty && state.rowSyncTs === rowSyncTs) return false;
+    return true;
+  }
+
+  private decodeBody(body: string | null): Record<string, string | null> | null {
+    if (body === null) return null;
+    try {
+      const parsed = JSON.parse(body) as { columns?: unknown };
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        typeof parsed.columns !== 'object' ||
+        parsed.columns === null
+      ) {
+        return null;
+      }
+      const columns = parsed.columns as Record<string, unknown>;
+      const result: Record<string, string | null> = {};
+      for (const [key, value] of Object.entries(columns)) {
+        result[key] = value === null || value === undefined ? null : String(value);
+      }
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Import transforms (machine-specific rehydration / guarding)
+  // -------------------------------------------------------------------------
+
+  private applyImportTransforms(
+    config: SyncTableConfig,
+    pk: string,
+    columns: Record<string, string | null>,
+    localRow: Record<string, unknown> | undefined
+  ): Record<string, string | null> {
+    let next = columns;
+    if (config.importTransform !== undefined) {
+      next = config.importTransform(pk, next, localRow ?? null);
+    }
+    // Machine-local reference columns are never written at import: fresh
+    // inserts leave them NULL, existing rows keep their own value.
+    for (const column of config.importPreserveLocalColumns ?? []) {
+      if (column in next) {
+        const { [column]: _dropped, ...rest } = next;
+        next = rest;
+      }
+    }
+    for (const fk of config.importNullIfMissingFk ?? []) {
+      const value = next[fk.column];
+      if (value === null || value === undefined) continue;
+      const entry = this.fkExistsStatements.find(
+        (e) => e.config.table === config.table && e.column === fk.column
+      );
+      const exists = entry?.stmt.get(value) as { one?: number } | undefined;
+      if (exists === undefined) {
+        next = { ...next, [fk.column]: null };
+      }
+    }
+    return next;
+  }
+
+  // -------------------------------------------------------------------------
+  // Row upsert (raw SQL, guarded writes)
+  // -------------------------------------------------------------------------
+
+  private upsertRow(
+    config: SyncTableConfig,
+    pk: string,
+    columns: Record<string, string | null>,
+    existsLocally: boolean,
+    now: number
+  ): void {
+    if (config.kvStyle === true) {
+      // kv-style tables carry a single `value` column; the key comes from the
+      // patch pk and `updated_at` follows the app's KV write convention.
+      const value = columns.value ?? null;
+      const table = config.table === 'kv:prompt-library' ? 'kv' : config.table;
+      this.sqlite
+        .prepare(
+          `INSERT INTO \`${table}\` (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        )
+        .run(pk, value, now);
+      return;
+    }
+
+    const insertColumns = [...config.keyColumns];
+    for (const column of Object.keys(columns)) {
+      if (!insertColumns.includes(column) && config.payloadColumns.includes(column)) {
+        insertColumns.push(column);
+      }
+    }
+    for (const column of Object.keys(config.importInsertColumns ?? {})) {
+      if (!insertColumns.includes(column)) insertColumns.push(column);
+    }
+
+    const updateColumns = insertColumns.filter(
+      (column) =>
+        !config.keyColumns.includes(column) && !(config.importInsertColumns?.[column] !== undefined)
+    );
+    const params: Array<string | null> = [];
+    for (const column of insertColumns) {
+      const explicit = config.importInsertColumns?.[column];
+      params.push(explicit !== undefined ? explicit : (columns[column] ?? null));
+    }
+
+    const insertSql = `INSERT INTO \`${config.table}\` (${insertColumns.map((c) => `\`${c}\``).join(', ')})
+      VALUES (${insertColumns.map(() => '?').join(', ')})`;
+    if (updateColumns.length === 0) {
+      // Nothing beyond the primary key to write: a fresh import inserts the
+      // bare pk row, an existing row is a no-op.
+      if (existsLocally) return;
+      this.sqlite.prepare(insertSql).run(...params);
+      return;
+    }
+    const conflictSql = `ON CONFLICT (${config.keyColumns.map((c) => `\`${c}\``).join(', ')})
+      DO UPDATE SET ${updateColumns.map((c) => `\`${c}\` = excluded.\`${c}\``).join(', ')}`;
+    this.sqlite.prepare(`${insertSql} ${conflictSql}`).run(...params);
+  }
+
+  // -------------------------------------------------------------------------
+  // Tombstone collection
+  // -------------------------------------------------------------------------
+
+  private collectTombstones(): PendingTombstone[] {
+    const pending: PendingTombstone[] = [];
+    const dropped: Array<{ table: string; pk: string }> = [];
+    for (const entry of listTombstones(this.sqlite)) {
+      const config = SYNC_TABLES_BY_NAME.get(entry.table);
+      if (config === undefined || isInitialOnly(config)) {
+        dropped.push(entry);
+        continue;
+      }
+      if (config.isPortablePk !== undefined && !config.isPortablePk(entry.pk)) {
+        dropped.push(entry);
+        continue;
+      }
+      const statements = this.statements.find((s) => s.config.table === entry.table);
+      if (statements === undefined) {
+        dropped.push(entry);
+        continue;
+      }
+      const exists = statements.exists.get(...this.pkParams(config, entry.pk)) as
+        | { one: number }
+        | undefined;
+      if (exists !== undefined) {
+        // The row is live again (or was never really gone): a pending upsert
+        // covers it — the tombstone must not win by later receipt order.
+        dropped.push(entry);
+        continue;
+      }
+      pending.push({ table: entry.table, pk: entry.pk });
+    }
+    if (dropped.length > 0) {
+      deleteTombstones(this.sqlite, dropped);
+    }
+    return pending;
+  }
+
+  // -------------------------------------------------------------------------
+  // Bookkeeping (machine-local kv keys, never synced)
+  // -------------------------------------------------------------------------
+
+  private watermarkKey(config: SyncTableConfig): string {
+    return `sync:lastPushed:${config.table}`;
+  }
+
+  private readWatermark(config: SyncTableConfig): number {
+    return this.readBookkeepingNumber(this.watermarkKey(config));
+  }
+
+  private writeWatermark(config: SyncTableConfig, value: number, now: number): void {
+    this.writeBookkeepingNumber(this.watermarkKey(config), value, now);
+  }
+
+  private readCursor(): number {
+    return this.readBookkeepingNumber('sync:cursor');
+  }
+
+  private writeCursor(value: number, now: number): void {
+    this.writeBookkeepingNumber('sync:cursor', value, now);
+  }
+
+  private readBookkeepingNumber(key: string): number {
+    const row = this.sqlite.prepare('SELECT value FROM kv WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined;
+    if (row === undefined) return 0;
+    try {
+      const parsed = JSON.parse(row.value) as unknown;
+      return typeof parsed === 'number' && Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private writeBookkeepingNumber(key: string, value: number, now: number): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+      )
+      .run(key, JSON.stringify(value), now);
+  }
+
+  // -------------------------------------------------------------------------
+  // Statement preparation
+  // -------------------------------------------------------------------------
+
+  private prepareStatements(): void {
+    for (const config of SYNC_TABLES) {
+      const columns = this.selectColumns(config);
+      const whereFilter =
+        config.table === 'kv:prompt-library'
+          ? `WHERE key LIKE 'prompt-library:%' AND sync_ts > ?`
+          : config.table === 'app_settings'
+            ? `WHERE key NOT IN ('localProject', 'providerConfigs') AND sync_ts > ?`
+            : `WHERE sync_ts > ?`;
+      const table = this.physicalTable(config);
+      const selectRows = this.sqlite.prepare(
+        `SELECT ${columns} FROM \`${table}\` ${whereFilter}`
+      );
+      const pkConditions = config.keyColumns.map((c) => `\`${c}\` = ?`).join(' AND ');
+      const selectLocal = this.sqlite.prepare(
+        `SELECT ${columns} FROM \`${table}\` WHERE ${pkConditions} LIMIT 1`
+      );
+      const deleteRow = this.sqlite.prepare(
+        `DELETE FROM \`${table}\` WHERE ${pkConditions}`
+      );
+      const exists = this.sqlite.prepare(
+        `SELECT 1 AS one FROM \`${table}\` WHERE ${pkConditions} LIMIT 1`
+      );
+      this.statements.push({ config, selectRows, selectLocal, deleteRow, exists });
+
+      for (const fk of config.importNullIfMissingFk ?? []) {
+        this.fkExistsStatements.push({
+          config,
+          column: fk.column,
+          stmt: this.sqlite.prepare(
+            `SELECT 1 AS one FROM \`${fk.table}\` WHERE \`${fk.columnRef}\` = ? LIMIT 1`
+          ),
+        });
+      }
+    }
+  }
+
+  private physicalTable(config: SyncTableConfig): string {
+    return config.kvStyle === true && config.table === 'kv:prompt-library' ? 'kv' : config.table;
+  }
+
+  private selectColumns(config: SyncTableConfig): string {
+    return [...config.keyColumns, ...config.payloadColumns, 'sync_ts']
+      .map((c) => `\`${c}\``)
+      .join(', ');
+  }
+
+  private rowPk(config: SyncTableConfig, row: Record<string, unknown>): string {
+    return encodePk(config.keyColumns.map((c) => row[c]));
+  }
+
+  private pkParams(config: SyncTableConfig, pk: string): string[] {
+    if (config.keyColumns.length === 1) return [pk];
+    const values = JSON.parse(pk) as unknown;
+    return Array.isArray(values) ? values.map((v) => String(v)) : [pk];
+  }
+
+  private buildColumns(
+    config: SyncTableConfig,
+    row: Record<string, unknown>
+  ): Record<string, string | null> {
+    let columns: Record<string, string | null> = {};
+    for (const column of config.payloadColumns) {
+      const value = row[column];
+      columns[column] = value === null || value === undefined ? null : String(value);
+    }
+    if (config.pushTransform !== undefined) {
+      columns = config.pushTransform(this.rowPk(config, row), columns);
+    }
+    return columns;
+  }
+}

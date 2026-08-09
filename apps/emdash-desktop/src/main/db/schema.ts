@@ -121,6 +121,9 @@ export const appSettings = sqliteTable(
     updatedAt: integer('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Sync clock (ms epoch) maintained by trg_app_settings_sync_ts_ins/upd
+    // (migration 0026) for multi-machine push detection.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     keyIdx: uniqueIndex('idx_app_settings_key').on(table.key),
@@ -499,6 +502,9 @@ export const kv = sqliteTable(
     updatedAt: integer('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Sync clock (ms epoch) maintained by trg_kv_sync_ts_ins/upd (migration
+    // 0026) for multi-machine push detection of the prompt-library namespace.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     keyIdx: uniqueIndex('idx_kv_key').on(table.key),
@@ -536,6 +542,45 @@ export const appSecrets = sqliteTable(
   },
   (table) => ({
     keyIdx: uniqueIndex('idx_app_secrets_key').on(table.key),
+  })
+);
+
+/**
+ * Sync engine side table (spec #130, ticket #133): client-side LWW guard and
+ * dirty-row tracking, maintained by the sync engine itself — no app code
+ * reads or writes it. `pk` is the JSON-encoded primary key (a single key for
+ * most tables, an array for composite keys). `row_sync_ts` is the row's
+ * `sync_ts` clock value at the moment of the last push-ack or remote apply;
+ * when the live row's clock differs, the row has unpushed local edits.
+ */
+export const syncRowState = sqliteTable(
+  'sync_row_state',
+  {
+    tableName: text('table_name').notNull(),
+    pk: text('pk').notNull(),
+    serverVersion: integer('server_version').notNull(),
+    dirty: integer('dirty').notNull().default(0),
+    rowSyncTs: integer('row_sync_ts').notNull().default(0),
+  },
+  (table) => ({
+    pkKey: primaryKey({ columns: [table.tableName, table.pk] }),
+  })
+);
+
+/**
+ * Pending deletions (spec #130, ticket #133): populated by AFTER DELETE
+ * triggers on the allowlisted tables and drained by the sync engine's push
+ * phase (rows are removed once the relay acknowledges the tombstone).
+ */
+export const syncTombstones = sqliteTable(
+  'sync_tombstones',
+  {
+    tableName: text('table_name').notNull(),
+    pk: text('pk').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    pkKey: primaryKey({ columns: [table.tableName, table.pk] }),
   })
 );
 
