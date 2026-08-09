@@ -45,8 +45,18 @@ function json(data: unknown, status = 200): Response {
 async function readJson(request: Request): Promise<unknown> {
   try {
     const text = await request.text();
-    return text.length === 0 ? {} : JSON.parse(text);
-  } catch {
+    const parsed = text.length === 0 ? {} : JSON.parse(text);
+    // `null` and JSON primitives cannot be valid request bodies for any
+    // endpoint; normalize them to 400 instead of letting service code
+    // crash with a TypeError (which would surface as a 500).
+    if (parsed === null || typeof parsed !== 'object') {
+      throw new ApiError(400, 'request body must be a JSON object');
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
     throw new ApiError(400, 'invalid JSON body');
   }
 }

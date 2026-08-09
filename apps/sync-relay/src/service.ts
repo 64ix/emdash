@@ -69,7 +69,8 @@ export async function createSpace(
 ): Promise<SpaceCreated> {
   const spaceId = makeSpaceId();
   const deviceId = makeDeviceId();
-  const deviceName = input.name?.trim() || 'default';
+  const deviceName =
+    typeof input.name === 'string' && input.name.trim() !== '' ? input.name.trim() : 'default';
   const token = await makeToken();
   const secret = await makeJoinSecret(spaceId);
   const tokenSha = await sha256Hex(token);
