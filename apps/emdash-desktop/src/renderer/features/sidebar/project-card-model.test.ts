@@ -270,7 +270,10 @@ describe('buildProjectCards aggregates', () => {
     ).toBe('working');
   });
 
-  it('ignores signals of tasks outside the card membership (collapsed groups) but counts their attention', () => {
+  it('folds collapsed-group tasks into the header aggregates of an expanded card', () => {
+    // Ticket #121 review: the header aggregates over all project refs,
+    // regardless of expand state — a task inside a collapsed Stage Group
+    // still counts and can still light the header signal.
     const rows = stream([
       {
         projectId: 'p1',
@@ -288,9 +291,11 @@ describe('buildProjectCards aggregates', () => {
         ['collapsed-1', 'error'],
       ]),
       attentionTaskIdsByProject: new Map([['p1', new Set(['visible-1', 'collapsed-1'])]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['collapsed-1']]]),
     })[0];
     expect(card.tasks.map((t) => t.taskId)).toEqual(['visible-1']);
-    expect(card.aggregateSignal).toBe('working'); // the hidden error never lights the header
+    expect(card.visibleTaskCount).toBe(2); // stream rows + folded collapsed-group tasks
+    expect(card.aggregateSignal).toBe('error'); // the collapsed-group error wins the header
     // Attention matches the old project-row badge: every non-hidden task of
     // the project counts, collapsed-group tasks included.
     expect(card.attentionCount).toBe(2);
@@ -304,7 +309,7 @@ describe('buildProjectCards aggregates', () => {
     const rows: SidebarRow[] = [{ kind: 'project', projectId: 'p1' }];
     const card = build({
       rows,
-      collapsedTaskIdsByProjectId: new Map([['p1', ['a', 'b', 'c']]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['a', 'b', 'c']]]),
       signalByTaskId: new Map([
         ['a', 'working'],
         ['b', 'error'],
@@ -324,7 +329,7 @@ describe('buildProjectCards aggregates', () => {
     const rows: SidebarRow[] = [{ kind: 'project', projectId: 'p1' }];
     const card = build({
       rows,
-      collapsedTaskIdsByProjectId: new Map([['p1', ['a', 'b']]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['a', 'b']]]),
       signalByTaskId: new Map([
         ['a', 'completed'],
         ['b', 'completed'],
@@ -336,25 +341,25 @@ describe('buildProjectCards aggregates', () => {
     expect(card.attentionCount).toBe(0);
   });
 
-  it('stream membership wins over refs for projects with task rows', () => {
-    // The caller may supply refs for every project; only projects whose
-    // tasks the stream omits (collapsed) ever fold them in, so a
-    // collapsed group inside an expanded card still never lights the
-    // header (implementer's stream-membership decision, kept).
+  it('folds refs in addition to stream rows, with stream rows never duplicated', () => {
+    // The caller supplies the stream-omitted ids per project (collapsed
+    // groups); a folded id can never collide with a stream row — task ids
+    // are globally unique — so the count is rows + refs, and the signal
+    // folds both with the same priority.
     const rows = stream([
       { projectId: 'p1', tasks: [task('stream-a', { workflowStage: 'spec' })] },
     ]);
     const card = build({
       rows,
-      collapsedTaskIdsByProjectId: new Map([['p1', ['ref-a']]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['ref-a']]]),
       signalByTaskId: new Map([
         ['stream-a', 'working'],
         ['ref-a', 'error'],
       ]),
     })[0];
     expect(card.tasks.map((t) => t.taskId)).toEqual(['stream-a']);
-    expect(card.visibleTaskCount).toBe(1);
-    expect(card.aggregateSignal).toBe('working'); // ref-a never folds in
+    expect(card.visibleTaskCount).toBe(2);
+    expect(card.aggregateSignal).toBe('error'); // ref-a folds in and outranks
   });
 
   it('counts attention per project, pinned and collapsed-group tasks included', () => {

@@ -37,12 +37,13 @@ import type { SidebarRow } from './stage-group-row-model';
  * is just the `project` row — its tasks are omitted — so the card body is
  * empty and the header aggregates (count, live signal, attention) cannot
  * come from membership. The caller supplies the project's visible task
- * ids through `collapsedTaskIdsByProjectId` and the module folds them
- * with the exact membership aggregation rules, so the header of a
- * collapsed card still says how many tasks the project has and which of
- * them need the user. Stream membership always wins for projects that
- * have task rows, so collapsed *group* omission inside expanded cards is
- * unchanged.
+ * ids through `headerTaskIdsByProjectId` and the module folds them with
+ * the exact membership aggregation rules, so the header of a collapsed
+ * card still says how many tasks the project has and which of them need
+ * the user. The same seam also folds the tasks of collapsed Stage Groups
+ * inside expanded cards (their rows are omitted from the stream too, but
+ * they still count — ticket #121 review: the header aggregates over all
+ * project refs, regardless of expand state).
  */
 
 /** The statuses that light a task-row signal dot (spinner / amber / red / green). */
@@ -117,9 +118,11 @@ export type SidebarCardModel = {
   /**
    * The highest-priority live signal among the card's tasks, or `null`
    * when none is live (`working`/`awaiting-input`/`error` only — a
-   * `completed` or idle task never lights the header). For a collapsed
-   * project, "the card's tasks" means the caller-supplied
-   * `collapsedTaskIdsByProjectId` refs (spec #120 US5).
+   * `completed` or idle task never lights the header). "The card's tasks"
+   * includes the caller-supplied `headerTaskIdsByProjectId` refs — the
+   * tasks the stream omits (collapsed projects, collapsed Stage Groups) —
+   * so the header signal covers every displayable task of the project
+   * regardless of expand state (spec #120 US5, ticket #121 review).
    */
   aggregateSignal: LiveSidebarSignal | null;
   /**
@@ -134,9 +137,11 @@ export type SidebarCardModel = {
    */
   attentionCount: number;
   /**
-   * Number of the project's visible tasks. For an expanded card this is
-   * exactly the rendered task rows (`tasks.length`); for a collapsed
-   * project — whose tasks the stream omits — it is the caller-supplied
+   * Number of the project's displayable tasks: the rendered task rows
+   * (`tasks.length`) plus the `headerTaskIdsByProjectId` refs — the tasks
+   * the stream omits (collapsed projects, collapsed Stage Groups). For an
+   * expanded card with no collapsed groups this is exactly `tasks.length`;
+   * for a collapsed project — whose tasks the stream omits — it is the
    * refs length (spec #120 US4: a collapsed card still shows how many
    * tasks it contains).
    */
@@ -174,17 +179,19 @@ export type ProjectCardModelInput = {
    */
   attentionTaskIdsByProject?: ReadonlyMap<string, ReadonlySet<string>>;
   /**
-   * Task refs for projects whose tasks the row stream omits — collapsed
-   * projects, whose only stream row is the `project` row. Spec #120
-   * US4-6: a collapsed card's header still shows how many tasks the
-   * project contains, its aggregate live signal and its attention count,
-   * so the caller (ticket #122) supplies each collapsed project's visible
-   * task ids — the same list the store feeds `buildStageGroupedRows`. The
-   * module folds them with the exact stream-membership aggregation rules;
-   * stream membership always wins for projects that have task rows, so
-   * collapsed-group omission inside expanded cards is unchanged.
+   * Task refs the card-header aggregates fold in addition to the stream's
+   * own task rows: the tasks the stream omits for the card — a collapsed
+   * project's displayable tasks (its only stream row is the `project`
+   * row, spec #120 US4-6) and an expanded project's collapsed-Stage-Group
+   * tasks (ticket #121 review: the header aggregates over all project
+   * refs, regardless of expand state). The caller (ticket #122) supplies
+   * them per project via `SidebarStore.headerFoldTaskIdsForProject`, which
+   * excludes archived/pinned/automation/hidden/Shipped-faded tasks exactly
+   * like the stream. The module folds them with the same aggregation rules
+   * as stream membership; task ids are globally unique, so a folded id can
+   * never collide with a stream row of the same card.
    */
-  collapsedTaskIdsByProjectId?: ReadonlyMap<string, readonly string[]>;
+  headerTaskIdsByProjectId?: ReadonlyMap<string, readonly string[]>;
 };
 
 /**
@@ -221,7 +228,7 @@ export function buildProjectCards(input: ProjectCardModelInput): SidebarCardMode
   const { rows } = input;
   const signalByTaskId = input.signalByTaskId;
   const attentionTaskIdsByProject = input.attentionTaskIdsByProject;
-  const collapsedTaskIdsByProjectId = input.collapsedTaskIdsByProjectId;
+  const headerTaskIdsByProjectId = input.headerTaskIdsByProjectId;
 
   const cards: SidebarCardModel[] = [];
   const cardByProjectId = new Map<string, SidebarCardModel>();
@@ -254,17 +261,17 @@ export function buildProjectCards(input: ProjectCardModelInput): SidebarCardMode
     foldTaskHeader(card, row.taskId, signalByTaskId);
   }
 
-  // Header aggregates finish in a second pass: the visible count is the
-  // stream membership for projects that have task rows; a collapsed
-  // project's tasks never reach the stream, so its header folds the
-  // caller-supplied refs instead (spec #120 US4-6) — same aggregation
-  // rules, pure projection of the input either way. Attention counts the
-  // caller's per-project set whole — every non-hidden task of the project
-  // (pinned, automation-run and collapsed-group tasks included), matching
-  // the old project-row badge, never a stream membership.
+  // Header aggregates finish in a second pass: the visible count and the
+  // live signal are the stream membership plus the caller-supplied refs —
+  // the tasks the stream omits (collapsed projects and collapsed Stage
+  // Groups) fold in with the same aggregation rules, so the header always
+  // aggregates over every displayable task of the project regardless of
+  // expand state (spec #120 US4-6, ticket #121 review). Attention counts
+  // the caller's per-project set whole — every non-hidden task of the
+  // project (pinned, automation-run and collapsed-group tasks included),
+  // matching the old project-row badge, never a stream membership.
   for (const card of cards) {
-    const refs =
-      card.tasks.length === 0 ? (collapsedTaskIdsByProjectId?.get(card.projectId) ?? []) : [];
+    const refs = headerTaskIdsByProjectId?.get(card.projectId) ?? [];
     for (const taskId of refs) {
       foldTaskHeader(card, taskId, signalByTaskId);
     }

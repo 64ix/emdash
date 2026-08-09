@@ -217,7 +217,7 @@ export const SidebarCardList = observer(function SidebarCardList() {
           rows: sidebarStore.sidebarRows,
           signalByTaskId: collectSignals(),
           attentionTaskIdsByProject: collectAttentionTaskIdsByProject(),
-          collapsedTaskIdsByProjectId: collapsedProjectTaskRefs(),
+          headerTaskIdsByProjectId: headerTaskRefs(),
         })
       ),
     []
@@ -471,19 +471,21 @@ function collectAttentionTaskIdsByProject(): Map<string, Set<string>> {
 }
 
 /**
- * The collapsed-project seam (spec #120 US4-6, ticket #121 review): a
- * collapsed project's stream row is only the `project` row, so the card
- * model folds these refs into the header aggregates — the same visible task
- * id list the store feeds `buildStageGroupedRows`
- * (`visibleTaskIdsForProject`), so the header of a collapsed card still
- * shows how many tasks the project contains, its aggregate live signal and
- * its attention count.
+ * The header-fold seam (spec #120 US4-6, ticket #121 review): the task ids
+ * the card model folds into the header aggregates beyond its own stream
+ * rows — exactly the tasks the row stream omits per project: a collapsed
+ * project's displayable tasks (its only stream row is the `project` row)
+ * and an expanded project's collapsed-Stage-Group tasks. Derived by
+ * `SidebarStore.headerFoldTaskIdsForProject` with the same visibility
+ * rules as the stream (archived/pinned/automation/hidden/Shipped-faded
+ * excluded), so the header of every card counts and signals over all of
+ * the project's displayable tasks, regardless of expand state.
  */
-function collapsedProjectTaskRefs(): Map<string, readonly string[]> {
+function headerTaskRefs(): Map<string, readonly string[]> {
   const refs = new Map<string, readonly string[]>();
   for (const project of sidebarStore.orderedProjects) {
-    if (sidebarStore.expandedProjectIds.has(project.id)) continue;
-    refs.set(project.id, sidebarStore.visibleTaskIdsForProject(project.id));
+    const taskIds = sidebarStore.headerFoldTaskIdsForProject(project.id);
+    if (taskIds.length > 0) refs.set(project.id, taskIds);
   }
   return refs;
 }
