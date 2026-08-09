@@ -91,7 +91,9 @@ export const projectsTable: SyncTableConfig = {
   // is nulled on fresh import (out-of-scope table), else the FK would abort
   // the apply batch.
   importPreserveLocalColumns: ['repository_workspace_id', 'ssh_connection_id'],
-  importNullIfMissingFk: [{ column: 'ssh_connection_id', table: 'ssh_connections', columnRef: 'id' }],
+  importNullIfMissingFk: [
+    { column: 'ssh_connection_id', table: 'ssh_connections', columnRef: 'id' },
+  ],
 };
 
 export const projectRemotesTable: SyncTableConfig = {
@@ -165,9 +167,7 @@ export const tasksTable: SyncTableConfig = {
   // board_rank (derived fractional-index state) and the dead
   // workspace_provider_data / workspace_intent columns are never sent.
   rawJsonColumns: ['linked_issue'],
-  importNullIfMissingFk: [
-    { column: 'assigned_pr_url', table: 'pull_requests', columnRef: 'url' },
-  ],
+  importNullIfMissingFk: [{ column: 'assigned_pr_url', table: 'pull_requests', columnRef: 'url' }],
 };
 
 export const conversationsTable: SyncTableConfig = {
@@ -270,10 +270,7 @@ export function isInitialOnly(config: SyncTableConfig): boolean {
 // JSON blob helpers for the machine-specific field transforms
 // ---------------------------------------------------------------------------
 
-function stripJsonFields(
-  raw: string | null,
-  fields: string[]
-): string | null {
+function stripJsonFields(raw: string | null, fields: string[]): string | null {
   const record = parseJsonObject(raw);
   if (record === null) return raw;
   let changed = false;

@@ -30,7 +30,9 @@ export function getRowState(
   pk: string
 ): RowState | null {
   const row = sqlite
-    .prepare('SELECT server_version, dirty, row_sync_ts FROM sync_row_state WHERE table_name = ? AND pk = ?')
+    .prepare(
+      'SELECT server_version, dirty, row_sync_ts FROM sync_row_state WHERE table_name = ? AND pk = ?'
+    )
     .get(table, pk) as { server_version: number; dirty: number; row_sync_ts: number } | undefined;
   if (row === undefined) return null;
   return { serverVersion: row.server_version, dirty: row.dirty === 1, rowSyncTs: row.row_sync_ts };
@@ -57,9 +59,11 @@ export function upsertRowState(
 }
 
 export function listTombstones(sqlite: BetterSqlite3.Database): TombstoneEntry[] {
-  const rows = sqlite
-    .prepare('SELECT table_name, pk, created_at FROM sync_tombstones')
-    .all() as { table_name: string; pk: string; created_at: number }[];
+  const rows = sqlite.prepare('SELECT table_name, pk, created_at FROM sync_tombstones').all() as {
+    table_name: string;
+    pk: string;
+    created_at: number;
+  }[];
   return rows.map((row) => ({ table: row.table_name, pk: row.pk, createdAt: row.created_at }));
 }
 

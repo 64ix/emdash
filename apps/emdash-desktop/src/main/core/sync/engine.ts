@@ -1,3 +1,4 @@
+import { err, ok, type Result } from '@emdash/shared';
 /**
  * SyncEngine (spec #130, ticket #133): moves the portable allowlist of rows
  * between the local SQLite database and the relay, through an injectable
@@ -24,14 +25,8 @@
  * ORM's toDriver serialization, which would destroy future-version blobs).
  */
 import type BetterSqlite3 from 'better-sqlite3';
-import { err, ok, type Result } from '@emdash/shared';
 import { log } from '@main/lib/logger';
-import {
-  isInitialOnly,
-  SYNC_TABLES,
-  SYNC_TABLES_BY_NAME,
-  type SyncTableConfig,
-} from './allowlist';
+import { isInitialOnly, SYNC_TABLES, SYNC_TABLES_BY_NAME, type SyncTableConfig } from './allowlist';
 import {
   deleteTombstones,
   encodePk,
@@ -41,9 +36,7 @@ import {
 } from './row-state';
 import type { RelayTransport, SyncMutation, SyncPatch, SyncPushResult } from './transport';
 
-export type SyncError =
-  | { type: 'transport'; message: string }
-  | { type: 'apply'; message: string };
+export type SyncError = { type: 'transport'; message: string } | { type: 'apply'; message: string };
 
 export interface SyncSummary {
   /** Upserts acknowledged by the relay in the push phase. */
@@ -620,16 +613,12 @@ export class SyncEngine {
             ? `WHERE key NOT IN ('localProject', 'providerConfigs') AND sync_ts > ?`
             : `WHERE sync_ts > ?`;
       const table = this.physicalTable(config);
-      const selectRows = this.sqlite.prepare(
-        `SELECT ${columns} FROM \`${table}\` ${whereFilter}`
-      );
+      const selectRows = this.sqlite.prepare(`SELECT ${columns} FROM \`${table}\` ${whereFilter}`);
       const pkConditions = config.keyColumns.map((c) => `\`${c}\` = ?`).join(' AND ');
       const selectLocal = this.sqlite.prepare(
         `SELECT ${columns} FROM \`${table}\` WHERE ${pkConditions} LIMIT 1`
       );
-      const deleteRow = this.sqlite.prepare(
-        `DELETE FROM \`${table}\` WHERE ${pkConditions}`
-      );
+      const deleteRow = this.sqlite.prepare(`DELETE FROM \`${table}\` WHERE ${pkConditions}`);
       const exists = this.sqlite.prepare(
         `SELECT 1 AS one FROM \`${table}\` WHERE ${pkConditions} LIMIT 1`
       );

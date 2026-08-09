@@ -87,7 +87,7 @@ describe('0026 sync engine tables (kv clocks, row state, tombstones)', () => {
          VALUES ('tasks', ?, 7, 0, ?)`
       )
       .run(taskId, taskStamp.sync_ts);
-    await fixture.sqlite.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+    fixture.sqlite.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
     fixture.sqlite
       .prepare(
         `INSERT INTO tasks (id, project_id, name, status) VALUES (?, ?, 'Re-created', 'todo')`
@@ -127,9 +127,11 @@ describe('0026 sync engine tables (kv clocks, row state, tombstones)', () => {
     fixture = await openFixture('pre-0026');
 
     const tables = (
-      fixture.sqlite.prepare(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sync_row_state', 'sync_tombstones')`
-      ).all() as { name: string }[]
+      fixture.sqlite
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sync_row_state', 'sync_tombstones')`
+        )
+        .all() as { name: string }[]
     ).map((r) => r.name);
     expect(tables.sort()).toEqual(['sync_row_state', 'sync_tombstones']);
   });
@@ -137,7 +139,6 @@ describe('0026 sync engine tables (kv clocks, row state, tombstones)', () => {
   it('records tombstones on delete, with json_array encoding for composite pks', async () => {
     fixture = await openFixture('pre-0026');
 
-    const projectId = '11111111-1111-1111-1111-111111111111';
     const taskId = 'aaaa0001-0000-0000-0000-000000000000';
 
     await fixture.db.delete(tasks).where(eq(tasks.id, taskId));
@@ -148,11 +149,13 @@ describe('0026 sync engine tables (kv clocks, row state, tombstones)', () => {
     expect(taskTombstone?.created_at).toBeGreaterThan(0);
 
     // Composite pk (project_remotes) uses the json_array() encoding.
-    await fixture.db.insert(projects).values({ id: '33333333-3333-3333-3333-333333333333', name: 'x' });
-    await fixture.sqlite
+    await fixture.db
+      .insert(projects)
+      .values({ id: '33333333-3333-3333-3333-333333333333', name: 'x' });
+    fixture.sqlite
       .prepare('INSERT INTO project_remotes (project_id, remote_name, remote_url) VALUES (?, ?, ?)')
       .run('33333333-3333-3333-3333-333333333333', 'origin', 'https://example.com/r.git');
-    await fixture.sqlite
+    fixture.sqlite
       .prepare('DELETE FROM project_remotes WHERE project_id = ? AND remote_name = ?')
       .run('33333333-3333-3333-3333-333333333333', 'origin');
     const remoteTombstone = fixture.sqlite

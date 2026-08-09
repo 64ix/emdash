@@ -4,7 +4,7 @@
  * is covered end-to-end in sync-engine.db.test.ts against the fake relay.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HttpRelayTransport, RelayHttpError } from './transport';
+import { HttpRelayTransport } from './transport';
 
 describe('HttpRelayTransport', () => {
   const fetchMock = vi.fn();

@@ -13,6 +13,7 @@
  * observable contract the relay documents.
  */
 import { openFixture } from '@tooling/utils/db';
+import type { FixtureDb } from '@tooling/utils/db';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -25,7 +26,6 @@ import {
   projectSettings,
   tasks,
 } from '@main/db/schema';
-import type { FixtureDb } from '@tooling/utils/db';
 import { SyncEngine } from './engine';
 import type {
   RelayTransport,
@@ -82,7 +82,7 @@ class FakeRelayTransport implements RelayTransport {
     return this.version;
   }
 
-  async createSpace(name?: string): Promise<SyncSpaceCreated> {
+  async createSpace(_name?: string): Promise<SyncSpaceCreated> {
     return { space_id: 'space-1', device_id: 'device-1', device_token: 'token', secret: 'secret' };
   }
 
@@ -153,7 +153,6 @@ class FakeRelayTransport implements RelayTransport {
 // ---------------------------------------------------------------------------
 
 const PROJECT_A = '11111111-1111-1111-1111-111111111111';
-const PROJECT_B = '22222222-2222-2222-2222-222222222222';
 const TASK_1 = 'aaaa0001-0000-0000-0000-000000000000';
 const CONV_1 = 'cccc0001-0000-0000-0000-000000000000';
 const AUTO_1 = 'dddd0001-0000-0000-0000-000000000000';
@@ -170,7 +169,11 @@ function expectOk(summary: { success: boolean }): void {
   expect(summary.success, `expected ok, got ${JSON.stringify(summary)}`).toBe(true);
 }
 
-function bodyColumns(relay: FakeRelayTransport, table: string, pk: string): Record<string, unknown> | null {
+function bodyColumns(
+  relay: FakeRelayTransport,
+  table: string,
+  pk: string
+): Record<string, unknown> | null {
   const row = relay.getRow(table, pk);
   if (row === null || row.body === null) return null;
   const parsed = JSON.parse(row.body) as { columns?: Record<string, unknown> };
@@ -185,11 +188,11 @@ function rawGet(
   return fixture.sqlite.prepare(sql).get(...params) as Record<string, unknown> | undefined;
 }
 
-function rawAll(fixture: FixtureDb, sql: string, ...params: unknown[]): Array<Record<string, unknown>> {
-  return fixture.sqlite.prepare(sql).all(...params) as Array<Record<string, unknown>>;
-}
-
-async function seedProject(fixture: FixtureDb, id: string, overrides: Record<string, unknown> = {}): Promise<void> {
+async function seedProject(
+  fixture: FixtureDb,
+  id: string,
+  overrides: Record<string, unknown> = {}
+): Promise<void> {
   await fixture.db.insert(projects).values({
     id,
     name: 'Repo',
@@ -457,17 +460,45 @@ describe('SyncEngine', () => {
       fixtureA.sqlite
         .prepare('UPDATE tasks SET linked_issue = ? WHERE id = ?')
         .run(futureLinkedIssues, TASK_1);
+      const futureConversationConfig = JSON.stringify({ version: '99', tone: 'calm' });
+      await seedConversation(fixtureA, CONV_1, PROJECT_A, TASK_1, { title: 'Conv' });
+      fixtureA.sqlite
+        .prepare('UPDATE conversations SET config = ? WHERE id = ?')
+        .run(futureConversationConfig, CONV_1);
+      const futureTriggerConfig = JSON.stringify({ version: '99', cron: '0 * * * *' });
+      await fixtureA.db.insert(automations).values({
+        id: AUTO_1,
+        name: 'Daily',
+        projectId: PROJECT_A,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      fixtureA.sqlite
+        .prepare('UPDATE automations SET trigger_config = ? WHERE id = ?')
+        .run(futureTriggerConfig, AUTO_1);
 
       expectOk(await engineA.syncNow());
 
       const taskColumns = bodyColumns(relay, 'tasks', TASK_1);
       expect(taskColumns?.linked_issue).toBe(futureLinkedIssues);
+      const convColumns = bodyColumns(relay, 'conversations', CONV_1);
+      expect(convColumns?.config).toBe(futureConversationConfig);
+      const autoColumns = bodyColumns(relay, 'automations', AUTO_1);
+      expect(autoColumns?.trigger_config).toBe(futureTriggerConfig);
 
       const engineB = makeEngine(fixtureB, relay, 'device-b');
       expectOk(await engineB.syncNow());
 
       const applied = rawGet(fixtureB, 'SELECT linked_issue FROM tasks WHERE id = ?', TASK_1);
       expect(applied?.linked_issue).toBe(futureLinkedIssues);
+      const appliedConv = rawGet(fixtureB, 'SELECT config FROM conversations WHERE id = ?', CONV_1);
+      expect(appliedConv?.config).toBe(futureConversationConfig);
+      const appliedAuto = rawGet(
+        fixtureB,
+        'SELECT trigger_config FROM automations WHERE id = ?',
+        AUTO_1
+      );
+      expect(appliedAuto?.trigger_config).toBe(futureTriggerConfig);
 
       // Reading through the ORM yields null (future-version degrades), but the
       // stored raw string is untouched — the round trip did not destroy it.
@@ -729,7 +760,10 @@ describe('SyncEngine', () => {
       await fixtureB.db.update(tasks).set({ status: 'in-progress' }).where(eq(tasks.id, TASK_1));
       const bPushesStart = relay.pushCalls.length;
       expectOk(await engineB.syncNow());
-      const bMutations = relay.pushCalls.slice(bPushesStart).flat().filter((m) => m.table === 'tasks');
+      const bMutations = relay.pushCalls
+        .slice(bPushesStart)
+        .flat()
+        .filter((m) => m.table === 'tasks');
       expect(bMutations).toHaveLength(1);
       expect(
         (JSON.parse(bMutations[0]!.body ?? '{}') as { columns: Record<string, unknown> }).columns
@@ -763,9 +797,7 @@ describe('SyncEngine', () => {
 
       const before = rawGet(fixtureB, 'SELECT * FROM tasks WHERE id = ?', TASK_1);
       // Rewind the cursor so every patch is re-fetched.
-      fixtureB.sqlite
-        .prepare("UPDATE kv SET value = '0' WHERE key = 'sync:cursor'")
-        .run();
+      fixtureB.sqlite.prepare("UPDATE kv SET value = '0' WHERE key = 'sync:cursor'").run();
       const pull = await engineB.pull();
       expectOk(pull);
       expect(pull.data.skippedSeen).toBeGreaterThan(0);
@@ -839,9 +871,14 @@ describe('SyncEngine', () => {
         .where(eq(projectRemotes.remoteName, 'origin'));
       expectOk(await engineB.syncNow());
       expect(relay.allRows().filter((r) => r.table === 'project_remotes')).toHaveLength(2);
-      expect(rawGet(fixtureB, 'SELECT remote_url FROM project_remotes WHERE project_id = ? AND remote_name = ?', PROJECT_A, 'origin')?.remote_url).toBe(
-        'https://github.com/example/b-local.git'
-      );
+      expect(
+        rawGet(
+          fixtureB,
+          'SELECT remote_url FROM project_remotes WHERE project_id = ? AND remote_name = ?',
+          PROJECT_A,
+          'origin'
+        )?.remote_url
+      ).toBe('https://github.com/example/b-local.git');
     });
   });
 
@@ -915,7 +952,9 @@ describe('SyncEngine', () => {
       // B has no pull_requests rows: the FK would abort the apply, so the
       // import nulls the assignment.
       expectOk(await engineB.syncNow());
-      expect(rawGet(fixtureB, 'SELECT assigned_pr_url FROM tasks WHERE id = ?', TASK_1)?.assigned_pr_url).toBeNull();
+      expect(
+        rawGet(fixtureB, 'SELECT assigned_pr_url FROM tasks WHERE id = ?', TASK_1)?.assigned_pr_url
+      ).toBeNull();
 
       // B does have the PR row: the assignment is preserved.
       fixtureB.sqlite
@@ -925,13 +964,15 @@ describe('SyncEngine', () => {
         )
         .run('https://github.com/example/repo/pull/42');
       fixtureB.sqlite.prepare('DELETE FROM tasks WHERE id = ?').run(TASK_1);
-      fixtureB.sqlite.prepare('DELETE FROM sync_row_state WHERE table_name = ? AND pk = ?').run('tasks', TASK_1);
+      fixtureB.sqlite
+        .prepare('DELETE FROM sync_row_state WHERE table_name = ? AND pk = ?')
+        .run('tasks', TASK_1);
       // Re-import by rewinding the cursor and pulling again.
       fixtureB.sqlite.prepare("UPDATE kv SET value = '0' WHERE key = 'sync:cursor'").run();
       expectOk(await engineB.pull());
-      expect(rawGet(fixtureB, 'SELECT assigned_pr_url FROM tasks WHERE id = ?', TASK_1)?.assigned_pr_url).toBe(
-        'https://github.com/example/repo/pull/42'
-      );
+      expect(
+        rawGet(fixtureB, 'SELECT assigned_pr_url FROM tasks WHERE id = ?', TASK_1)?.assigned_pr_url
+      ).toBe('https://github.com/example/repo/pull/42');
     });
 
     it('imports automations as disabled; enabled stays machine-local', async () => {
@@ -954,7 +995,9 @@ describe('SyncEngine', () => {
       expectOk(await engineB.syncNow());
 
       // Fresh import defaults to disabled.
-      expect(rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled).toBe(0);
+      expect(
+        rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(0);
 
       // B enables it locally; the payload still carries no `enabled` and A's
       // own value is untouched when B's row wins LWW.
@@ -962,8 +1005,12 @@ describe('SyncEngine', () => {
       expectOk(await engineB.syncNow());
       expect(bodyColumns(relay, 'automations', AUTO_1)).not.toHaveProperty('enabled');
       expectOk(await engineA.syncNow());
-      expect(rawGet(fixtureA, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled).toBe(1);
-      expect(rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled).toBe(1);
+      expect(
+        rawGet(fixtureA, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(1);
+      expect(
+        rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(1);
     });
 
     it('syncs portable app_settings and preserves machine-specific fields locally', async () => {
@@ -1025,7 +1072,9 @@ describe('SyncEngine', () => {
       expectOk(await engineB.syncNow());
       expect(relay.getRow('app_settings', 'localProject')).toBeNull();
       expectOk(await engineA.syncNow());
-      expect(rawGet(fixtureA, "SELECT value FROM app_settings WHERE key = 'localProject'")).toBeUndefined();
+      expect(
+        rawGet(fixtureA, "SELECT value FROM app_settings WHERE key = 'localProject'")
+      ).toBeUndefined();
     });
 
     it('syncs conversation metadata but never session/agent state', async () => {
@@ -1079,8 +1128,12 @@ describe('SyncEngine', () => {
       });
       expectOk(await engineA.syncNow());
       expectOk(await engineB.syncNow());
-      expect(rawGet(fixtureB, "SELECT value FROM app_settings WHERE key = 'terminal'")).toBeDefined();
-      expect(rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")).toBeDefined();
+      expect(
+        rawGet(fixtureB, "SELECT value FROM app_settings WHERE key = 'terminal'")
+      ).toBeDefined();
+      expect(
+        rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")
+      ).toBeDefined();
 
       // A resets the setting and clears the prompt library.
       await fixtureA.db.delete(appSettings).where(eq(appSettings.key, 'terminal'));
@@ -1088,8 +1141,12 @@ describe('SyncEngine', () => {
       expectOk(await engineA.syncNow());
       expectOk(await engineB.syncNow());
 
-      expect(rawGet(fixtureB, "SELECT value FROM app_settings WHERE key = 'terminal'")).toBeUndefined();
-      expect(rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")).toBeUndefined();
+      expect(
+        rawGet(fixtureB, "SELECT value FROM app_settings WHERE key = 'terminal'")
+      ).toBeUndefined();
+      expect(
+        rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")
+      ).toBeUndefined();
       expect(relay.getRow('app_settings', 'terminal')?.deleted).toBe(true);
       expect(relay.getRow('kv:prompt-library', 'prompt-library:prompts')?.deleted).toBe(true);
     });
@@ -1105,7 +1162,10 @@ describe('SyncEngine', () => {
       await seedTask(fixtureA, TASK_1, PROJECT_A);
       expectOk(await engineA.syncNow());
 
-      const lastPushed = rawGet(fixtureA, "SELECT value FROM kv WHERE key = 'sync:lastPushed:tasks'");
+      const lastPushed = rawGet(
+        fixtureA,
+        "SELECT value FROM kv WHERE key = 'sync:lastPushed:tasks'"
+      );
       expect(JSON.parse(lastPushed?.value as string)).toBeGreaterThan(0);
       const cursor = rawGet(fixtureA, "SELECT value FROM kv WHERE key = 'sync:cursor'");
       expect(JSON.parse(cursor?.value as string)).toBeGreaterThan(0);
@@ -1139,11 +1199,15 @@ describe('SyncEngine', () => {
       expect(pull.data.skippedSeen).toBe(3);
       expect(rawGet(fixtureB, 'SELECT id FROM terminals WHERE id = ?', 'term-1')).toBeUndefined();
       expect(rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'kv:other'")).toBeUndefined();
-      expect(rawGet(fixtureB, "SELECT value FROM app_settings WHERE key = 'localProject'")).toBeUndefined();
+      expect(
+        rawGet(fixtureB, "SELECT value FROM app_settings WHERE key = 'localProject'")
+      ).toBeUndefined();
       // The cursor still advanced past them.
-      expect(JSON.parse(rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'sync:cursor'")?.value as string)).toBe(
-        relay.maxVersion
-      );
+      expect(
+        JSON.parse(
+          rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'sync:cursor'")?.value as string
+        )
+      ).toBe(relay.maxVersion);
     });
 
     it('does not push tombstones for rows that still exist locally', async () => {
@@ -1177,7 +1241,10 @@ describe('SyncEngine', () => {
       ).toContain('"y"');
       expectOk(await engineB.syncNow());
       expect(
-        JSON.parse(rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")?.value as string)
+        JSON.parse(
+          rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")
+            ?.value as string
+        )
       ).toEqual([{ id: 'p', title: 'P', prompt: 'y' }]);
     });
   });
@@ -1228,7 +1295,10 @@ describe('SyncEngine', () => {
 
       // B works on the task and tunes its own settings/prompts; A does the same.
       await fixtureB.db.update(tasks).set({ status: 'in-progress' }).where(eq(tasks.id, TASK_1));
-      await fixtureB.db.update(conversations).set({ title: 'Converge conv (edited on B)' }).where(eq(conversations.id, CONV_1));
+      await fixtureB.db
+        .update(conversations)
+        .set({ title: 'Converge conv (edited on B)' })
+        .where(eq(conversations.id, CONV_1));
       await fixtureB.db
         .update(appSettings)
         .set({ value: JSON.stringify({ taskHoverAction: 'archive' }) })
@@ -1242,7 +1312,10 @@ describe('SyncEngine', () => {
           ]),
         })
         .where(eq(kv.key, 'prompt-library:prompts'));
-      await fixtureA.db.update(tasks).set({ name: 'Fix bug (renamed on A)' }).where(eq(tasks.id, TASK_1));
+      await fixtureA.db
+        .update(tasks)
+        .set({ name: 'Fix bug (renamed on A)' })
+        .where(eq(tasks.id, TASK_1));
 
       // Alternating sync cycles converge everything.
       for (let i = 0; i < 3; i += 1) {
@@ -1259,7 +1332,8 @@ describe('SyncEngine', () => {
           rawGet(fixture, "SELECT value FROM app_settings WHERE key = 'interface'")?.value as string
         ),
         prompts: JSON.parse(
-          rawGet(fixture, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")?.value as string
+          rawGet(fixture, "SELECT value FROM kv WHERE key = 'prompt-library:prompts'")
+            ?.value as string
         ),
       });
 
