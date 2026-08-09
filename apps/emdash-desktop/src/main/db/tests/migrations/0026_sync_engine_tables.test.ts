@@ -64,6 +64,65 @@ describe('0026 sync engine tables (kv clocks, row state, tombstones)', () => {
     expect(kvInserted.syncTs).toBeGreaterThan(0);
   });
 
+  it('stamps a same-millisecond re-create strictly after the recorded row clock', async () => {
+    fixture = await openFixture('pre-0026');
+
+    const projectId = '11111111-1111-1111-1111-111111111111';
+    const taskId = 'eeee0001-0000-0000-0000-000000000000';
+    fixture.sqlite
+      .prepare(`INSERT INTO tasks (id, project_id, name, status) VALUES (?, ?, 'Fresh', 'todo')`)
+      .run(taskId, projectId);
+    const taskStamp = fixture.sqlite
+      .prepare('SELECT sync_ts FROM tasks WHERE id = ?')
+      .get(taskId) as { sync_ts: number };
+    expect(taskStamp.sync_ts).toBeGreaterThan(0);
+
+    // Mimic the engine's push-ack: the recorded clock equals the row's stamp.
+    // A delete + re-create in the same millisecond must NOT reproduce that
+    // recorded clock — the engine's "applied-untouched" guard would otherwise
+    // never push the resurrected row.
+    fixture.sqlite
+      .prepare(
+        `INSERT INTO sync_row_state (table_name, pk, server_version, dirty, row_sync_ts)
+         VALUES ('tasks', ?, 7, 0, ?)`
+      )
+      .run(taskId, taskStamp.sync_ts);
+    await fixture.sqlite.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+    fixture.sqlite
+      .prepare(
+        `INSERT INTO tasks (id, project_id, name, status) VALUES (?, ?, 'Re-created', 'todo')`
+      )
+      .run(taskId, projectId);
+
+    const recreated = fixture.sqlite
+      .prepare('SELECT sync_ts FROM tasks WHERE id = ?')
+      .get(taskId) as { sync_ts: number };
+    // Same-millisecond re-create: the stamp must land strictly after the
+    // recorded clock (MAX(now, row_sync_ts + 1)), never equal to it.
+    expect(recreated.sync_ts).toBeGreaterThan(taskStamp.sync_ts);
+  });
+
+  it('stamps new rows after the engine watermark so push detection always fires', async () => {
+    fixture = await openFixture('pre-0026');
+
+    // A watermark from a previous push cycle, newer than the current wall clock.
+    fixture.sqlite
+      .prepare(
+        `INSERT INTO kv (key, value, updated_at) VALUES ('sync:lastPushed:tasks', '9999999999999', 0)`
+      )
+      .run();
+    fixture.sqlite
+      .prepare(
+        `INSERT INTO tasks (id, project_id, name, status) VALUES ('eeee0001-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111111', 'New', 'todo')`
+      )
+      .run();
+
+    const stamp = fixture.sqlite
+      .prepare("SELECT sync_ts FROM tasks WHERE id = 'eeee0001-0000-0000-0000-000000000000'")
+      .get() as { sync_ts: number };
+    expect(stamp.sync_ts).toBe(10000000000000);
+  });
+
   it('creates sync_row_state and sync_tombstones', async () => {
     fixture = await openFixture('pre-0026');
 
