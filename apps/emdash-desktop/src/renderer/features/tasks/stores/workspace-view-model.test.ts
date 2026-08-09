@@ -823,6 +823,36 @@ describe('WorkspaceViewModel tab persistence adapter', () => {
     conversationRegistry.release(PERSISTOR_TASK_ID);
   });
 
+  it('restores tabs from the dedicated tabs key when the aggregate snapshot is missing', () => {
+    // Mirrors the real-world failure (tab restore skipped after app restart):
+    // the aggregate `task:${id}` key is only written when sidebar/editor/terminal
+    // state changes, so a task whose user only opened conversation tabs can end up
+    // with a persisted `task:${id}:tabs` key but no aggregate key. Tab restore must
+    // still run — it reads the dedicated key via the persistor.
+    viewStateCache.set(`task:${PERSISTOR_TASK_ID}:tabs`, {
+      groups: [
+        {
+          groupId: 'group-1',
+          tabManager: {
+            tabs: [
+              { kind: 'acp-chat', tabId: 'tab-1', isPreview: false, conversationId: 'conv-1' },
+            ],
+            activeTabId: 'tab-1',
+          },
+        },
+      ],
+      activeGroupId: 'group-1',
+      paneSizes: [100],
+    });
+
+    const viewModel = makePersistorViewModel();
+    viewModel.restoreSnapshot();
+
+    expect(viewModel.paneLayout.groups).toHaveLength(1);
+    expect(viewModel.activePane.resolvedTabs.map((tab) => tab.kind)).toEqual(['acp-chat']);
+    viewModel.dispose();
+  });
+
   it('eager-writes dedicated tabs key when migrating from legacy aggregate', () => {
     vi.mocked(rpc.viewState.save).mockClear();
 
