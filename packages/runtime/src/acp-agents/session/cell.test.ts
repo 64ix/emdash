@@ -3,7 +3,7 @@ import { isOk } from '@emdash/shared';
 import { noopLogger } from '@emdash/shared/logger';
 import { describe, expect, it, vi } from 'vitest';
 import { FakeAcpAgent } from '../acp-test-support';
-import { SessionCell } from './cell';
+import { ACP_PROMPT_IDLE_TIMEOUT_MS, SessionCell } from './cell';
 
 function makeCell(agent = new FakeAcpAgent()) {
   const cell = new SessionCell({
@@ -114,6 +114,77 @@ describe('SessionCell prompts', () => {
       sessionId: 'session-1',
       prompt: [{ type: 'text', text: 'queued' }],
     });
+  });
+
+  it('settles a prompt turn as failed when the agent stays silent past the idle timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      // Agent receives the prompt but never resolves it and streams nothing —
+      // the opencode "Model is unavailable" retry-forever failure mode.
+      agent.prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+
+      expect(cell.sessionState.isGenerating).toBe(false);
+      const history = cell.history();
+      expect(history.active).toBeNull();
+      expect(history.committed[0].outcome).toEqual({ kind: 'error', reason: 'prompt_failed' });
+
+      // The pending agent.prompt promise never settles; the cell must not
+      // leave a dangling timer behind.
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS * 2);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(false);
+      void pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-arms the idle watchdog while the agent keeps streaming', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      let resolvePrompt!: (value: { stopReason: 'end_turn' }) => void;
+      agent.prompt = vi.fn().mockImplementation(
+        () =>
+          new Promise<{ stopReason: 'end_turn' }>((resolve) => {
+            resolvePrompt = resolve;
+          })
+      );
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // Stream activity well past half the timeout — the turn must survive.
+      for (let i = 0; i < 5; i++) {
+        vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS / 2 + 1);
+        cell.push({
+          kind: 'message',
+          role: 'assistant',
+          messageId: `msg-${i}`,
+          text: `part ${i}`,
+        });
+      }
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // Silence afterwards eventually expires the watchdog.
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(false);
+
+      resolvePrompt({ stopReason: 'end_turn' });
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

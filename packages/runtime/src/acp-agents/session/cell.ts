@@ -55,6 +55,20 @@ export interface AcpChatHistory {
 
 type ConfigDimension = 'model' | 'effort';
 
+/**
+ * Maximum time a prompt turn may go without any incoming activity before the
+ * cell settles it as failed.
+ *
+ * Some agents (opencode, in practice) never resolve the ACP `prompt` request
+ * when their model provider errors — they retry internally forever, the process
+ * stays alive, and no session updates ever arrive. Without this watchdog the
+ * session machine would stay in `working` indefinitely and the conversation
+ * would show "working" with no other information. Any transcript/session event
+ * arriving during the turn re-arms the timer, so long-running but live turns
+ * are never affected — only truly silent ones are.
+ */
+export const ACP_PROMPT_IDLE_TIMEOUT_MS = 10 * 60_000;
+
 export class SessionCell {
   readonly machine: SessionMachine;
   readonly transcript: AcpTranscriptParser;
@@ -62,6 +76,7 @@ export class SessionCell {
   private readonly permissions = new PermissionBroker();
   private _acpSessionId: string;
   private quiesceTimer: ReturnType<typeof setTimeout> | null = null;
+  private promptIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRunningAgentCount = 0;
   private effectQueue: Effect[] = [];
   private interpretingEffects = false;
@@ -192,6 +207,10 @@ export class SessionCell {
       });
       return;
     }
+
+    // Any activity during a prompt turn re-arms the idle watchdog — see
+    // ACP_PROMPT_IDLE_TIMEOUT_MS. Only silence for the full window expires it.
+    if (this.machine.phase.kind === 'working') this.rearmPromptIdleTimer();
 
     const previousRunningAgentCount = this.lastRunningAgentCount;
     this.transcript.pushEvent(event);
@@ -412,11 +431,13 @@ export class SessionCell {
 
   processClosed(exitCode: number | null): void {
     this.clearQuiesce();
+    this.clearPromptIdleTimer();
     this.applyEvent({ type: 'ProcessClosed', exitCode });
   }
 
   dispose(): void {
     this.clearQuiesce();
+    this.clearPromptIdleTimer();
     this.permissions.drain(this.machine.pendingPermissions);
   }
 
@@ -543,7 +564,9 @@ export class SessionCell {
         sessionId: this.acpSessionId,
         content: promptRequest.prompt,
       });
+      this.armPromptIdleTimer();
       const response = await this.deps.agent.prompt(promptRequest);
+      this.clearPromptIdleTimer();
       this.rawLog.record({
         kind: 'prompt_result',
         sessionId: this.acpSessionId,
@@ -552,6 +575,7 @@ export class SessionCell {
       this.settleTurn(outcomeFromStopReason(response.stopReason));
       return ok({ queued: false });
     } catch (e) {
+      this.clearPromptIdleTimer();
       const err = acpErr.promptFailed(toSerializedError(e));
       this.rawLog.record({
         kind: 'prompt_result',
@@ -632,6 +656,44 @@ export class SessionCell {
     if (!this.quiesceTimer) return;
     clearTimeout(this.quiesceTimer);
     this.quiesceTimer = null;
+  }
+
+  /**
+   * Arm (or re-arm, if already armed) the prompt idle watchdog. Called when a
+   * prompt is actually sent to the agent and on any activity during the turn
+   * (see `push`). Expiry while the machine is still `working` settles the turn
+   * as failed — the agent never resolved the prompt request and stopped
+   * streaming entirely.
+   */
+  private armPromptIdleTimer(): void {
+    if (this.promptIdleTimer !== null) clearTimeout(this.promptIdleTimer);
+    this.promptIdleTimer = setTimeout(() => {
+      this.promptIdleTimer = null;
+      if (this.machine.phase.kind !== 'working') return;
+      this.deps.logger.warn(
+        'SessionCell: prompt turn stalled with no activity, settling as failed',
+        {
+          conversationId: this.conversationId,
+          timeoutMs: ACP_PROMPT_IDLE_TIMEOUT_MS,
+        }
+      );
+      this.rawLog.record({
+        kind: 'prompt_result',
+        sessionId: this.acpSessionId,
+        stopReason: null,
+      });
+      this.settleTurn({ kind: 'error', reason: 'prompt_failed' });
+    }, ACP_PROMPT_IDLE_TIMEOUT_MS);
+  }
+
+  private rearmPromptIdleTimer(): void {
+    if (this.promptIdleTimer !== null) this.armPromptIdleTimer();
+  }
+
+  private clearPromptIdleTimer(): void {
+    if (!this.promptIdleTimer) return;
+    clearTimeout(this.promptIdleTimer);
+    this.promptIdleTimer = null;
   }
 
   private context(): SessionMachineContext {
