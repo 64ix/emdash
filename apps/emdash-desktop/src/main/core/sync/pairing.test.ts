@@ -142,12 +142,14 @@ class FakeRelayAuthApi implements RelayAuthApi {
     const forced = this.forced.joinSpace;
     if (forced) return err(forced);
 
-    // The real relay matches the presented hash against stored digests of the
-    // pending secrets — the join only succeeds if the client derived the
-    // exact same hash the relay would compute.
+    // The real relay (service.ts `join`) parses the presented credential as
+    // the raw secret and compares the SHA-256 of what the client sent against
+    // the digests it stored at mint time — mirror that comparison so the fake
+    // rejects a client that pre-hashes the secret, exactly like the relay.
+    const presentedSha = this.sha256Hex(joinHash);
     let matched: string | null = null;
     for (const [secret, _pending] of this.pendingSecrets) {
-      if (this.sha256Hex(secret) === joinHash) {
+      if (this.sha256Hex(secret) === presentedSha) {
         matched = secret;
         break;
       }

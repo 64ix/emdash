@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { JOIN_SECRET_PREFIX } from '@shared/core/sync/pairing';
 /**
- * Verifies the client-side join-credential derivation against the relay's own
- * crypto (apps/sync-relay/src/crypto.ts). The relay mints `emdj1_` secrets,
- * stores only SHA-256 of the full credential, and matches join attempts by
- * hashing what the client presents — so the client's `join_hash` must be the
- * SHA-256 hex digest of the full secret string. The relay source is imported
- * directly (its package entry is the built `dist/index.mjs`, which this repo's
- * validation gate does not build); crypto.ts is dependency-free WebCrypto code
- * that runs identically in Node.
+ * Verifies the client-side join credential against the relay's actual join
+ * protocol (apps/sync-relay/src/service.ts + crypto.ts): the relay mints
+ * `emdj1_` secrets, stores only SHA-256 of the full credential, and on join
+ * parses the presented credential as the raw secret (space id, length,
+ * checksum) before comparing the SHA-256 digest of what the client sent
+ * against the stored digest. The client's `join_hash` must therefore be the
+ * trimmed secret itself — the relay does the hashing. The relay service and
+ * its in-process D1 harness are imported directly, so these tests exercise
+ * the real join path rather than a client-side copy of the protocol.
  */
 import {
   constantTimeEqual,
@@ -17,6 +18,10 @@ import {
   parseJoinSecret,
   sha256Hex,
 } from '../../../../../sync-relay/src/crypto';
+import type { SqlDb } from '../../../../../sync-relay/src/db';
+import { ensureSchema } from '../../../../../sync-relay/src/schema';
+import { ApiError, createSpace, join } from '../../../../../sync-relay/src/service';
+import { MemoryD1 } from '../../../../../sync-relay/test/memory-d1';
 import { deriveJoinHash } from './pairing';
 
 // `pairing.ts` logs through the main-process logger, whose import chain pulls
@@ -33,33 +38,49 @@ vi.mock('@main/db/client', () => ({
   },
 }));
 
-describe('join credential derivation (client ↔ relay)', () => {
-  it('derives the join hash the relay stores at mint time: sha256 of the full secret', async () => {
-    const secret = await makeJoinSecret('AB12-34_CD56-78_EF90-1');
+const T0 = 1_800_000_000_000;
 
-    const clientHash = deriveJoinHash(secret);
-    expect(clientHash).not.toBeNull();
-    // The relay stores sha256Hex(secret) at mint time and matches it against
-    // the SHA-256 digest of what the client presents — the client's hex
-    // string must therefore decode to exactly the digest of the minted secret.
-    expect(clientHash).toBe(await sha256Hex(secret));
-    expect(constantTimeEqual(hexToBytes(clientHash!), hexToBytes(await sha256Hex(secret)))).toBe(
-      true
-    );
+async function makeDb(): Promise<SqlDb> {
+  const db = new MemoryD1();
+  await ensureSchema(db);
+  return db;
+}
+
+describe('join credential derivation (client ↔ relay)', () => {
+  it('joins through the real relay service with the derived credential and receives a token', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db, { name: 'first' }, T0);
+
+    const credential = deriveJoinHash(space.secret);
+    expect(credential).toBe(space.secret);
+
+    const joined = await join(db, { join_hash: credential!, name: 'laptop' }, T0);
+    expect(joined.device_token).toMatch(/^emdv1_/);
+    expect(joined.device_id).not.toBe(space.device_id);
   });
 
-  it('derives a hash the relay considers a well-formed join credential', async () => {
-    const spaceId = 'Xy9_zAbCDEf-01_2345678';
-    const secret = await makeJoinSecret(spaceId);
+  it('is rejected by the relay when the client pre-hashes the secret (sha256 hex is not a join credential)', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db, { name: 'first' }, T0);
 
-    const parsed = await parseJoinSecret(secret);
-    expect(parsed.ok).toBe(true);
-    expect(parsed.spaceId).toBe(spaceId);
+    const preHashed = await sha256Hex(space.secret);
+    await expect(join(db, { join_hash: preHashed, name: 'second' }, T0)).rejects.toMatchObject({
+      status: 401,
+      message: 'invalid join secret',
+    });
+  });
 
-    const clientHash = deriveJoinHash(secret)!;
-    // The relay hashes the presented credential and matches against the stored
-    // digest of the minted secret.
-    expect(clientHash).toBe(await sha256Hex(secret));
+  it('is single-use: the relay rejects the second join with the same secret', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db, { name: 'first' }, T0);
+
+    const first = await join(db, { join_hash: space.secret, name: 'second' }, T0);
+    expect(first.device_token).toMatch(/^emdv1_/);
+
+    await expect(join(db, { join_hash: space.secret, name: 'third' }, T0)).rejects.toMatchObject({
+      status: 401,
+      message: 'invalid join secret',
+    });
   });
 
   it('matches the relay secret format exactly (prefix + space + random + checksum)', async () => {
@@ -70,6 +91,15 @@ describe('join credential derivation (client ↔ relay)', () => {
     // emdj1_ (6) + space (22) + _ (1) + random (22) + _ (1) + checksum (6)
     expect(secret.length).toBe(JOIN_SECRET_PREFIX.length + 22 + 1 + 22 + 1 + 6);
     expect(parsed.ok).toBe(true);
+    expect(deriveJoinHash(secret)).toBe(secret);
+  });
+
+  it('derives a credential whose digest equals the one the relay stores at mint time', async () => {
+    const secret = await makeJoinSecret('AB12-34_CD56-78_EF90-1');
+
+    const storedDigest = await sha256Hex(secret);
+    const presentedSha = await sha256Hex(deriveJoinHash(secret)!);
+    expect(constantTimeEqual(hexToBytes(presentedSha), hexToBytes(storedDigest))).toBe(true);
   });
 
   it('returns null for strings that do not start with the join-secret prefix', async () => {
@@ -80,7 +110,7 @@ describe('join credential derivation (client ↔ relay)', () => {
     expect(deriveJoinHash('EMDJ1_ABC')).toBeNull();
   });
 
-  it('tolerates surrounding whitespace (paste artifacts) without changing the hash', async () => {
+  it('tolerates surrounding whitespace (paste artifacts) without changing the credential', async () => {
     const secret = await makeJoinSecret('AB12-34_CD56-78_EF90-1');
     expect(deriveJoinHash(`  ${secret}\n`)).toBe(deriveJoinHash(secret));
   });
@@ -88,5 +118,16 @@ describe('join credential derivation (client ↔ relay)', () => {
   it('is deterministic for the same secret', async () => {
     const secret = await makeJoinSecret('AB12-34_CD56-78_EF90-1');
     expect(deriveJoinHash(secret)).toBe(deriveJoinHash(secret));
+  });
+
+  it('fails with ApiError 401 for a well-formed-looking but unknown secret', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db, { name: 'first' }, T0);
+
+    const unknown = space.secret.slice(0, -1) + (space.secret.endsWith('A') ? 'B' : 'A');
+    await expect(join(db, { join_hash: unknown, name: 'x' }, T0)).rejects.toBeInstanceOf(ApiError);
+    await expect(join(db, { join_hash: unknown, name: 'x' }, T0)).rejects.toMatchObject({
+      status: 401,
+    });
   });
 });

@@ -11,13 +11,13 @@
  * Join credential derivation matches the relay exactly
  * (apps/sync-relay/src/crypto.ts + service.ts): the relay mints a secret
  * `emdj1_<space>_<random>_<checksum>`, stores only SHA-256 of the full
- * credential, and matches presented credentials by hashing what the client
- * sends. So the client's join credential is simply `sha256(trimmedSecret)`,
- * hex — the relay itself parses the secret to attribute the attempt to the
- * space. The K0/HKDF halves of the spec's end-to-end crypto are ticket #134's
- * scope and are deliberately not derived here.
+ * credential, and on join parses the presented credential as the raw secret
+ * (to attribute the attempt to the space and verify its checksum) before
+ * comparing the SHA-256 digest of what the client sent against the stored
+ * digest. So the client's `join_hash` is the trimmed secret itself — the
+ * relay does the hashing. The K0/HKDF halves of the spec's end-to-end crypto
+ * are ticket #134's scope and are deliberately not derived here.
  */
-import { createHash } from 'node:crypto';
 import { err, ok, type Result } from '@emdash/shared';
 import { log } from '@main/lib/logger';
 import {
@@ -59,13 +59,9 @@ export type MintedSecret = {
   deepLink: string;
 };
 
-function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex');
-}
-
 /**
  * The relay's join-secret layout (apps/sync-relay/src/crypto.ts):
- * `emdj1_<space id 22>_<random 22>_<checksum 6>` = 57 chars total. The client
+ * `emdj1_<space id 22>_<random 22>_<checksum 6>` = 58 chars total. The client
  * mirrors the length check so obviously truncated/pasted-together strings are
  * rejected locally; the checksum itself is verified by the relay. Ticket #134
  * may extend this format with the K0 half — keep this constant in sync with
@@ -74,19 +70,22 @@ function sha256Hex(input: string): string {
 const RELAY_JOIN_SECRET_LENGTH = JOIN_SECRET_PREFIX.length + 22 + 1 + 22 + 1 + 6;
 
 /**
- * Derives the join credential from a pasted pairing secret, matching the
- * relay's verification exactly: the client sends SHA-256 (hex) of the full
- * secret string; the relay parses the secret to attribute the attempt and
- * compares digests. `null` when the secret does not even look like one (wrong
- * prefix or wrong length) — the relay is the authority on checksum/TTL/attempt
- * validity.
+ * The join credential to present to the relay, matching its verification
+ * exactly (apps/sync-relay/src/service.ts `join`): the relay parses the
+ * presented credential as the raw `emdj1_…` secret — it needs the embedded
+ * space id to attribute the attempt and the checksum to validate the format —
+ * then compares SHA-256 of the full credential against the digest it stored
+ * at mint time. So the client's `join_hash` is the trimmed secret itself; the
+ * relay does the hashing. `null` when the secret does not even look like one
+ * (wrong prefix or wrong length) — the relay is the authority on
+ * checksum/TTL/attempt validity.
  */
 export function deriveJoinHash(secret: string): string | null {
   const trimmed = secret.trim();
   if (!trimmed.startsWith(JOIN_SECRET_PREFIX) || trimmed.length !== RELAY_JOIN_SECRET_LENGTH) {
     return null;
   }
-  return sha256Hex(trimmed);
+  return trimmed;
 }
 
 function pairingError(code: PairingErrorCode, options: { status?: number } = {}): PairingError {
