@@ -186,6 +186,166 @@ describe('SessionCell prompts', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not settle a turn that is blocked on a pending permission', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      agent.prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // The agent requests a permission and then waits silently for the user.
+      const permission = cell.requestPermission({
+        sessionId: 'session-1',
+        toolCall: { toolCallId: 'tool-1', title: 'Approve a command', kind: 'command' },
+        options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' as PermissionOptionKind }],
+      });
+      expect(cell.sessionState.pendingPermissions).toHaveLength(1);
+
+      // Multiple idle windows pass — the turn must survive: it is blocked on
+      // the user, not stalled.
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+      expect(cell.sessionState.pendingPermissions).toHaveLength(1);
+
+      // Once the permission is resolved, a genuinely silent turn does settle.
+      const requestId = cell.sessionState.pendingPermissions[0].requestId;
+      expect(isOk(cell.resolvePermission(requestId, 'allow'))).toBe(true);
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+
+      expect(cell.sessionState.isGenerating).toBe(false);
+      expect(cell.history().committed[0].outcome).toEqual({
+        kind: 'error',
+        reason: 'prompt_failed',
+      });
+      await expect(permission).resolves.toEqual({
+        outcome: { outcome: 'selected', optionId: 'allow' },
+      });
+      void pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops late agent output after the watchdog settled the turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      agent.prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(false);
+
+      // The agent process is still alive; its late output must not open a
+      // ghost agent-initiated turn.
+      cell.push({
+        kind: 'message',
+        role: 'assistant',
+        messageId: 'late-1',
+        text: 'stale output',
+      });
+      expect(cell.history().active).toBeNull();
+      expect(cell.history().committed).toHaveLength(1);
+      expect(cell.history().committed[0].outcome).toEqual({
+        kind: 'error',
+        reason: 'prompt_failed',
+      });
+      void pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a stale prompt resolution after the user resubmitted', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      let resolveFirst!: (value: { stopReason: 'end_turn' }) => void;
+      let resolveSecond!: (value: { stopReason: 'end_turn' }) => void;
+      agent.prompt = vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<{ stopReason: 'end_turn' }>((resolve) => {
+              resolveFirst = resolve;
+            })
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise<{ stopReason: 'end_turn' }>((resolve) => {
+              resolveSecond = resolve;
+            })
+        );
+
+      const first = cell.prompt({ text: 'first' });
+      await Promise.resolve();
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(false);
+
+      // User resubmits; the second turn is now live and working.
+      const second = cell.prompt({ text: 'second' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // The stale first prompt resolves late — it must not settle the second
+      // turn nor clear the second turn's idle watchdog.
+      resolveFirst({ stopReason: 'end_turn' });
+      await first;
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // The second turn's own watchdog is still armed: silence settles it.
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(false);
+
+      resolveSecond({ stopReason: 'end_turn' });
+      await second;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the cancel path working through the turn-identity guard', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      let resolvePrompt!: (value: { stopReason: 'cancelled' }) => void;
+      agent.prompt = vi.fn().mockImplementation(
+        () =>
+          new Promise<{ stopReason: 'cancelled' }>((resolve) => {
+            resolvePrompt = resolve;
+          })
+      );
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      await cell.cancel();
+      expect(cell.machine.phase.kind).toBe('cancelling');
+
+      resolvePrompt({ stopReason: 'cancelled' });
+      await pending;
+
+      expect(cell.machine.phase.kind).toBe('ready');
+      expect(cell.history().committed[0].outcome).toEqual({
+        kind: 'cancelled',
+        reason: 'cancelled',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('SessionCell permissions', () => {

@@ -246,18 +246,27 @@ describe('TaskManagerStore.mergeGlobalTasks — Global Board open sync (spec #10
     manager.dispose();
   });
 
-  it('refreshes the row of an existing registered store wholesale', () => {
+  it('never replaces an already-registered store with the board-open snapshot', () => {
     const manager = makeTaskManager();
+    // The store carries in-place writes that landed after the board-open
+    // snapshot was taken (a drag move, an archive) — a wholesale data swap
+    // would silently revert them until the board reopens.
     const original = makeTask({ name: 'Old name', workflowStage: 'idea' });
     const store = createUnprovisionedTask(original);
+    store.data = {
+      ...store.data,
+      workflowStage: 'spec',
+      archivedAt: '2026-01-02T00:00:00.000Z',
+    } as Task;
     manager.tasks.set(original.id, store);
 
-    manager.mergeGlobalTasks([makeTask({ name: 'New name', workflowStage: 'spec' })]);
+    manager.mergeGlobalTasks([makeTask({ name: 'New name', workflowStage: 'idea' })]);
 
-    const refreshed = store.data as Task;
-    expect(refreshed.name).toBe('New name');
-    expect(refreshed.workflowStage).toBe('spec');
-    // An existing store is refreshed in place — no re-acquisition.
+    const kept = store.data as Task;
+    expect(kept.name).toBe('Old name');
+    expect(kept.workflowStage).toBe('spec');
+    expect(kept.archivedAt).toBe('2026-01-02T00:00:00.000Z');
+    // No re-acquisition for existing stores.
     expect(mocks.conversationAcquire).not.toHaveBeenCalled();
     expect(mocks.terminalAcquire).not.toHaveBeenCalled();
 
