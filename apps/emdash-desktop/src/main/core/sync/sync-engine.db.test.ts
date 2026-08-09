@@ -892,26 +892,37 @@ describe('SyncEngine', () => {
       const engineA = makeEngine(fixtureA, relay, 'device-a');
       const engineB = makeEngine(fixtureB, relay, 'device-b');
 
+      // The ssh_connections row the project references (out-of-scope table).
+      fixtureA.sqlite
+        .prepare('INSERT INTO ssh_connections (id, name, host, username) VALUES (?, ?, ?, ?)')
+        .run('ssh-a', 'prod', 'example.com', 'alice');
       await seedProject(fixtureA, PROJECT_A, {
         path: '/local/a/repo',
         repositoryWorkspaceId: 'ws-a',
+        sshConnectionId: 'ssh-a',
       });
       expectOk(await engineA.syncNow());
 
-      // Fresh import: no path, no repository workspace — B regenerates its own.
+      // Fresh import: no path, no workspace/SSH reference — B regenerates its own.
       expectOk(await engineB.syncNow());
       const imported = rawGet(fixtureB, 'SELECT * FROM projects WHERE id = ?', PROJECT_A);
       expect(imported?.path).toBeNull();
       expect(imported?.repository_workspace_id).toBeNull();
+      expect(imported?.ssh_connection_id).toBeNull();
 
       // B provisions locally and syncs its version of the row first…
       fixtureB.sqlite
-        .prepare('UPDATE projects SET path = ?, repository_workspace_id = ? WHERE id = ?')
-        .run('/local/b/repo', 'ws-b', PROJECT_A);
+        .prepare('INSERT INTO ssh_connections (id, name, host, username) VALUES (?, ?, ?, ?)')
+        .run('ssh-b', 'prod', 'example.com', 'bob');
+      fixtureB.sqlite
+        .prepare(
+          'UPDATE projects SET path = ?, repository_workspace_id = ?, ssh_connection_id = ? WHERE id = ?'
+        )
+        .run('/local/b/repo', 'ws-b', 'ssh-b', PROJECT_A);
       expectOk(await engineB.syncNow());
 
       // …then A renames the project; A's later push wins LWW, and each
-      // machine keeps its own path and workspace reference.
+      // machine keeps its own path and workspace/SSH references.
       await fixtureA.db
         .update(projects)
         .set({ name: 'Repo renamed' })
@@ -925,9 +936,11 @@ describe('SyncEngine', () => {
       const bAfter = rawGet(fixtureB, 'SELECT * FROM projects WHERE id = ?', PROJECT_A);
       expect(bAfter?.path).toBe('/local/b/repo');
       expect(bAfter?.repository_workspace_id).toBe('ws-b');
+      expect(bAfter?.ssh_connection_id).toBe('ssh-b');
       const aAfter = rawGet(fixtureA, 'SELECT * FROM projects WHERE id = ?', PROJECT_A);
       expect(aAfter?.path).toBe('/local/a/repo');
       expect(aAfter?.repository_workspace_id).toBe('ws-a');
+      expect(aAfter?.ssh_connection_id).toBe('ssh-a');
     });
 
     it('nulls assigned_pr_url on import when the PR row is absent, preserves it when present', async () => {
