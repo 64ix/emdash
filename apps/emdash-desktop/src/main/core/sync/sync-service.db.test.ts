@@ -16,6 +16,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projects, tasks } from '@main/db/schema';
 import type { SyncStatus } from '@shared/core/sync/status';
+import { EncryptingRelayTransport } from './encrypting-transport';
 import { SyncEngine } from './engine';
 import type { SpaceKey } from './space-key-store';
 import type { SyncCredential } from './sync-credentials';
@@ -198,7 +199,8 @@ class FakeRelay implements RelayTransport {
 // ---------------------------------------------------------------------------
 
 const CREDENTIAL: SyncCredential = { token: 'emdv1_token', spaceId: 'space-1', deviceName: 'mac' };
-const KEY: SpaceKey = { keyId: 'k1', k0: new Uint8Array(32).fill(7) };
+// keyId must be 16 lowercase hex chars (crypto.ts keyIdPattern).
+const KEY: SpaceKey = { keyId: 'a1b2c3d4e5f6a7b8', k0: new Uint8Array(32).fill(7) };
 
 const PROJECT_A = '11111111-1111-1111-1111-111111111111';
 const TASK_A1 = 'aaaa0001-0000-0000-0000-000000000000';
@@ -419,14 +421,12 @@ describe('SyncService', () => {
 
   describe('poll loop', () => {
     it('applies patches delivered by the relay, including through the poll channel', async () => {
-      // Machine B pushes PLAINTEXT bodies (no encryption), so A must read
-      // them without the encrypting wrapper: no space key on A.
-      spaceKey = null;
-      // Machine B pushes a task through a real engine against the same relay.
+      // Machine B pushes bodies encrypted with the space key, so A must read
+      // them through the encrypting wrapper with the same key.
       const fixtureB = await openFixture('empty');
       const other = new SyncEngine({
         sqlite: fixtureB.sqlite,
-        transport: relay,
+        transport: new EncryptingRelayTransport(relay, { get: async () => ok(KEY) }),
         deviceId: 'device-b',
       });
       await fixtureB.db.insert(projects).values({
@@ -541,6 +541,24 @@ describe('SyncService', () => {
       // The launch pushed nothing (no local rows); the offline attempt and
       // the reconnect kick each ran one push.
       expect(relay.pushCalls).toBe(2);
+    });
+  });
+
+  describe('space key handling', () => {
+    it('never pushes without a space key: a paired K0-less machine reports the encryption-key error', async () => {
+      // Credential present but the space key is missing (store failure or
+      // loss): the service must refuse to push rather than send plaintext
+      // bodies to the relay.
+      await seedLocalProject();
+      spaceKey = null;
+
+      await service.syncNow();
+
+      expect(relay.pushCalls).toBe(0);
+      const status = lastStatus();
+      expect(status.state).toBe('error');
+      expect(status.lastError).toContain('encryption key');
+      expect(status.pendingCount).toBe(1); // the local row stays pending
     });
   });
 

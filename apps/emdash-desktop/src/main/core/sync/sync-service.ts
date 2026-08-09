@@ -5,8 +5,10 @@
  * The service is the daily-sync heart behind the sidebar status widget:
  *
  * - It builds the engine transport stack from the machine's current pairing:
- *   `HttpRelayTransport` with the stored device token, wrapped in
- *   `EncryptingRelayTransport` whenever a space key (K0) is stored.
+ *   `HttpRelayTransport` with the stored device token, always wrapped in
+ *   `EncryptingRelayTransport` — a paired machine without a stored space key
+ *   (K0) fails pushes with a clear re-join error instead of sending
+ *   plaintext bodies to the relay.
  * - `start()` runs a launch sync (after the window is up) and then a
  *   near-continuous long-poll loop (`transport.poll`, relay clamp 25 s); the
  *   loop reconnects with exponential backoff after failures.
@@ -267,12 +269,13 @@ export class SyncService {
       this.deviceIdentity = await this.deps.getDeviceIdentity();
     }
     const base = this.deps.createTransport(credential.data.token);
-    const keyResult = await this.deps.getSpaceKey();
-    const key = keyResult.success ? keyResult.data : null;
-    const transport =
-      key !== null
-        ? new EncryptingRelayTransport(base, { get: () => this.deps.getSpaceKey() })
-        : base;
+    // Always wrap: a paired machine without a stored space key must fail the
+    // push (SyncSpaceKeyMissingError → error status with the re-join message)
+    // rather than silently downgrade to plaintext — unencrypted bodies would
+    // leak row contents to the relay and wedge every keyed machine's pull.
+    const transport = new EncryptingRelayTransport(base, {
+      get: () => this.deps.getSpaceKey(),
+    });
     return new SyncEngine({
       sqlite: this.deps.sqlite,
       transport,
@@ -320,14 +323,12 @@ export class SyncService {
 
   private async buildPollTransport(token: string): Promise<RelayTransport> {
     const base = this.deps.createTransport(token);
-    // Poll is read-only: wrap only when a key exists (matching buildEngine) so
-    // body-carrying patches decrypt; without a key they would all be flagged
-    // undecryptable and never applied.
-    const keyResult = await this.deps.getSpaceKey();
-    const key = keyResult.success ? keyResult.data : null;
-    return key !== null
-      ? new EncryptingRelayTransport(base, { get: () => this.deps.getSpaceKey() })
-      : base;
+    // Always wrap (matching buildEngine): body-carrying patches decrypt when a
+    // key exists; without one they are flagged undecryptable and skipped —
+    // never applied as garbage, never echoed back.
+    return new EncryptingRelayTransport(base, {
+      get: () => this.deps.getSpaceKey(),
+    });
   }
 
   private async markPollFailure(error: unknown): Promise<void> {
