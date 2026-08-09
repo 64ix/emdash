@@ -43,7 +43,8 @@ function createAppDb(): {
       ssh_connection_id TEXT,
       repository_workspace_id TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE tasks (
@@ -68,7 +69,8 @@ function createAppDb(): {
       workspace_intent TEXT,
       type TEXT NOT NULL DEFAULT 'task',
       automation_run_id TEXT,
-      assigned_pr_url TEXT
+      assigned_pr_url TEXT,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE workspaces (
@@ -104,7 +106,8 @@ function createAppDb(): {
       session_id TEXT,
       agent_status TEXT,
       agent_status_seen INTEGER DEFAULT 1,
-      type TEXT
+      type TEXT,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
   `);
 
