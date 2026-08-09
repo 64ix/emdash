@@ -198,6 +198,12 @@ export class SessionManager implements InboundRouter {
           return acpErr.newSessionFailed(toSerializedError(e));
         }
         record = this.createRecord(input, connection, acquired, response.sessionId);
+        // Register the route before any further awaits (initial-model config
+        // round trip, queue setup): providers send available_commands_update
+        // immediately after newSession returns, and a session_update arriving
+        // before the route exists is dropped as "unknown sessionId" — leaving
+        // the composer slash menu permanently empty.
+        this.registerRoute(connection.key, response.sessionId, input.conversationId);
         record.cell.applySessionMeta({
           modes: response.modes,
           configOptions: response.configOptions,

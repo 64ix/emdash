@@ -341,6 +341,62 @@ describe('AcpRuntime session manager', () => {
     });
   });
 
+  it('routes session updates arriving while newSession startup is still finishing', async () => {
+    // opencode sends available_commands_update right after newSession returns
+    // (setTimeout 0). If the conversation launch applies an initial model, the
+    // setConfigOption round trip keeps start() inside its post-newSession
+    // sequence while that update arrives — and with the route registered only
+    // at the very end of start(), SessionManager drops it as "unknown
+    // sessionId" and the composer slash menu is never populated.
+    const h = makeAcpHarness();
+    const rt = new AcpRuntime(h.deps);
+    let resolveConfigOption!: () => void;
+    h.agent.newSession = vi.fn().mockResolvedValue({
+      sessionId: 'session-1',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'm1',
+          options: [{ value: 'm1', name: 'M1' }],
+        },
+      ],
+    });
+    h.agent.setSessionConfigOption = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfigOption = resolve;
+        })
+    );
+
+    const started = rt.startSession(
+      makeStartInput({ conversationId: 'conv-commands-race', model: 'm1' })
+    );
+
+    // Wait until start() is mid-flight: newSession resolved, the initial-model
+    // config round trip pending, route not yet registered.
+    await vi.waitFor(() => expect(h.agent.setSessionConfigOption).toHaveBeenCalled());
+
+    await h.client().sessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'available_commands_update',
+        sessionId: 'session-1',
+        availableCommands: [{ name: 'diagnosing-bugs', description: 'Diagnosis loop' }],
+      } as SessionUpdate,
+    });
+
+    resolveConfigOption();
+    const result = await started;
+    expect(isOk(result)).toBe(true);
+
+    const config = rt.sessionLiveModels('conv-commands-race')?.states.config.snapshot().data;
+    expect(config?.availableCommands).toEqual([
+      expect.objectContaining({ name: 'diagnosing-bugs' }),
+    ]);
+  });
+
   it('publishes terminal state and output through live primitives', async () => {
     const { h, rt, client, sessionId } = await startHarness('conv-terminal');
     const terminal = new FakeAcpTerminalProcess();
