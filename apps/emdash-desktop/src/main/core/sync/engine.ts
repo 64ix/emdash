@@ -74,6 +74,15 @@ export interface SyncEngineOptions {
   now?: () => number;
   /** Max patches per pull request. Defaults to the relay's limit (1000). */
   pullLimit?: number;
+  /**
+   * Invoked once per freshly imported project row, after the whole pull has
+   * been applied (so the carried `project_remotes` of that project are
+   * already present locally). The app wires this to the auto-attach service
+   * (ticket #136): a local project whose path is machine-local gets a chance
+   * to silently re-anchor on this machine. Errors are logged and swallowed —
+   * the hook must never wedge the sync.
+   */
+  projectAttachHook?: (projectId: string, workspaceProvider: string | null) => void | Promise<void>;
 }
 
 const EMPTY_SUMMARY: SyncSummary = {
@@ -119,6 +128,7 @@ export class SyncEngine {
   private readonly deviceId: string;
   private readonly now: () => number;
   private readonly pullLimit: number;
+  private readonly projectAttachHook: SyncEngineOptions['projectAttachHook'];
   private readonly statements: PreparedTableStatements[] = [];
   private readonly fkExistsStatements: Array<{
     config: SyncTableConfig;
@@ -132,6 +142,7 @@ export class SyncEngine {
     this.deviceId = options.deviceId;
     this.now = options.now ?? (() => Date.now());
     this.pullLimit = options.pullLimit ?? 1000;
+    this.projectAttachHook = options.projectAttachHook;
     this.prepareStatements();
   }
 
@@ -304,6 +315,10 @@ export class SyncEngine {
     let cursor = this.readCursor();
 
     try {
+      // Project rows inserted by this pull (fresh imports) — the auto-attach
+      // hook fires for them once the whole pull is applied, so the carried
+      // project_remotes of each project are already present locally.
+      const freshProjectIds: Array<{ id: string; workspaceProvider: string | null }> = [];
       for (;;) {
         let result;
         try {
@@ -317,7 +332,7 @@ export class SyncEngine {
         try {
           this.sqlite.transaction(() => {
             for (const patch of result.patches) {
-              this.applyPatch(patch, lastPushed, summary);
+              this.applyPatch(patch, lastPushed, summary, freshProjectIds);
             }
             this.writeCursor(nextCursor, now);
           })();
@@ -327,6 +342,18 @@ export class SyncEngine {
         summary.pulled += result.patches.length;
         cursor = nextCursor;
         if (result.patches.length < this.pullLimit) break;
+      }
+      if (this.projectAttachHook !== undefined && freshProjectIds.length > 0) {
+        for (const project of freshProjectIds) {
+          try {
+            await this.projectAttachHook(project.id, project.workspaceProvider);
+          } catch (error) {
+            log.warn('[sync] projectAttachHook failed (non-fatal)', {
+              projectId: project.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       }
       log.debug('[sync] pull complete', {
         pulled: summary.pulled,
@@ -349,7 +376,8 @@ export class SyncEngine {
   private applyPatch(
     patch: SyncPatch,
     lastPushed: Map<string, number>,
-    summary: SyncSummary
+    summary: SyncSummary,
+    freshProjectIds: Array<{ id: string; workspaceProvider: string | null }>
   ): void {
     const statements = this.statements.find((s) => s.config.table === patch.table);
     if (statements === undefined) {
@@ -435,6 +463,12 @@ export class SyncEngine {
       | undefined;
     const appliedSyncTs = appliedRow === undefined ? 0 : Number(appliedRow.sync_ts);
     upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, appliedSyncTs);
+    if (config.table === 'projects' && localRow === undefined) {
+      freshProjectIds.push({
+        id: patch.pk,
+        workspaceProvider: (transformed.workspace_provider as string | null) ?? null,
+      });
+    }
     summary.applied += 1;
   }
 
@@ -483,7 +517,7 @@ export class SyncEngine {
   ): Record<string, string | null> {
     let next = columns;
     if (config.importTransform !== undefined) {
-      next = config.importTransform(pk, next, localRow ?? null);
+      next = config.importTransform(pk, next, localRow ?? null, this.sqlite);
     }
     // Machine-local reference columns are never written at import: fresh
     // inserts leave them NULL, existing rows keep their own value.
@@ -727,7 +761,7 @@ export class SyncEngine {
       columns[column] = value === null || value === undefined ? null : String(value);
     }
     if (config.pushTransform !== undefined) {
-      columns = config.pushTransform(this.rowPk(config, row), columns);
+      columns = config.pushTransform(this.rowPk(config, row), columns, row);
     }
     return columns;
   }

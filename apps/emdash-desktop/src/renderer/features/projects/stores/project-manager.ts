@@ -6,7 +6,13 @@ import { viewStateCache } from '@renderer/lib/stores/view-state-cache';
 import { log } from '@renderer/utils/logger';
 import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { sshConnectionEventChannel } from '@shared/core/ssh/sshEvents';
-import { type LocalProject, type SshProject } from '@shared/projects';
+import type {
+  AttachProjectParams,
+  AttachProjectResult,
+  LocalProject,
+  SshProject,
+} from '@shared/projects';
+import { isUnattachedProjectData } from '@shared/projects';
 import { splitNameWithOwner } from '@shared/repository-ref';
 import type { ProjectViewSnapshot } from '@shared/view-state';
 import {
@@ -73,8 +79,16 @@ export class ProjectManagerStore {
     runInAction(() => {
       for (const p of rawProjects) {
         if (this.projects.has(p.id)) continue;
-        this.projects.set(p.id, createUnmountedProject(p, 'idle'));
-        toMount.push(p.id);
+        const store = createUnmountedProject(p, 'idle');
+        // A synced project with no local anchor stays Unattached: it must not
+        // be opened (openProject would fail with `unattached`) — the user
+        // attaches it first.
+        if (isUnattachedProjectData(p)) {
+          store.errorCode = 'unattached';
+        } else {
+          toMount.push(p.id);
+        }
+        this.projects.set(p.id, store);
       }
     });
     await Promise.allSettled(toMount.map((id) => this.mountProject(id)));
@@ -281,6 +295,8 @@ export class ProjectManagerStore {
 
     const project = this.projects.get(projectId);
     if (!project || !isUnmountedProject(project)) return Promise.resolve();
+    // Unattached projects have nothing to mount until the user attaches them.
+    if (project.errorCode === 'unattached') return Promise.resolve();
 
     runInAction(() => {
       project.phase = 'opening';
@@ -304,6 +320,11 @@ export class ProjectManagerStore {
               } else if (openResult.error.type === 'ssh-disconnected') {
                 current.error = openResult.error.connectionId;
                 current.errorCode = 'ssh-disconnected';
+              } else if (openResult.error.type === 'unattached') {
+                // Safety net: a synced project with no local anchor must not
+                // mount; it stays Unattached with an Attach action.
+                current.error = undefined;
+                current.errorCode = 'unattached';
               } else {
                 current.error = openResult.error.message;
                 current.errorCode = undefined;
@@ -397,7 +418,8 @@ export class ProjectManagerStore {
       if (
         isUnmountedProject(store) &&
         store.errorCode === 'ssh-disconnected' &&
-        store.data.type === 'ssh'
+        store.data.type === 'ssh' &&
+        store.data.connectionId !== null
       ) {
         connectionIds.add(store.data.connectionId);
       }
@@ -463,6 +485,39 @@ export class ProjectManagerStore {
     if (inFlight) await inFlight.catch(() => {});
 
     this.mountProject(projectId).catch(() => {});
+  }
+
+  /**
+   * Attach an unattached (synced) project on this machine (ticket #136).
+   * On a direct attach the store is updated and the project is mounted; on a
+   * merge the synced row disappears (the local project wins) and the store
+   * entry is dropped.
+   */
+  async attachProject(
+    projectId: string,
+    params: AttachProjectParams
+  ): Promise<AttachProjectResult> {
+    const result = await rpc.projects.attachProject(params);
+    if (!result.success) return result;
+
+    runInAction(() => {
+      if (result.data.mergedInto !== null) {
+        // The synced row merged into an existing local project — one row left.
+        this.projects.delete(projectId);
+      } else {
+        const current = this.projects.get(projectId);
+        if (current && isUnmountedProject(current)) {
+          current.data = result.data.project;
+          current.error = undefined;
+          current.errorCode = undefined;
+        }
+      }
+    });
+
+    if (result.data.mergedInto === null) {
+      this.mountProject(projectId).catch(() => {});
+    }
+    return result;
   }
 
   removeUnregisteredProject(projectId: string): void {

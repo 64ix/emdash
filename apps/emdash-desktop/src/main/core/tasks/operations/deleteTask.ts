@@ -74,7 +74,7 @@ export async function deleteTask(
 
     if (!worktreeRemoved) {
       const projectRow = await getProjectById(projectId);
-      if (projectRow?.type === 'local') {
+      if (projectRow?.type === 'local' && projectRow.path !== null) {
         const removal = await removeOwnedLocalWorktreeDirectoryIfUnused(
           wsRow,
           projectRow.path,

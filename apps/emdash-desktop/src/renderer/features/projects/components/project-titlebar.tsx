@@ -143,10 +143,12 @@ const ProjectWorkspaceTitlebar = observer(function ProjectWorkspaceTitlebar({
       rightSlot={
         <div className="mr-2 flex items-center gap-2">
           <OpenInMenu
-            path={mounted.data.path}
+            path={mounted.data.path ?? ''}
             className="h-7 bg-background"
             isRemote={mounted.data.type === 'ssh'}
-            sshConnectionId={mounted.data.type === 'ssh' ? mounted.data.connectionId : undefined}
+            sshConnectionId={
+              mounted.data.type === 'ssh' ? (mounted.data.connectionId ?? undefined) : undefined
+            }
           />
         </div>
       }

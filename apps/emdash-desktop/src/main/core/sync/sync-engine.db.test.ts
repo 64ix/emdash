@@ -166,8 +166,13 @@ async function openDb(): Promise<FixtureDb> {
   return openFixture('empty');
 }
 
-function makeEngine(fixture: FixtureDb, relay: RelayTransport, deviceId = 'device-a'): SyncEngine {
-  return new SyncEngine({ sqlite: fixture.sqlite, transport: relay, deviceId });
+function makeEngine(
+  fixture: FixtureDb,
+  relay: RelayTransport,
+  deviceId = 'device-a',
+  options: Partial<ConstructorParameters<typeof SyncEngine>[0]> = {}
+): SyncEngine {
+  return new SyncEngine({ sqlite: fixture.sqlite, transport: relay, deviceId, ...options });
 }
 
 function expectOk(summary: { success: boolean }): void {
@@ -946,6 +951,168 @@ describe('SyncEngine', () => {
       expect(aAfter?.path).toBe('/local/a/repo');
       expect(aAfter?.repository_workspace_id).toBe('ws-a');
       expect(aAfter?.ssh_connection_id).toBe('ssh-a');
+    });
+
+    it('travels the remote path for SSH projects but keeps local paths machine-local', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      fixtureA.sqlite
+        .prepare('INSERT INTO ssh_connections (id, name, host, username) VALUES (?, ?, ?, ?)')
+        .run('ssh-a', 'prod', 'example.com', 'alice');
+      await seedProject(fixtureA, PROJECT_A, {
+        path: '/local/a/repo',
+        workspaceProvider: 'local',
+      });
+      const SSH_PROJECT = '22222222-2222-2222-2222-222222222222';
+      await fixtureA.db.insert(projects).values({
+        id: SSH_PROJECT,
+        name: 'Remote Repo',
+        path: '/remote/repo',
+        workspaceProvider: 'ssh',
+        sshConnectionId: 'ssh-a',
+      });
+      expectOk(await engineA.syncNow());
+
+      // The SSH project's payload carries its path; the local project's does not.
+      expect(bodyColumns(relay, 'projects', PROJECT_A)).not.toHaveProperty('path');
+      expect(bodyColumns(relay, 'projects', SSH_PROJECT)?.path).toBe('/remote/repo');
+
+      expectOk(await engineB.syncNow());
+      // Fresh import: the SSH remote path arrives (same host assumed), while
+      // the local project arrives unattached with a NULL path.
+      expect(rawGet(fixtureB, 'SELECT path FROM projects WHERE id = ?', SSH_PROJECT)?.path).toBe(
+        '/remote/repo'
+      );
+      expect(
+        rawGet(fixtureB, 'SELECT path FROM projects WHERE id = ?', PROJECT_A)?.path
+      ).toBeNull();
+
+      // B re-anchors its local project and A pushes a rename: the local path
+      // survives the LWW update (never in the payload).
+      fixtureB.sqlite
+        .prepare('UPDATE projects SET path = ? WHERE id = ?')
+        .run('/local/b/repo', PROJECT_A);
+      expectOk(await engineB.syncNow());
+      await fixtureA.db.update(projects).set({ name: 'Renamed' }).where(eq(projects.id, PROJECT_A));
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT path FROM projects WHERE id = ?', PROJECT_A)?.path).toBe(
+        '/local/b/repo'
+      );
+    });
+
+    it('nulls a traveling SSH path that would collide with the unique path index', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      const SSH_PROJECT = '33333333-3333-3333-3333-333333333333';
+      fixtureA.sqlite
+        .prepare('INSERT INTO ssh_connections (id, name, host, username) VALUES (?, ?, ?, ?)')
+        .run('ssh-a', 'prod', 'example.com', 'alice');
+      await fixtureA.db.insert(projects).values({
+        id: SSH_PROJECT,
+        name: 'Remote Repo',
+        path: '/remote/repo',
+        workspaceProvider: 'ssh',
+        sshConnectionId: 'ssh-a',
+      });
+
+      // B already has a project at the same path (unique index) — created
+      // locally before pairing, so it also syncs to the relay.
+      const LOCAL_HOLDER = '44444444-4444-4444-4444-444444444444';
+      await fixtureB.db.insert(projects).values({
+        id: LOCAL_HOLDER,
+        name: 'Local Holder',
+        path: '/remote/repo',
+        workspaceProvider: 'local',
+      });
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+
+      // The collision must not wedge the pull: the SSH project arrives with a
+      // NULL path (Unattached), the local holder keeps its row.
+      const imported = rawGet(fixtureB, 'SELECT path FROM projects WHERE id = ?', SSH_PROJECT);
+      expect(imported?.path).toBeNull();
+      expect(rawGet(fixtureB, 'SELECT path FROM projects WHERE id = ?', LOCAL_HOLDER)?.path).toBe(
+        '/remote/repo'
+      );
+    });
+
+    it('invokes the injected projectAttachHook for freshly imported projects, after their remotes are applied', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const hookCalls: Array<{ id: string; provider: string | null }> = [];
+      const remotesVisibleToHook: boolean[] = [];
+      const engineB = makeEngine(fixtureB, relay, 'device-b', {
+        projectAttachHook: async (id, provider) => {
+          hookCalls.push({ id, provider });
+          const remote = rawGet(
+            fixtureB,
+            'SELECT remote_url FROM project_remotes WHERE project_id = ?',
+            id
+          );
+          remotesVisibleToHook.push(remote !== undefined);
+        },
+      });
+
+      await seedProject(fixtureA, PROJECT_A, { workspaceProvider: 'local' });
+      await fixtureA.db.insert(projectRemotes).values({
+        projectId: PROJECT_A,
+        remoteName: 'origin',
+        remoteUrl: 'https://github.com/example/repo.git',
+      });
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+
+      expect(hookCalls).toEqual([{ id: PROJECT_A, provider: 'local' }]);
+      // The carried project_remotes are already in B's database when the hook runs.
+      expect(remotesVisibleToHook).toEqual([true]);
+    });
+
+    it('does not re-invoke the projectAttachHook for rows that already exist or for other tables', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const hookCalls: string[] = [];
+      const engineB = makeEngine(fixtureB, relay, 'device-b', {
+        projectAttachHook: async (id) => {
+          hookCalls.push(id);
+        },
+      });
+
+      await seedProject(fixtureA, PROJECT_A, { workspaceProvider: 'local' });
+      await seedTask(fixtureA, TASK_1, PROJECT_A);
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(hookCalls).toEqual([PROJECT_A]);
+
+      // B edits the imported row locally (re-stamp), then A pushes an update:
+      // the row exists on B, so the hook must not fire again. Task patches
+      // never fire it either.
+      await fixtureB.db
+        .update(projects)
+        .set({ name: 'Local tweak' })
+        .where(eq(projects.id, PROJECT_A));
+      expectOk(await engineB.syncNow());
+      await fixtureA.db
+        .update(projects)
+        .set({ name: 'Remote rename' })
+        .where(eq(projects.id, PROJECT_A));
+      await fixtureA.db.update(tasks).set({ status: 'done' }).where(eq(tasks.id, TASK_1));
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+
+      expect(hookCalls).toEqual([PROJECT_A]);
     });
 
     it('nulls assigned_pr_url on import when the PR row is absent, preserves it when present', async () => {

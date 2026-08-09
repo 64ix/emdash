@@ -3,6 +3,7 @@ import type { LocalProject, SshProject } from '@shared/projects';
 import type { GitRepositoryStore } from './git-repository-store';
 import type { PrSyncStore } from './pr-sync-store';
 import {
+  isUnattachedProject,
   isUnmountedProject,
   isUnregisteredProject,
   type MountedProject,
@@ -30,6 +31,7 @@ export type ProjectViewKind =
   | 'mount_error'
   | 'path_not_found'
   | 'ssh_disconnected'
+  | 'unattached'
   | 'idle_unmounted'
   | 'ready';
 
@@ -37,6 +39,9 @@ export function projectViewKind(store: ProjectStore | undefined): ProjectViewKin
   if (!store) return 'missing';
   if (isUnregisteredProject(store)) return 'creating';
   if (isUnmountedProject(store)) {
+    // Unattached (synced project with no local anchor) is a first-class state,
+    // distinct from path-not-found (path set but directory deleted).
+    if (isUnattachedProject(store)) return 'unattached';
     if (store.phase === 'opening') return 'bootstrapping';
     if (store.phase === 'error') {
       if (store.errorCode === 'path-not-found') return 'path_not_found';
@@ -70,7 +75,7 @@ export function mountedProjectData(
 /** Returns the SSH connection id for a mounted SSH project, otherwise undefined. */
 export function getProjectSshConnectionId(projectId: string): string | undefined {
   const data = mountedProjectData(getProjectStore(projectId));
-  return data?.type === 'ssh' ? data.connectionId : undefined;
+  return data?.type === 'ssh' ? (data.connectionId ?? undefined) : undefined;
 }
 
 /** Returns the display name from any project store variant. */

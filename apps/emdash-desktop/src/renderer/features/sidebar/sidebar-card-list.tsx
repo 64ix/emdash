@@ -25,6 +25,7 @@ import {
   CableIcon,
   ChevronRight,
   FolderClosed,
+  Link2,
   Loader2,
   Plus,
   RotateCcw,
@@ -40,6 +41,7 @@ import { isBoardRankCandidate } from '@renderer/features/board/board-columns';
 import { sortColumn, type ColumnId } from '@renderer/features/board/board-ordering';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import {
+  isUnattachedProject,
   isUnmountedProject,
   isUnregisteredProject,
   type ProjectStore,
@@ -525,6 +527,7 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
   const { params: boardParams } = useParams('board');
   const showCreateTaskModal = useShowModal('taskModal');
   const showChangeConnectionModal = useShowModal('changeProjectConnectionModal');
+  const showAttachModal = useShowModal('attachProjectModal');
   const confirmDeleteProject = useConfirmDeleteProject();
 
   const project = getProjectStore(projectId);
@@ -641,14 +644,24 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
               {isSshProject ? (
                 <ConnectionStatusDot state={displayedSshConnectionState} />
               ) : (
-                projectViewKind(project) === 'path_not_found' && (
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <TriangleAlert className="size-3.5 shrink-0 text-foreground-destructive" />
-                    </TooltipTrigger>
-                    <TooltipContent>Project not found at path</TooltipContent>
-                  </Tooltip>
-                )
+                <>
+                  {isUnattachedProject(project) && (
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <Link2 className="size-3.5 shrink-0 text-foreground-passive" />
+                      </TooltipTrigger>
+                      <TooltipContent>Not attached on this machine</TooltipContent>
+                    </Tooltip>
+                  )}
+                  {projectViewKind(project) === 'path_not_found' && (
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <TriangleAlert className="size-3.5 shrink-0 text-foreground-destructive" />
+                      </TooltipTrigger>
+                      <TooltipContent>Project not found at path</TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
               )}
             </SidebarMenuAction>
             {isUnregisteredProject(project) ? (
@@ -667,30 +680,52 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
                     {card.attentionCount}
                   </Badge>
                 )}
-                <Tooltip>
-                  <TooltipTrigger
-                    className="h-6"
-                    render={
-                      <SidebarItemMiniButton
-                        type="button"
-                        aria-label={`New task for ${projectLabel}`}
-                        className="opacity-0 transition-opacity duration-150 group-hover/row:opacity-100"
-                        onPointerEnter={() => prefetchRepository()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          showCreateTaskModal({ projectId });
-                        }}
-                        disabled={project.state === 'unregistered'}
-                      >
-                        <Plus className="h-4 w-4" />
-                      </SidebarItemMiniButton>
-                    }
-                  />
-                  <TooltipContent>
-                    New Task
-                    <BoundShortcut settingsKey="newTask" variant="keycaps" />
-                  </TooltipContent>
-                </Tooltip>
+                {isUnattachedProject(project) ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      className="h-6"
+                      render={
+                        <SidebarItemMiniButton
+                          type="button"
+                          aria-label={`Attach ${projectLabel}`}
+                          className="text-foreground-passive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            showAttachModal({ projectId });
+                          }}
+                        >
+                          <Link2 className="h-4 w-4" />
+                        </SidebarItemMiniButton>
+                      }
+                    />
+                    <TooltipContent>Attach Project</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger
+                      className="h-6"
+                      render={
+                        <SidebarItemMiniButton
+                          type="button"
+                          aria-label={`New task for ${projectLabel}`}
+                          className="opacity-0 transition-opacity duration-150 group-hover/row:opacity-100"
+                          onPointerEnter={() => prefetchRepository()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            showCreateTaskModal({ projectId });
+                          }}
+                          disabled={project.state === 'unregistered'}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </SidebarItemMiniButton>
+                      }
+                    />
+                    <TooltipContent>
+                      New Task
+                      <BoundShortcut settingsKey="newTask" variant="keycaps" />
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 <SidebarItemMiniButton
                   type="button"
                   aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${projectLabel}`}

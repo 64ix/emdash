@@ -75,7 +75,7 @@ export async function createSshProject(
     type: 'ssh' as const,
     id: row.id,
     name: row.name,
-    path: row.path,
+    path: gitInfo.rootPath,
     connectionId: params.connectionId,
     baseRef: row.baseRef ?? gitInfo.baseRef,
     repositoryWorkspaceId: null as string | null,

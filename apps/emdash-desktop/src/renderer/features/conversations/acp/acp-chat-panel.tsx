@@ -568,7 +568,7 @@ const ComposerForStore = observer(function ComposerForStore({
   const issueProviderContext = useObserver(() => {
     const mounted = asMounted(getProjectStore(store.projectId));
     return {
-      projectPath: mounted?.data.path,
+      projectPath: mounted?.data.path ?? undefined,
       repositoryUrl:
         mounted?.gitRepository.issueRepositoryUrl ??
         mounted?.gitRepository.canonicalRepositoryUrl ??

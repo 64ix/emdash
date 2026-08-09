@@ -62,7 +62,7 @@ export async function createLocalProject(
     type: 'local' as const,
     id: row.id,
     name: row.name,
-    path: row.path,
+    path: gitInfo.rootPath,
     baseRef: row.baseRef ?? gitInfo.baseRef,
     repositoryWorkspaceId: null as string | null,
     createdAt: row.createdAt,

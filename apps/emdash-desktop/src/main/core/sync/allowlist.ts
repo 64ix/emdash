@@ -9,6 +9,7 @@
  * ORM's `toDriver` (round-tripping a future-version blob through the latest
  * version's serializer destroys it; callers would read null).
  */
+import type BetterSqlite3 from 'better-sqlite3';
 
 export type SyncMode = 'continuous' | 'initial-only';
 
@@ -28,20 +29,25 @@ export interface SyncTableConfig {
   isPortablePk?: (pk: string) => boolean;
   /**
    * Sanitize the outgoing columns (strip machine-specific fields from nested
-   * JSON blobs) before the body is encoded.
+   * JSON blobs) before the body is encoded. The third argument is the raw row
+   * the columns were read from, for row-dependent decisions.
    */
   pushTransform?: (
     pk: string,
-    columns: Record<string, string | null>
+    columns: Record<string, string | null>,
+    row: Record<string, unknown>
   ) => Record<string, string | null>;
   /**
    * Rehydrate machine-specific state at import using the pre-import local row
    * (raw SQL values keyed by column name, `null` when the row does not exist).
+   * The raw connection is passed so the transform can consult other rows
+   * (e.g. unique-index conflicts) — never for writes.
    */
   importTransform?: (
     pk: string,
     columns: Record<string, string | null>,
-    localRow: Record<string, unknown> | null
+    localRow: Record<string, unknown> | null,
+    sqlite: BetterSqlite3.Database
   ) => Record<string, string | null>;
   /** Columns written on INSERT only (never on conflict-update). */
   importInsertColumns?: Record<string, string | null>;
@@ -86,6 +92,7 @@ export const projectsTable: SyncTableConfig = {
     'id',
     'name',
     'workspace_provider',
+    'path',
     'base_ref',
     'ssh_connection_id',
     'repository_workspace_id',
@@ -93,14 +100,38 @@ export const projectsTable: SyncTableConfig = {
     'updated_at',
   ],
   rawJsonColumns: [],
-  // `path` is never in the payload (machine-local), so the local path is
-  // preserved on update and NULL on fresh import. `repository_workspace_id`
-  // and `ssh_connection_id` are machine-local references: carried in the
-  // payload for observability but never applied at import — a fresh import
-  // gets NULL (the receiving machine regenerates its own workspace/SSH
-  // reference), and a local row keeps its own. A dangling `ssh_connection_id`
-  // is nulled on fresh import (out-of-scope table), else the FK would abort
-  // the apply batch.
+  // The remote `path` travels for SSH projects (same host assumed, ticket
+  // #136) but is machine-local for local projects: the push transform strips
+  // it from local rows, so a fresh import gets a NULL path and keeps the
+  // local path on update (spec #130). `repository_workspace_id` and
+  // `ssh_connection_id` are machine-local references: carried in the payload
+  // for observability but never applied at import — a fresh import gets NULL
+  // (the receiving machine regenerates its own workspace/SSH reference), and
+  // a local row keeps its own. A dangling `ssh_connection_id` is nulled on
+  // fresh import (out-of-scope table), else the FK would abort the apply
+  // batch.
+  pushTransform: (pk, columns, row) => {
+    if (row.workspace_provider === 'local') {
+      const { path: _path, ...rest } = columns;
+      return rest;
+    }
+    return columns;
+  },
+  // The remote path of an SSH project may collide with the unique `path`
+  // index when this machine already has a project at that path (ticket #136).
+  // Nulling the path keeps the row importable — it arrives Unattached and the
+  // user re-attaches it with a connection (the path-index dedupe happens at
+  // attach, where the conflict can be resolved/merged); aborting the batch
+  // instead would wedge the whole pull.
+  importTransform: (pk, columns, _localRow, sqlite) => {
+    if (columns.path === null || columns.path === undefined) return columns;
+    const holder = sqlite
+      .prepare('SELECT 1 AS one FROM projects WHERE `path` = ? AND `id` != ? LIMIT 1')
+      .get(columns.path, pk);
+    if (holder === undefined) return columns;
+    const { path: _path, ...rest } = columns;
+    return rest;
+  },
   importPreserveLocalColumns: ['repository_workspace_id', 'ssh_connection_id'],
   importNullIfMissingFk: [
     { column: 'ssh_connection_id', table: 'ssh_connections', columnRef: 'id' },

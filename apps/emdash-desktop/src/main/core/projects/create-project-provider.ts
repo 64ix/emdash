@@ -21,7 +21,7 @@ import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
 import { gitRepoUpdateChannel } from '@shared/core/git/events';
 import { safePathSegment } from '@shared/path-name';
-import type { LocalProject, SshProject } from '@shared/projects';
+import type { AttachedLocalProject, AttachedProject, AttachedSshProject } from '@shared/projects';
 import { ensureEmdashGitExcludedSafe } from './ensure-emdash-excluded';
 import { ProjectProvider, type ProjectProviderTransport } from './project-provider';
 import type { ProjectSettingsProvider } from './settings/provider';
@@ -32,13 +32,13 @@ import { WorktreeService } from './worktrees/worktree-service';
 export type CreateProviderError = { message: string };
 
 export async function createProvider(
-  project: LocalProject | SshProject
+  project: AttachedProject
 ): Promise<Result<ProjectProvider, CreateProviderError>> {
   return project.type === 'ssh' ? createSshProvider(project) : createLocalProvider(project);
 }
 
 async function createLocalProvider(
-  project: LocalProject
+  project: AttachedLocalProject
 ): Promise<Result<ProjectProvider, CreateProviderError>> {
   const ctx = new LocalExecutionContext({ root: project.path });
   const projectMachine: MachineRef = { kind: 'local' };
@@ -104,7 +104,7 @@ async function createLocalProvider(
 }
 
 async function createSshProvider(
-  project: SshProject
+  project: AttachedSshProject
 ): Promise<Result<ProjectProvider, CreateProviderError>> {
   try {
     const proxy = await sshConnectionManager.connect(project.connectionId);

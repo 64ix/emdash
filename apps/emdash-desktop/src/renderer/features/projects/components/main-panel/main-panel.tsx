@@ -1,8 +1,10 @@
-import { Loader2, TriangleAlert, Unplug } from 'lucide-react';
+import { Link2, Loader2, TriangleAlert, Unplug } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import { useParams } from '@renderer/lib/layout/navigation-provider';
+import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import { appState } from '@renderer/lib/stores/app-state';
+import { Button } from '@renderer/lib/ui/button';
 import { isUnregisteredProject } from '../../stores/project';
 import {
   getProjectManagerStore,
@@ -21,6 +23,7 @@ export const ProjectMainPanel = observer(function ProjectMainPanel() {
   const store = getProjectStore(projectId);
   const kind = projectViewKind(store);
   const displayName = projectDisplayName(store) ?? 'this project';
+  const showAttachModal = useShowModal('attachProjectModal');
 
   if (kind === 'creating' && store && isUnregisteredProject(store)) {
     return <PendingProjectStatus project={store} />;
@@ -28,6 +31,16 @@ export const ProjectMainPanel = observer(function ProjectMainPanel() {
 
   if (kind === 'bootstrapping') {
     return <ProjectBootstrappingPanel />;
+  }
+
+  if (kind === 'unattached') {
+    return (
+      <UnattachedProjectPanel
+        projectId={projectId}
+        title={displayName}
+        onAttach={() => showAttachModal({ projectId })}
+      />
+    );
   }
 
   if (kind === 'path_not_found') {
@@ -73,6 +86,45 @@ function ProjectBootstrapErrorPanel({ message }: { message: string }) {
           Failed to set up project
         </p>
         <p className="font-sans text-xs text-foreground-passive">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function UnattachedProjectPanel({
+  projectId,
+  title,
+  onAttach,
+}: {
+  projectId: string;
+  title: string;
+  onAttach: () => void;
+}) {
+  const confirmDeleteProject = useConfirmDeleteProject();
+
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center p-8">
+      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+        <Link2 className="h-6 w-6 text-foreground-passive" />
+        <p className="font-sans text-sm font-medium text-foreground">Project not attached</p>
+        <p className="text-xs text-foreground-passive">
+          <span className="font-medium">{title}</span> was synced from another machine and has no
+          local directory (or SSH connection) here yet. Attach it to start working on it.
+        </p>
+        <div className="mt-2 flex items-center gap-4">
+          <Button size="sm" onClick={onAttach}>
+            Attach Project
+          </Button>
+          <button
+            type="button"
+            className="text-xs text-foreground-destructive underline underline-offset-2 transition-colors hover:text-foreground-destructive/80"
+            onClick={() => {
+              void confirmDeleteProject({ projectId, projectLabel: title });
+            }}
+          >
+            Remove Project
+          </button>
+        </div>
       </div>
     </div>
   );

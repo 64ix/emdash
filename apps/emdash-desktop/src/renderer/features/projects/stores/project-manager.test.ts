@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalProject, SshProject } from '@shared/projects';
-import { createUnmountedProject, isUnregisteredProject } from './project';
+import {
+  createUnmountedProject,
+  isMountedProject,
+  isUnmountedProject,
+  isUnregisteredProject,
+} from './project';
 import { ProjectManagerStore } from './project-manager';
 
 const mocks = vi.hoisted(() => ({
+  attachProject: vi.fn(),
   cloneRepository: vi.fn(),
   createGithubRepository: vi.fn(),
   createProject: vi.fn(),
@@ -34,6 +40,7 @@ vi.mock('@renderer/lib/ipc', () => ({
       initializeRepository: mocks.initializeRepository,
     },
     projects: {
+      attachProject: mocks.attachProject,
       createProject: mocks.createProject,
       getProjects: vi.fn(async () => []),
       inspectProjectPath: mocks.inspectProjectPath,
@@ -696,5 +703,139 @@ describe('ProjectManagerStore project creation', () => {
     }
 
     expect(mocks.deleteGithubRepository).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProjectManagerStore unattached projects (spec #130, ticket #136)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.eventOn.mockReturnValue(vi.fn());
+    mocks.openProject.mockResolvedValue({
+      success: true,
+      data: { repositoryWorkspaceId: 'ws-1' },
+    });
+    mocks.viewStateCacheGet.mockResolvedValue(undefined);
+  });
+
+  it('loads unattached projects without mounting them, distinct from attached ones', async () => {
+    const rpc = await import('@renderer/lib/ipc');
+    vi.spyOn(rpc.rpc.projects, 'getProjects').mockResolvedValueOnce([
+      localProject({ id: 'unattached-local', path: null }),
+      sshProject({ id: 'unattached-ssh', connectionId: null }),
+      localProject({ id: 'attached', path: '/attached' }),
+    ]);
+    const store = new ProjectManagerStore();
+    await store.load();
+
+    const unattachedLocal = store.projects.get('unattached-local');
+    expect(unattachedLocal && isUnmountedProject(unattachedLocal)).toBe(true);
+    expect(unattachedLocal?.errorCode).toBe('unattached');
+    const unattachedSsh = store.projects.get('unattached-ssh');
+    expect(unattachedSsh?.errorCode).toBe('unattached');
+    const attached = store.projects.get('attached');
+    expect(attached && isMountedProject(attached)).toBe(true);
+
+    // openProject is only attempted for attached projects.
+    expect(mocks.openProject).toHaveBeenCalledTimes(1);
+    expect(mocks.openProject).toHaveBeenCalledWith('attached');
+  });
+
+  it('does not mount an unattached project on request', async () => {
+    const rpc = await import('@renderer/lib/ipc');
+    vi.spyOn(rpc.rpc.projects, 'getProjects').mockResolvedValueOnce([
+      localProject({ id: 'unattached-local', path: null }),
+    ]);
+    const store = new ProjectManagerStore();
+    await store.load();
+
+    await store.mountProject('unattached-local');
+    expect(mocks.openProject).not.toHaveBeenCalled();
+    const storeEntry = store.projects.get('unattached-local');
+    expect(storeEntry && isUnmountedProject(storeEntry)).toBe(true);
+  });
+
+  it('attaches directly: updates the store entry and mounts the project', async () => {
+    const rpc = await import('@renderer/lib/ipc');
+    vi.spyOn(rpc.rpc.projects, 'getProjects').mockResolvedValueOnce([
+      localProject({ id: 'synced', path: null }),
+    ]);
+    const store = new ProjectManagerStore();
+    await store.load();
+
+    mocks.attachProject.mockResolvedValueOnce({
+      success: true,
+      data: { project: localProject({ id: 'synced', path: '/new/path' }), mergedInto: null },
+    });
+
+    const result = await store.attachProject('synced', {
+      type: 'local',
+      projectId: 'synced',
+      path: '/new/path',
+    });
+
+    expect(result.success).toBe(true);
+    const entry = store.projects.get('synced');
+    expect(entry?.data).toMatchObject({ id: 'synced', path: '/new/path' });
+    expect(entry?.errorCode).toBeUndefined();
+    expect(mocks.openProject).toHaveBeenCalledWith('synced');
+  });
+
+  it('attaches with merge: drops the synced store entry (local row wins)', async () => {
+    const rpc = await import('@renderer/lib/ipc');
+    vi.spyOn(rpc.rpc.projects, 'getProjects').mockResolvedValueOnce([
+      localProject({ id: 'synced', path: null }),
+      localProject({ id: 'local-winner', path: '/repo' }),
+    ]);
+    const store = new ProjectManagerStore();
+    await store.load();
+
+    mocks.attachProject.mockResolvedValueOnce({
+      success: true,
+      data: {
+        project: localProject({ id: 'local-winner', path: '/repo' }),
+        mergedInto: 'local-winner',
+      },
+    });
+
+    const result = await store.attachProject('synced', {
+      type: 'local',
+      projectId: 'synced',
+      path: '/repo',
+    });
+
+    expect(result.success).toBe(true);
+    expect(store.projects.has('synced')).toBe(false);
+    expect(store.projects.get('local-winner')).toBeDefined();
+    expect(mocks.openProject).not.toHaveBeenCalledWith('synced');
+  });
+
+  it('surfaces attach failures without touching the store', async () => {
+    const rpc = await import('@renderer/lib/ipc');
+    vi.spyOn(rpc.rpc.projects, 'getProjects').mockResolvedValueOnce([
+      localProject({ id: 'synced', path: null }),
+    ]);
+    const store = new ProjectManagerStore();
+    await store.load();
+
+    mocks.attachProject.mockResolvedValueOnce({
+      success: false,
+      error: { type: 'remote-mismatch', path: '/other' },
+    });
+
+    const result = await store.attachProject('synced', {
+      type: 'local',
+      projectId: 'synced',
+      path: '/other',
+    });
+
+    expect(result.success).toBe(false);
+    const entry = store.projects.get('synced');
+    expect(entry && isUnmountedProject(entry)).toBe(true);
+    expect(entry?.errorCode).toBe('unattached');
+    expect(mocks.openProject).not.toHaveBeenCalled();
   });
 });
