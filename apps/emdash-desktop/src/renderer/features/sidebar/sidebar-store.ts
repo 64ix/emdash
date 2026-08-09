@@ -228,8 +228,15 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
    * The row-model builder (stage-group-row-model.ts) emits the project row
    * plus the grouped content; it never writes stages or ranks —
    * read-only ordering only (ADR 0006).
+   *
+   * `ignoreGroupCollapse` renders every task row even for collapsed Stage
+   * Groups — only used by `headerFoldTaskIdsForProject` to derive what the
+   * stream omits; the rendered stream never uses it.
    */
-  private groupedRowsForProject(projectId: string): SidebarRow[] {
+  private groupedRowsForProject(
+    projectId: string,
+    opts?: { ignoreGroupCollapse?: boolean }
+  ): SidebarRow[] {
     const mounted = this.projectManager.projects.get(projectId)?.mountedProject;
     if (!mounted) return [];
     const tasks = Array.from(mounted.taskManager.tasks.values()).filter(
@@ -259,7 +266,9 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
     return buildStageGroupedRows({
       projectId,
       tasks: tasks.map((t) => t.data),
-      collapsedStages: new Set(this.collapsedStageGroupIdsByProject[projectId] ?? []),
+      collapsedStages: opts?.ignoreGroupCollapse
+        ? new Set()
+        : new Set(this.collapsedStageGroupIdsByProject[projectId] ?? []),
       awaitingInputIds,
       isVisible: (task) => !hiddenIds.has(task.id) && !fadedIds.has(task.id),
     });
@@ -304,6 +313,30 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
     return this.groupedRowsForProject(projectId)
       .filter((row): row is Extract<SidebarRow, { kind: 'task' }> => row.kind === 'task')
       .map((row) => row.taskId);
+  }
+
+  /**
+   * The task ids a project card's header aggregates fold in addition to its
+   * own stream rows (ticket #121 review — "the header aggregates over all
+   * project refs, regardless of expand state"): exactly the tasks the row
+   * stream omits for this project — the tasks of collapsed Stage Groups of
+   * expanded projects, and every displayable task of a collapsed project
+   * (whose only stream row is the `project` row). Archived, pinned,
+   * automation, hidden and Shipped-faded tasks stay excluded, precisely like
+   * the stream, so the header count and signal match what the board shows.
+   * Never used for navigation — `visibleTaskIdsForProject` remains the
+   * navigation contract — only the card-header aggregates.
+   */
+  headerFoldTaskIdsForProject(projectId: string): string[] {
+    if (!this.projectManager.projects.get(projectId)?.mountedProject) return [];
+    const collapsedStages = this.collapsedStageGroupIdsByProject[projectId] ?? [];
+    if (collapsedStages.length === 0 && this.expandedProjectIds.has(projectId)) return [];
+    const all = this.groupedRowsForProject(projectId, { ignoreGroupCollapse: true })
+      .filter((row): row is Extract<SidebarRow, { kind: 'task' }> => row.kind === 'task')
+      .map((row) => row.taskId);
+    if (!this.expandedProjectIds.has(projectId)) return all;
+    const visible = new Set(this.visibleTaskIdsForProject(projectId));
+    return all.filter((id) => !visible.has(id));
   }
 
   get isEmpty(): boolean {

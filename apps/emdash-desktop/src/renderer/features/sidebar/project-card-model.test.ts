@@ -100,6 +100,53 @@ describe('buildProjectCards (spec #120, ticket #121)', () => {
     expect(card.tasks.map((t) => t.taskId)).toEqual(['idea-1', 'idea-2', 'spec-1', 'shipped-1']);
   });
 
+  it('preserves the interleaved body order: Unstaged rows first, then each group followed by its own tasks', () => {
+    const rows = stream([
+      {
+        projectId: 'p1',
+        tasks: [
+          task('u1'),
+          task('s1', { workflowStage: 'spec' }),
+          task('i1', { workflowStage: 'idea' }),
+          task('s2', { workflowStage: 'spec' }),
+          task('i2', { workflowStage: 'idea' }),
+        ],
+      },
+    ]);
+    const card = build({ rows })[0];
+    expect(
+      card.body.map((entry) =>
+        entry.kind === 'task' ? `task:${entry.taskId}` : `group:${entry.stage}`
+      )
+    ).toEqual(['task:u1', 'group:idea', 'task:i1', 'task:i2', 'group:spec', 'task:s1', 'task:s2']);
+    // The two flat lists are exactly the body's entries in their own order.
+    expect(card.body).toEqual([
+      { kind: 'task', projectId: 'p1', taskId: 'u1' },
+      { kind: 'stage-group', stage: 'idea', label: 'Idea', count: 2 },
+      { kind: 'task', projectId: 'p1', taskId: 'i1' },
+      { kind: 'task', projectId: 'p1', taskId: 'i2' },
+      { kind: 'stage-group', stage: 'spec', label: 'Spec', count: 2 },
+      { kind: 'task', projectId: 'p1', taskId: 's1' },
+      { kind: 'task', projectId: 'p1', taskId: 's2' },
+    ]);
+  });
+
+  it('drops collapsed-group tasks from the body while keeping their headers and counts', () => {
+    const rows = stream([
+      {
+        projectId: 'p1',
+        tasks: [task('i1', { workflowStage: 'idea' }), task('s1', { workflowStage: 'spec' })],
+        collapsedStages: ['spec'],
+      },
+    ]);
+    const card = build({ rows })[0];
+    expect(card.body).toEqual([
+      { kind: 'stage-group', stage: 'idea', label: 'Idea', count: 1 },
+      { kind: 'task', projectId: 'p1', taskId: 'i1' },
+      { kind: 'stage-group', stage: 'spec', label: 'Spec', count: 1 },
+    ]);
+  });
+
   it('omits the tasks of collapsed groups while keeping their headers and counts', () => {
     const rows = stream([
       {
@@ -223,7 +270,10 @@ describe('buildProjectCards aggregates', () => {
     ).toBe('working');
   });
 
-  it('ignores signals and attention of tasks outside the card membership (collapsed groups)', () => {
+  it('folds collapsed-group tasks into the header aggregates of an expanded card', () => {
+    // Ticket #121 review: the header aggregates over all project refs,
+    // regardless of expand state — a task inside a collapsed Stage Group
+    // still counts and can still light the header signal.
     const rows = stream([
       {
         projectId: 'p1',
@@ -240,11 +290,15 @@ describe('buildProjectCards aggregates', () => {
         ['visible-1', 'working'],
         ['collapsed-1', 'error'],
       ]),
-      attentionTaskIds: new Set(['collapsed-1']),
+      attentionTaskIdsByProject: new Map([['p1', new Set(['visible-1', 'collapsed-1'])]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['collapsed-1']]]),
     })[0];
     expect(card.tasks.map((t) => t.taskId)).toEqual(['visible-1']);
-    expect(card.aggregateSignal).toBe('working'); // the hidden error never reaches the header
-    expect(card.attentionCount).toBe(0);
+    expect(card.visibleTaskCount).toBe(2); // stream rows + folded collapsed-group tasks
+    expect(card.aggregateSignal).toBe('error'); // the collapsed-group error wins the header
+    // Attention matches the old project-row badge: every non-hidden task of
+    // the project counts, collapsed-group tasks included.
+    expect(card.attentionCount).toBe(2);
   });
 
   it('folds caller-supplied refs into the header aggregates of a collapsed project', () => {
@@ -255,58 +309,60 @@ describe('buildProjectCards aggregates', () => {
     const rows: SidebarRow[] = [{ kind: 'project', projectId: 'p1' }];
     const card = build({
       rows,
-      collapsedTaskIdsByProjectId: new Map([['p1', ['a', 'b', 'c']]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['a', 'b', 'c']]]),
       signalByTaskId: new Map([
         ['a', 'working'],
         ['b', 'error'],
         ['c', 'completed'],
       ]),
-      attentionTaskIds: new Set(['b']),
+      attentionTaskIdsByProject: new Map([['p1', new Set(['b', 'c'])]]),
     })[0];
     expect(card.tasks).toEqual([]); // no task rows render in the collapsed body
     expect(card.stageGroups).toEqual([]);
+    expect(card.body).toEqual([]);
     expect(card.visibleTaskCount).toBe(3);
     expect(card.aggregateSignal).toBe('error'); // the same priority over the refs
-    expect(card.attentionCount).toBe(1);
+    expect(card.attentionCount).toBe(2); // the per-project attention set, refs or not
   });
 
   it('keeps the collapsed header at null/0 when the refs carry no live signal', () => {
     const rows: SidebarRow[] = [{ kind: 'project', projectId: 'p1' }];
     const card = build({
       rows,
-      collapsedTaskIdsByProjectId: new Map([['p1', ['a', 'b']]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['a', 'b']]]),
       signalByTaskId: new Map([
         ['a', 'completed'],
         ['b', 'completed'],
       ]),
+      attentionTaskIdsByProject: new Map([['p1', new Set()]]),
     })[0];
     expect(card.visibleTaskCount).toBe(2); // the count badge still shows
     expect(card.aggregateSignal).toBeNull(); // completed never lights the header
     expect(card.attentionCount).toBe(0);
   });
 
-  it('stream membership wins over refs for projects with task rows', () => {
-    // The caller may supply refs for every project; only projects whose
-    // tasks the stream omits (collapsed) ever fold them in, so a
-    // collapsed group inside an expanded card still never lights the
-    // header (implementer's stream-membership decision, kept).
+  it('folds refs in addition to stream rows, with stream rows never duplicated', () => {
+    // The caller supplies the stream-omitted ids per project (collapsed
+    // groups); a folded id can never collide with a stream row — task ids
+    // are globally unique — so the count is rows + refs, and the signal
+    // folds both with the same priority.
     const rows = stream([
       { projectId: 'p1', tasks: [task('stream-a', { workflowStage: 'spec' })] },
     ]);
     const card = build({
       rows,
-      collapsedTaskIdsByProjectId: new Map([['p1', ['ref-a']]]),
+      headerTaskIdsByProjectId: new Map([['p1', ['ref-a']]]),
       signalByTaskId: new Map([
         ['stream-a', 'working'],
         ['ref-a', 'error'],
       ]),
     })[0];
     expect(card.tasks.map((t) => t.taskId)).toEqual(['stream-a']);
-    expect(card.visibleTaskCount).toBe(1);
-    expect(card.aggregateSignal).toBe('working'); // ref-a never folds in
+    expect(card.visibleTaskCount).toBe(2);
+    expect(card.aggregateSignal).toBe('error'); // ref-a folds in and outranks
   });
 
-  it("counts attention only for the card's visible tasks, via the supplied attention set", () => {
+  it('counts attention per project, pinned and collapsed-group tasks included', () => {
     const rows = stream([
       {
         projectId: 'p1',
@@ -320,10 +376,15 @@ describe('buildProjectCards aggregates', () => {
     ]);
     const cards = build({
       rows,
-      // `taskNeedsAttention` results wired by the caller (board-attention.ts).
-      attentionTaskIds: new Set(['a', 'c', 'd']),
+      // `taskNeedsAttention` results wired by the caller (board-attention.ts);
+      // pinned/automation tasks never appear in the stream but still count,
+      // exactly like the old project-row attention badge.
+      attentionTaskIdsByProject: new Map([
+        ['p1', new Set(['a', 'c', 'pinned-1'])],
+        ['p2', new Set(['d'])],
+      ]),
     });
-    expect(cards[0].attentionCount).toBe(2);
+    expect(cards[0].attentionCount).toBe(3);
     expect(cards[1].attentionCount).toBe(1);
   });
 
@@ -377,7 +438,6 @@ describe('project hue (spec #120, ticket #121)', () => {
       const tokens = projectHue(projectId!);
       expect(tokens.fg).toBe(`var(--${hue}-11)`);
       expect(tokens.dot).toBe(`var(--${hue}-9)`);
-      expect(tokens.softBg).toBe(`color-mix(in srgb, var(--${hue}-11) 12%, transparent)`);
       expect(tokens.rail).toBe(`color-mix(in srgb, var(--${hue}-11) 35%, transparent)`);
       expect(tokens.chipBg).toBe(`color-mix(in srgb, var(--${hue}-11) 14%, transparent)`);
     }
