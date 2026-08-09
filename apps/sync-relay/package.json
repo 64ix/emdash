@@ -1,0 +1,31 @@
+{
+  "name": "@emdash/sync-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-operated Cloudflare Worker + D1 sync relay: private spaces, device pairing, and cursor-based sync for multi-machine emdash",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "scripts": {
+    "build": "tsdown",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "start": "wrangler dev",
+    "test": "vitest run",
+    "lint": "sh -c 'root=$(cd ../.. && pwd); cd \"$root/apps/emdash-desktop\" && pnpm exec oxlint --config .oxlintrc.json \"$root/apps/sync-relay\"'",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "typecheck": "tsgo --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@typescript/native-preview": "7.0.0-dev.20260609.1",
+    "tsdown": "^0.22.2",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.120.0"
+  },
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.28.0"
+  }
+}

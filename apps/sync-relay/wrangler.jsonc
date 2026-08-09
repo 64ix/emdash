@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "emdash-sync-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "d1_databases": [
+    {
+      "binding": "SYNC_RELAY_DB",
+      "database_name": "emdash-sync-relay",
+      "database_id": "REPLACE-ME",
+    },
+  ],
+}

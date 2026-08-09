@@ -1,0 +1,5 @@
+# Local wrangler state (miniflare persistence, caches)
+.wrangler/
+
+# Local D1/queue overrides and secrets (never committed)
+.dev.vars
