@@ -369,7 +369,7 @@ describe('ProjectManagerStore project creation', () => {
     const projectStore = store.projects.get(project.id);
     if (!projectStore) throw new Error('Expected project store');
     projectStore.phase = 'error';
-    projectStore.error = project.connectionId;
+    projectStore.error = project.connectionId ?? undefined;
     projectStore.errorCode = 'ssh-disconnected';
 
     store.retryDisconnectedSshProjects({ force: true });
@@ -386,7 +386,7 @@ describe('ProjectManagerStore project creation', () => {
     const projectStore = store.projects.get(project.id);
     if (!projectStore) throw new Error('Expected project store');
     projectStore.phase = 'error';
-    projectStore.error = project.connectionId;
+    projectStore.error = project.connectionId ?? undefined;
     projectStore.errorCode = 'ssh-disconnected';
 
     const handler = mocks.eventOn.mock.calls[0]?.[1];
@@ -404,7 +404,7 @@ describe('ProjectManagerStore project creation', () => {
     const projectStore = store.projects.get(project.id);
     if (!projectStore) throw new Error('Expected project store');
     projectStore.phase = 'error';
-    projectStore.error = project.connectionId;
+    projectStore.error = project.connectionId ?? undefined;
     projectStore.errorCode = 'ssh-disconnected';
 
     store.retryDisconnectedSshProjects({ force: true });
