@@ -26,6 +26,8 @@ const config: Configuration = {
       channel: UPDATE_CHANNEL,
     },
   ],
+  // `emdash://join?secret=…` pairing deep links (spec #130, ticket #135).
+  protocols: [{ name: 'Emdash deep link', schemes: ['emdash'] }],
   generateUpdatesFilesForAllChannels: false,
   files: ['out/**/*', 'node_modules/**/*', 'drizzle/**/*'],
   asarUnpack: [

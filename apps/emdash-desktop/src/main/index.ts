@@ -40,6 +40,11 @@ import { reconcileResourceSampler } from './core/resource-monitor/resource-sampl
 import { searchService } from './core/search/search-service';
 import { workspaceFileIndexService } from './core/search/workspace-file-index-service';
 import { appSettingsService } from './core/settings/settings-service';
+import {
+  registerDeepLinkHandler,
+  argvJoinDeepLink,
+  handleJoinDeepLink,
+} from './core/sync/deep-link';
 import { boardSyncService } from './core/tasks/board-sync-service';
 import { updateService } from './core/updates/update-service';
 import { viewStateService } from './core/view-state/view-state-service';
@@ -77,7 +82,11 @@ initializeFileLogger();
 registerProcessErrorLogging(log);
 registerRendererLogHandler(ipcMain);
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  const url = argvJoinDeepLink(argv);
+  if (url !== null) {
+    handleJoinDeepLink(url);
+  }
   const win = BrowserWindow.getAllWindows()[0];
   if (win?.isMinimized()) win.restore();
   win?.focus();
@@ -189,6 +198,7 @@ void app.whenReady().then(async () => {
 
   registerRPCRouter(rpcRouter, app.isPackaged ? ipcMain : withRpcLogging(ipcMain));
 
+  registerDeepLinkHandler();
   void reconcileResourceSampler();
 
   localDependencyManager.probeAll().catch((e: unknown) => {
