@@ -264,6 +264,24 @@ export function applyThemeToAll(theme?: SessionTheme): void {
   }
 }
 
+/**
+ * Notify every live PTY session that the terminal color scheme changed, so
+ * full-screen TUIs (e.g. opencode) re-query the terminal palette and re-theme.
+ *
+ * Real terminals send a CSI ? 997 report when their light/dark scheme flips;
+ * opencode's TUI listens for exactly `ESC [ ? 997 ; 1 n` / `ESC [ ? 997 ; 2 n`
+ * and refreshes its theme from the palette on receipt. Without it the TUI keeps
+ * painting its launch-time colors while the terminal background flips under it
+ * — the "half light, half dark" screen. Harmless for apps that do not handle
+ * it (shells and editors ignore the report sequence).
+ */
+export function notifyPtyColorSchemeChange(dark: boolean): void {
+  const sequence = dark ? '\x1b[?997;1n' : '\x1b[?997;2n';
+  for (const pty of FrontendPty.all) {
+    void rpc.pty.sendInput(pty.sessionId, sequence).catch(() => {});
+  }
+}
+
 /** Dispose all live FrontendPty instances. Called on app teardown. */
 export function disposeAllPtys(): void {
   for (const pty of [...FrontendPty.all]) {
