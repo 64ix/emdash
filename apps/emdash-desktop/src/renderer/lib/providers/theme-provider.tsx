@@ -7,7 +7,7 @@ import {
 } from 'react';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
 import { useLocalStorage } from '@renderer/lib/hooks/useLocalStorage';
-import { applyThemeToAll } from '@renderer/lib/pty/pty';
+import { applyThemeToAll, notifyPtyColorSchemeChange } from '@renderer/lib/pty/pty';
 import { getNextTheme } from '@renderer/lib/theme/theme-toggle-model';
 import type { Theme } from '@shared/core/app-settings';
 
@@ -62,6 +62,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Re-apply xterm theme after CSS classes have been updated by the layout effect above.
   useEffect(() => {
     applyThemeToAll();
+    // Push the color-scheme-changed report to every live PTY so full-screen
+    // TUIs (opencode) re-query the terminal palette and re-theme — without it
+    // they keep painting launch-time colors over the flipped background.
+    notifyPtyColorSchemeChange(effectiveTheme === 'emdark');
   }, [effectiveTheme]);
 
   const setTheme = (newTheme: Theme) => {
