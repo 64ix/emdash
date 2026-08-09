@@ -53,6 +53,17 @@ export interface SyncTableConfig {
   importPreserveLocalColumns?: string[];
   /** Columns nulled at import when the referenced row is absent locally. */
   importNullIfMissingFk?: Array<{ column: string; table: string; columnRef: string }>;
+  /**
+   * In-scope FK parents: a child upsert whose parent row is absent locally is
+   * skipped (version recorded, cursor advances) instead of aborting the pull
+   * batch with a foreign-key violation. This happens when a parent tombstone
+   * reached this machine before a child edit that was pushed by a machine
+   * that had not yet applied the tombstone — the child cannot exist without
+   * the parent, so the edit is dropped and the machines converge on the
+   * deletion. Out-of-scope parents (pull_requests, ssh_connections) use
+   * `importNullIfMissingFk` instead: the row survives with a nulled column.
+   */
+  importSkipIfMissingParent?: Array<{ column: string; table: string; columnRef: string }>;
 }
 
 /** app_settings keys that stay machine-local (never pushed, never applied). */
@@ -105,6 +116,9 @@ export const projectRemotesTable: SyncTableConfig = {
   mode: 'initial-only',
   payloadColumns: ['project_id', 'remote_name', 'remote_url'],
   rawJsonColumns: [],
+  // A fresh machine joining after the project was deleted pulls the carried
+  // remotes with no parent row — skip them or the FK aborts the batch.
+  importSkipIfMissingParent: [{ column: 'project_id', table: 'projects', columnRef: 'id' }],
 };
 
 export const projectSettingsTable: SyncTableConfig = {
@@ -137,6 +151,7 @@ export const projectSettingsTable: SyncTableConfig = {
       PROJECT_SETTINGS_LOCAL_FIELDS
     ),
   }),
+  importSkipIfMissingParent: [{ column: 'project_id', table: 'projects', columnRef: 'id' }],
 };
 
 export const tasksTable: SyncTableConfig = {
@@ -168,6 +183,7 @@ export const tasksTable: SyncTableConfig = {
   // workspace_provider_data / workspace_intent columns are never sent.
   rawJsonColumns: ['linked_issue'],
   importNullIfMissingFk: [{ column: 'assigned_pr_url', table: 'pull_requests', columnRef: 'url' }],
+  importSkipIfMissingParent: [{ column: 'project_id', table: 'projects', columnRef: 'id' }],
 };
 
 export const conversationsTable: SyncTableConfig = {
@@ -190,6 +206,10 @@ export const conversationsTable: SyncTableConfig = {
     'type',
   ],
   rawJsonColumns: ['config'],
+  importSkipIfMissingParent: [
+    { column: 'project_id', table: 'projects', columnRef: 'id' },
+    { column: 'task_id', table: 'tasks', columnRef: 'id' },
+  ],
 };
 
 export const automationsTable: SyncTableConfig = {
@@ -211,6 +231,7 @@ export const automationsTable: SyncTableConfig = {
   // `enabled` is machine-local (never in the payload); fresh imports default
   // to disabled so the receiving machine opts in explicitly.
   importInsertColumns: { enabled: '0' },
+  importSkipIfMissingParent: [{ column: 'project_id', table: 'projects', columnRef: 'id' }],
 };
 
 export const promptLibraryTable: SyncTableConfig = {

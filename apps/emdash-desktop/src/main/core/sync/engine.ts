@@ -51,6 +51,11 @@ export interface SyncSummary {
   skippedDirty: number;
   /** Patches skipped because their server version was already seen. */
   skippedSeen: number;
+  /**
+   * Patches skipped because an in-scope FK parent is missing locally (the
+   * parent was deleted and its tombstone already applied here).
+   */
+  skippedOrphan: number;
 }
 
 export interface SyncEngineOptions {
@@ -72,6 +77,7 @@ const EMPTY_SUMMARY: SyncSummary = {
   applied: 0,
   skippedDirty: 0,
   skippedSeen: 0,
+  skippedOrphan: 0,
 };
 
 interface PendingUpsert {
@@ -134,6 +140,7 @@ export class SyncEngine {
       applied: pullResult.data.applied,
       skippedDirty: pullResult.data.skippedDirty,
       skippedSeen: pullResult.data.skippedSeen,
+      skippedOrphan: pullResult.data.skippedOrphan,
     });
   }
 
@@ -309,6 +316,7 @@ export class SyncEngine {
         applied: summary.applied,
         skippedDirty: summary.skippedDirty,
         skippedSeen: summary.skippedSeen,
+        skippedOrphan: summary.skippedOrphan,
       });
       return ok(summary);
     } catch (error) {
@@ -375,6 +383,23 @@ export class SyncEngine {
       return;
     }
     const transformed = this.applyImportTransforms(config, patch.pk, columns, localRow);
+    // In-scope FK parents must exist locally: a parent tombstone applied
+    // earlier means the child cannot exist either (its own tombstone is on
+    // its way from the machine that applied the cascade). Skipping instead of
+    // aborting keeps the pull cursor moving — an FK violation here would
+    // roll back the whole batch and wedge the sync forever.
+    for (const fk of config.importSkipIfMissingParent ?? []) {
+      const value = transformed[fk.column];
+      if (value === null || value === undefined) continue;
+      const entry = this.fkExistsStatements.find(
+        (e) => e.config.table === config.table && e.column === fk.column
+      );
+      if (entry?.stmt.get(value) === undefined) {
+        upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+        summary.skippedOrphan += 1;
+        return;
+      }
+    }
     this.upsertRow(config, patch.pk, transformed, localRow !== undefined, this.now());
     // Read back the clock the trigger stamped so the next push sees the row
     // as applied-and-untouched rather than dirty.
@@ -625,6 +650,15 @@ export class SyncEngine {
       this.statements.push({ config, selectRows, selectLocal, deleteRow, exists });
 
       for (const fk of config.importNullIfMissingFk ?? []) {
+        this.fkExistsStatements.push({
+          config,
+          column: fk.column,
+          stmt: this.sqlite.prepare(
+            `SELECT 1 AS one FROM \`${fk.table}\` WHERE \`${fk.columnRef}\` = ? LIMIT 1`
+          ),
+        });
+      }
+      for (const fk of config.importSkipIfMissingParent ?? []) {
         this.fkExistsStatements.push({
           config,
           column: fk.column,

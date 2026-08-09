@@ -234,10 +234,12 @@ async function seedConversation(
 describe('SyncEngine', () => {
   let fixtureA: FixtureDb;
   let fixtureB: FixtureDb;
+  let fixtureC: FixtureDb;
 
   afterEach(() => {
     fixtureA?.close();
     fixtureB?.close();
+    fixtureC?.close();
   });
 
   describe('push/pull of the allowlisted tables', () => {
@@ -1208,6 +1210,76 @@ describe('SyncEngine', () => {
           rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'sync:cursor'")?.value as string
         )
       ).toBe(relay.maxVersion);
+    });
+
+    it('skips orphaned child upserts (in-scope FK parent missing locally)', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      await seedTask(fixtureA, TASK_1, PROJECT_A);
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+
+      // B deletes the project (cascade removes B's task); A edits the task
+      // before the deletion reaches it. B syncs FIRST, so the relay holds B's
+      // tombstones (lower versions) and A's task edit lands after them — the
+      // task upsert arrives at B with no project row to attach to.
+      await fixtureB.db.delete(projects).where(eq(projects.id, PROJECT_A));
+      await fixtureA.db.update(tasks).set({ status: 'in-progress' }).where(eq(tasks.id, TASK_1));
+      expectOk(await engineB.syncNow());
+      expectOk(await engineA.syncNow());
+
+      // B's pull must not abort on the orphaned task upsert: it records the
+      // version and moves on, and the task's own tombstone (pushed by A after
+      // its cascade) converges the row.
+      const pull = await engineB.syncNow();
+      expectOk(pull);
+      expect(pull.data.skippedOrphan).toBeGreaterThan(0);
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)).toBeUndefined();
+      expect(rawGet(fixtureB, 'SELECT id FROM tasks WHERE id = ?', TASK_1)).toBeUndefined();
+      expect(rawGet(fixtureA, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)).toBeUndefined();
+      expect(rawGet(fixtureA, 'SELECT id FROM tasks WHERE id = ?', TASK_1)).toBeUndefined();
+      expect(relay.getRow('tasks', TASK_1)?.deleted).toBe(true);
+    });
+
+    it('a machine joining after a project delete skips the carried remotes', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      fixtureC = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      await fixtureA.db.insert(projectRemotes).values({
+        projectId: PROJECT_A,
+        remoteName: 'origin',
+        remoteUrl: 'https://github.com/example/repo.git',
+      });
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+
+      // B deletes the project; the remotes stay on the relay forever
+      // (initial-only rows are never tombstoned). A fresh machine C now has
+      // remotes upserts with no project row to attach to.
+      await fixtureB.db.delete(projects).where(eq(projects.id, PROJECT_A));
+      expectOk(await engineB.syncNow());
+      expect(relay.getRow('projects', PROJECT_A)?.deleted).toBe(true);
+      expect(relay.allRows().filter((r) => r.table === 'project_remotes')).toHaveLength(1);
+
+      const engineC = makeEngine(fixtureC, relay, 'device-c');
+      expectOk(await engineC.syncNow());
+      expect(rawGet(fixtureC, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)).toBeUndefined();
+      expect(
+        rawGet(fixtureC, 'SELECT project_id FROM project_remotes WHERE project_id = ?', PROJECT_A)
+      ).toBeUndefined();
+      expectOk(await engineC.syncNow());
     });
 
     it('does not push tombstones for rows that still exist locally', async () => {
