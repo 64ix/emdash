@@ -204,6 +204,24 @@ describe('EncryptingRelayTransport', () => {
     expect(decrypted.success && decrypted.data).toBe(plaintext);
   });
 
+  it('flags a body whose client_version was rewritten by the relay (version replay)', async () => {
+    const inner = new FakeInnerTransport();
+    const { store, keyId, k0 } = makeKeys();
+
+    // A pushes an edit bound to client_version 1; a malicious relay replays
+    // the same body under a different client_version (or a different server
+    // version with the metadata bumped). Either rewrite must fail the AEAD
+    // authentication on pull, not silently apply.
+    const original = encryptBody(k0, keyId, { table: 't', pk: 'a', version: 1, keyId }, 'content');
+    inner.rows.set('t:a', { version: 2, client_version: 2, body: original, deleted: false });
+
+    const transport = new EncryptingRelayTransport(inner, store);
+    const result = await transport.pull(0);
+
+    expect(result.patches).toHaveLength(1);
+    expect(result.patches[0]?.decryptError).toContain('authenticat');
+  });
+
   it('flags unknown-key_id patches and continues decrypting the rest', async () => {
     const inner = new FakeInnerTransport();
     const { store, keyId, k0 } = makeKeys();
