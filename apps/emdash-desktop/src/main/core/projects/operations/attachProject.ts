@@ -253,7 +253,24 @@ async function findMergeCandidates(
   const candidates: Candidate[] = [];
   const projectsAtPath = await getProjectByPathAnyType(pickedPath, projectId);
   for (const p of projectsAtPath) {
-    if (p.type === 'ssh') {
+    if (p.type === 'local') {
+      // A local project at the picked path is the same repository on disk, so
+      // its live remotes equal the picked ones: merge when the synced project's
+      // remotes match (handled by the scan below), but when neither carries
+      // remotes the unique path index makes the attach impossible — hard
+      // conflict instead of an uncaught SQLITE constraint on the UPDATE.
+      const live = await readLiveRemotes(p.path);
+      if (!live.success || !remotePairSetsMatch(live.data, pickedRemotes)) {
+        return {
+          kind: 'path-conflict',
+          error: {
+            type: 'path-conflict',
+            path: pickedPath,
+            message: `The path is already used by the local project "${p.name}".`,
+          },
+        };
+      }
+    } else {
       const synced = await getProjectSyncedRemotes(p.id);
       if (synced.length > 0 && remotePairSetsMatch(pickedRemotes, synced)) {
         candidates.push({ projectId: p.id, name: p.name, type: 'ssh' });

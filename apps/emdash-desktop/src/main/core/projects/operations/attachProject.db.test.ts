@@ -447,6 +447,38 @@ describe('attachProject (spec #130, ticket #136)', () => {
       if (result.success) return;
       expect(result.error.type).toBe('path-conflict');
     });
+
+    it('hard-conflicts instead of throwing when the picked path is held by a remotes-less local project', async () => {
+      // The remote-mismatch guard is skipped when the synced project carries
+      // no remotes; the unique path index would make the direct UPDATE throw.
+      // The op must report a clean path-conflict Result instead.
+      const dir = pickedDir();
+      await seedSyncedLocalProject();
+      await fixture.db.insert(projects).values({
+        id: 'local-holder',
+        name: 'Local Holder',
+        path: dir,
+        workspaceProvider: 'local',
+        baseRef: 'main',
+      });
+      remotesByPath.set(dir, []);
+
+      const result = await attachProject({ type: 'local', projectId: 'synced-local', path: dir });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error.type).toBe('path-conflict');
+      // No side effects: the synced row stays unattached, the holder keeps its path.
+      const [synced] = await fixture.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, 'synced-local'));
+      expect(synced.path).toBeNull();
+      const [holder] = await fixture.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, 'local-holder'));
+      expect(holder.path).toBe(dir);
+    });
   });
 
   describe('SSH attach', () => {
