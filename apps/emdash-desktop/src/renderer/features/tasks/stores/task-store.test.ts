@@ -166,6 +166,31 @@ describe('TaskStore frontend runtime lifecycle', () => {
     expect(viewModel.initialize).toHaveBeenCalledTimes(1);
   });
 
+  it('restores the snapshot when view state returns null for a missing key', () => {
+    // `viewStateCache.get` returns `null` (not `undefined`) for an absent
+    // aggregate key, and the `= {}` default only covers `undefined` — a null
+    // snapshot used to throw inside restoreSnapshot mid-provision, leaving the
+    // task stuck in 'provisioned' with initialize() never run (and every task
+    // view crashing on usePreviewServers). Null must pass through to
+    // restoreSnapshot so the dedicated tabs key is still consulted.
+    const task = makeTask();
+    const store = createUnprovisionedTask(task);
+    const viewModel = mocks.viewModels[0];
+
+    store.transitionToProvisioned(
+      task,
+      '/tmp/workspace-1',
+      'workspace-1',
+      {} as never,
+      undefined,
+      null
+    );
+
+    expect(viewModel.restoreSnapshot).toHaveBeenCalledWith(null);
+    expect(viewModel.initialize).toHaveBeenCalledTimes(1);
+    expect(store.state).toBe('provisioned');
+  });
+
   it('recreates registered stores before reprovisioning a dry task', () => {
     const task = makeTask();
     const store = createUnprovisionedTask(task);

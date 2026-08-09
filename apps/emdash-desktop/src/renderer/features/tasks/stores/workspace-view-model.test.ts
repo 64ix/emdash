@@ -853,6 +853,36 @@ describe('WorkspaceViewModel tab persistence adapter', () => {
     viewModel.dispose();
   });
 
+  it('restores tabs from the dedicated key when the aggregate snapshot is null', () => {
+    // `viewStateCache.get` returns `null` (not `undefined`) for a missing
+    // aggregate key, and the `= {}` default only covers `undefined` — passing
+    // null used to throw mid-provision, leaving the task stuck 'provisioned'
+    // with initialize() never run (every task view then crashed on
+    // usePreviewServers). The dedicated tabs key must still be consulted.
+    viewStateCache.set(`task:${PERSISTOR_TASK_ID}:tabs`, {
+      groups: [
+        {
+          groupId: 'group-1',
+          tabManager: {
+            tabs: [
+              { kind: 'acp-chat', tabId: 'tab-1', isPreview: false, conversationId: 'conv-1' },
+            ],
+            activeTabId: 'tab-1',
+          },
+        },
+      ],
+      activeGroupId: 'group-1',
+      paneSizes: [100],
+    });
+
+    const viewModel = makePersistorViewModel();
+    expect(() => viewModel.restoreSnapshot(null)).not.toThrow();
+
+    expect(viewModel.sidebarTab).toBe('conversations');
+    expect(viewModel.activePane.resolvedTabs.map((tab) => tab.kind)).toEqual(['acp-chat']);
+    viewModel.dispose();
+  });
+
   it('eager-writes dedicated tabs key when migrating from legacy aggregate', () => {
     vi.mocked(rpc.viewState.save).mockClear();
 

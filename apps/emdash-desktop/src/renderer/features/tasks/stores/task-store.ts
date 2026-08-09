@@ -110,7 +110,7 @@ export class TaskStore {
     workspaceId: string,
     gitRepository: GitRepositoryStore,
     sshConnectionId?: string,
-    savedSnapshot?: TaskViewSnapshot
+    savedSnapshot?: TaskViewSnapshot | null
   ): void {
     this.data = data;
     this.ensureRegisteredStores();
