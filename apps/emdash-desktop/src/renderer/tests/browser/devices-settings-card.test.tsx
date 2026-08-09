@@ -12,6 +12,7 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DevicesSettingsCard } from '@renderer/features/settings/components/DevicesSettingsCard';
+import { SyncDeepLinkHandler } from '@renderer/features/settings/sync-deep-link-handler';
 import { ModalRenderer } from '@renderer/lib/modal/modal-renderer';
 import { modalStore } from '@renderer/lib/modal/modal-store';
 import type { SyncDeviceInfo, SyncState } from '@shared/core/sync/pairing';
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => {
     getHealthStates,
     getConnectionState,
     toast: vi.fn(),
+    onEvent: vi.fn(() => () => {}),
   };
 });
 
@@ -56,7 +58,7 @@ vi.mock('@renderer/lib/ipc', () => ({
       getConnectionState: mocks.getConnectionState,
     },
   },
-  events: { on: vi.fn(() => () => {}) },
+  events: { on: mocks.onEvent },
 }));
 
 vi.mock('@renderer/lib/hooks/use-toast', () => ({
@@ -293,5 +295,65 @@ describe('DevicesSettingsCard', () => {
     await flush();
 
     expect(mocks.revokeDevice).toHaveBeenCalledWith('device-b');
+  });
+
+  it('shows the retry state when paired but the device list fails to load', async () => {
+    mocks.getState.mockResolvedValue(PAIRED);
+    mocks.listDevices.mockResolvedValue({
+      success: false,
+      code: 'network_error',
+      message: 'Could not reach the sync relay. Check your connection and try again.',
+    });
+
+    await renderCard();
+    await flush();
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Could not load sync devices');
+    expect(text).toContain('Retry');
+    // The paired machine must not be presented as unpaired.
+    expect(text).not.toContain('Not paired with any device');
+  });
+
+  it('pre-fills the join modal from a deep link and only joins on confirmation', async () => {
+    mocks.getState.mockResolvedValue(PAIRED);
+    mocks.listDevices.mockResolvedValue({ success: true, devices: [SELF_DEVICE] });
+    const secret = 'emdj1_ABCDEFGHIJKLMNOPQRSTUV_abcdefghijklmnopqrstuv_-aBcDeF';
+
+    await act(async () => {
+      root.render(
+        <>
+          <SyncDeepLinkHandler />
+          <ModalRenderer />
+        </>
+      );
+    });
+    await flush();
+
+    const handler = mocks.onEvent.mock.calls.find(
+      ([channel]) => channel?.name === 'sync:join-secret'
+    )?.[1] as ((payload: { secret: string }) => void) | undefined;
+    expect(handler).toBeTypeOf('function');
+
+    await act(async () => {
+      handler?.({ secret });
+    });
+    await flush();
+
+    // The modal opens pre-filled with the deep-link secret; nothing is sent
+    // to the relay until the user confirms.
+    const input = document.querySelector<HTMLInputElement>('#join-secret');
+    expect(input?.value).toBe(secret);
+    expect(mocks.joinSpace).not.toHaveBeenCalled();
+
+    const joinButton = [...document.body.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Join')
+    );
+    await act(async () => {
+      joinButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flush();
+
+    expect(mocks.joinSpace).toHaveBeenCalledWith(secret, undefined);
   });
 });

@@ -127,6 +127,25 @@ export function DevicesSettingsCard() {
     );
   }
 
+  if (state?.paired && devices === null) {
+    // The state read succeeded but the device list failed (e.g. the relay is
+    // unreachable) — show the retry state rather than the unpaired branch.
+    return (
+      <div className="flex flex-col items-start gap-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <h3 className="text-sm font-normal text-foreground">Devices</h3>
+          <p className="text-xs text-foreground-passive">Machines attached to this sync space.</p>
+        </div>
+        <p className="text-sm text-foreground-passive">
+          Could not load sync devices. Check the relay configuration and try again.
+        </p>
+        <Button type="button" variant="outline" onClick={() => void refresh()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
   if (state?.paired && devices !== null) {
     return (
       <div className="flex flex-col gap-3">
