@@ -3,7 +3,16 @@ import { err, ok, type Result } from '@emdash/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { JOIN_SECRET_PREFIX, userFacingPairingMessage } from '@shared/core/sync/pairing';
 import type { RelayApiError, RelayAuthApi, RelayDeviceInfo, RelayJoinResult } from './auth-api';
-import { deriveJoinHash, joinDeepLink, PairingService } from './pairing';
+import {
+  composeSpaceSecret,
+  joinCredentialOf,
+  keyIdOf,
+  mintJoinHalf,
+  mintK0,
+  parseSpaceSecret,
+} from './crypto';
+import { joinDeepLink, PairingService } from './pairing';
+import { SpaceKeyStore } from './space-key-store';
 import { SyncCredentialsStore } from './sync-credentials';
 
 // `pairing.ts` logs through the main-process logger, whose import chain pulls
@@ -42,11 +51,13 @@ class FakeSecretStore {
 }
 
 /**
- * A fake `RelayAuthApi` that implements the relay's pairing semantics from
- * apps/sync-relay/src/service.ts: secrets are matched by SHA-256 of the full
- * credential, are single-use, TTL-bounded (15 min), and attempt-limited (5);
- * tokens are scoped to one space and revoked tokens are refused. `now` is
- * injectable so tests can expire secrets deterministically.
+ * A fake `RelayAuthApi` implementing the relay's pairing semantics from
+ * apps/sync-relay/src/service.ts (spec #130, ticket #134): pairing secrets
+ * are two-half (`emdj1_<space>_<join b32>_<k0 b32>`), the relay stores only
+ * the SHA-256 of the join credential, join presents the credential + space
+ * id, and the join-secret endpoint registers a client-minted digest.
+ * Secrets are single-use, TTL-bounded (15 min), and attempt-limited (5).
+ * `now` is injectable so tests can expire secrets deterministically.
  */
 class FakeRelayAuthApi implements RelayAuthApi {
   readonly ttlMs = 15 * 60_000;
@@ -74,10 +85,10 @@ class FakeRelayAuthApi implements RelayAuthApi {
     { token: string; spaceId: string; name: string; revoked: boolean }
   >();
 
-  /** Pending secrets by raw secret string. */
+  /** Pending join credentials per space, keyed by their sha256 hex digest. */
   readonly pendingSecrets = new Map<
     string,
-    { spaceId: string; attemptsLeft: number; used: boolean; expiresAt: number }
+    Map<string, { attemptsLeft: number; used: boolean; expiresAt: number }>
   >();
 
   private seq = 0;
@@ -103,7 +114,7 @@ class FakeRelayAuthApi implements RelayAuthApi {
     const token = this.makeToken();
     const deviceId = this.makeId(16);
     this.devices.set(deviceId, { token, spaceId, name, revoked: false });
-    return { deviceId, deviceToken: token };
+    return { deviceId, deviceToken: token, spaceId };
   }
 
   private authenticate(token: string): { spaceId: string } | null {
@@ -116,14 +127,23 @@ class FakeRelayAuthApi implements RelayAuthApi {
     return null;
   }
 
-  private mintSecretFor(spaceId: string): string {
-    const secret = `emdj1_${spaceId}_${this.makeId(22)}_${this.makeId(6)}`;
-    this.pendingSecrets.set(secret, {
-      spaceId,
+  /** Registers a client-minted join credential for a space, relay-style. */
+  private registerCredential(spaceId: string, credential: string): void {
+    const digest = this.sha256Hex(credential);
+    const pending = this.pendingSecrets.get(spaceId) ?? new Map();
+    pending.set(digest, {
       attemptsLeft: this.maxAttempts,
       used: false,
       expiresAt: this.now + this.ttlMs,
     });
+    this.pendingSecrets.set(spaceId, pending);
+  }
+
+  /** Composes a fresh two-half secret for a space (as the creating device's client does). */
+  private mintSecretFor(spaceId: string): string {
+    const secret = composeSpaceSecret(spaceId, mintJoinHalf(), mintK0());
+    const parts = parseSpaceSecret(secret)!;
+    this.registerCredential(spaceId, joinCredentialOf(parts.joinHalf));
     return secret;
   }
 
@@ -137,38 +157,45 @@ class FakeRelayAuthApi implements RelayAuthApi {
     return ok({ spaceId, deviceId: device.deviceId, deviceToken: device.deviceToken, secret });
   }
 
-  async joinSpace(joinHash: string, name: string): Promise<Result<RelayJoinResult, RelayApiError>> {
+  async joinSpace(
+    joinHash: string,
+    spaceId: string,
+    name: string
+  ): Promise<Result<RelayJoinResult, RelayApiError>> {
     this.calls.joinSpace += 1;
     const forced = this.forced.joinSpace;
     if (forced) return err(forced);
 
-    // The real relay (service.ts `join`) parses the presented credential as
-    // the raw secret and compares the SHA-256 of what the client sent against
-    // the digests it stored at mint time — mirror that comparison so the fake
-    // rejects a client that pre-hashes the secret, exactly like the relay.
+    // The real relay (service.ts `join`) hashes the presented credential and
+    // compares against the stored digests of the named space.
     const presentedSha = this.sha256Hex(joinHash);
-    let matched: string | null = null;
-    for (const [secret, _pending] of this.pendingSecrets) {
-      if (this.sha256Hex(secret) === presentedSha) {
-        matched = secret;
-        break;
-      }
-    }
+    const pending = this.pendingSecrets.get(spaceId);
+    const matched = pending?.get(presentedSha) ?? null;
     if (matched === null) {
+      // Charge the oldest pending credential of the space, like the relay.
+      if (pending !== undefined) {
+        const oldest = pending.values().next().value;
+        if (oldest !== undefined) {
+          oldest.attemptsLeft -= 1;
+          if (oldest.attemptsLeft <= 0) pending.delete([...pending.keys()][0]!);
+        }
+      }
       return err({ type: 'invalid_join_secret', message: 'invalid join secret' });
     }
-    const pending = this.pendingSecrets.get(matched)!;
-    const stale = pending.used || pending.attemptsLeft <= 0 || pending.expiresAt <= this.now;
+    const stale = matched.used || matched.attemptsLeft <= 0 || matched.expiresAt <= this.now;
     if (stale) {
-      this.pendingSecrets.delete(matched);
+      pending!.delete(presentedSha);
       return err({ type: 'invalid_join_secret', message: 'invalid join secret' });
     }
-    pending.used = true;
-    const device = this.registerDevice(pending.spaceId, name);
-    return ok({ deviceId: device.deviceId, deviceToken: device.deviceToken });
+    matched.used = true;
+    const device = this.registerDevice(spaceId, name);
+    return ok({ deviceId: device.deviceId, deviceToken: device.deviceToken, spaceId });
   }
 
-  async mintJoinSecret(token: string): Promise<Result<{ secret: string }, RelayApiError>> {
+  async mintJoinSecret(
+    token: string,
+    joinHash: string
+  ): Promise<Result<{ join_hash: string }, RelayApiError>> {
     this.calls.mintSecret += 1;
     const forced = this.forced.mintSecret;
     if (forced) return err(forced);
@@ -176,7 +203,15 @@ class FakeRelayAuthApi implements RelayAuthApi {
     if (auth === null) {
       return err({ type: 'unauthorized', message: 'unauthorized' });
     }
-    return ok({ secret: this.mintSecretFor(auth.spaceId) });
+    // The digest was computed client-side; the relay stores it verbatim.
+    const pending = this.pendingSecrets.get(auth.spaceId) ?? new Map();
+    pending.set(joinHash, {
+      attemptsLeft: this.maxAttempts,
+      used: false,
+      expiresAt: this.now + this.ttlMs,
+    });
+    this.pendingSecrets.set(auth.spaceId, pending);
+    return ok({ join_hash: joinHash });
   }
 
   async listDevices(token: string): Promise<Result<RelayDeviceInfo[], RelayApiError>> {
@@ -228,10 +263,20 @@ type RelaySpaceCreated = {
 };
 
 function makeService(api: FakeRelayAuthApi, store: FakeSecretStore): PairingService {
-  return new PairingService(api, new SyncCredentialsStore(store), async () => ({
-    deviceId: 'test-device-uuid-0000',
-    deviceName: 'test-host',
-  }));
+  return new PairingService(
+    api,
+    new SyncCredentialsStore(store),
+    new SpaceKeyStore(store),
+    async () => ({
+      deviceId: 'test-device-uuid-0000',
+      deviceName: 'test-host',
+    })
+  );
+}
+
+async function storedKeyId(store: FakeSecretStore): Promise<string | null> {
+  const key = await new SpaceKeyStore(store).get();
+  return key.success && key.data !== null ? key.data.keyId : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +284,7 @@ function makeService(api: FakeRelayAuthApi, store: FakeSecretStore): PairingServ
 // ---------------------------------------------------------------------------
 
 describe('PairingService', () => {
-  it('createSpace stores the device token machine-locally and returns a deep link', async () => {
+  it('createSpace stores the device token and the space key, and returns a deep link', async () => {
     const api = new FakeRelayAuthApi();
     const store = new FakeSecretStore();
     const service = makeService(api, store);
@@ -249,6 +294,8 @@ describe('PairingService', () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.secret.startsWith(JOIN_SECRET_PREFIX)).toBe(true);
+    // Two-half format: emdj1_<space>_<join b32>_<k0 b32>.
+    expect(result.data.secret).toMatch(/^emdj1_[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}$/);
     expect(result.data.deepLink).toBe(
       `emdash://join?secret=${encodeURIComponent(result.data.secret)}`
     );
@@ -257,6 +304,11 @@ describe('PairingService', () => {
     expect(credential.success && credential.data?.token).toBeTruthy();
     if (!credential.success || credential.data === null) return;
     expect(credential.data.spaceId).toBe(result.data.spaceId);
+
+    // The space key (K0) is stored and its key id derives from the secret.
+    const keyId = await storedKeyId(store);
+    const parts = parseSpaceSecret(result.data.secret);
+    expect(keyId).toBe(parts !== null ? keyIdOf(parts.k0) : null);
 
     const state = await service.getState();
     expect(state.success).toBe(true);
@@ -268,9 +320,10 @@ describe('PairingService', () => {
     });
   });
 
-  it('joinSpace derives the join hash from the minted secret and stores the issued token', async () => {
+  it('joinSpace derives the join credential and K0 from the secret; both machines share K0', async () => {
     const api = new FakeRelayAuthApi();
-    const created = await makeService(api, new FakeSecretStore()).createSpace('first-machine');
+    const firstStore = new FakeSecretStore();
+    const created = await makeService(api, firstStore).createSpace('first-machine');
     if (!created.success) throw new Error('create failed');
 
     const secondStore = new FakeSecretStore();
@@ -282,11 +335,15 @@ describe('PairingService', () => {
     expect(joined.success).toBe(true);
     if (!joined.success) return;
     expect(joined.data.spaceId).toBe(created.data.spaceId);
-    // The fake relay only matches against sha256 of the minted secret — the
-    // join succeeded, so the client derivation matches the relay's.
+    // The fake relay only matches against sha256 of the join credential —
+    // the join succeeded, so the client derivation matches the relay's.
     const stored = await new SyncCredentialsStore(secondStore).get();
     expect(stored.success && stored.data?.spaceId).toBe(created.data.spaceId);
     expect(api.calls.joinSpace).toBe(1);
+
+    // Two-client K0 invariant: machine B derived the IDENTICAL key from the
+    // pasted secret (same key_id as machine A, which got K0 from the relay).
+    expect(await storedKeyId(secondStore)).toBe(await storedKeyId(firstStore));
   });
 
   it('rejects a single-use secret on the second join', async () => {
@@ -313,8 +370,8 @@ describe('PairingService', () => {
 
     // A second relay view of the same space, after the TTL elapsed.
     const expiredApi = new FakeRelayAuthApi(now + api.ttlMs + 1);
-    for (const [secret, pending] of api.pendingSecrets) {
-      expiredApi.pendingSecrets.set(secret, { ...pending });
+    for (const [spaceId, pending] of api.pendingSecrets) {
+      expiredApi.pendingSecrets.set(spaceId, new Map(pending));
     }
     const join = await makeService(expiredApi, new FakeSecretStore()).joinSpace(
       created.data.secret,
@@ -331,7 +388,7 @@ describe('PairingService', () => {
     const created = await makeService(api, new FakeSecretStore()).createSpace('first');
     if (!created.success) throw new Error('create failed');
 
-    const pending = api.pendingSecrets.get(created.data.secret)!;
+    const pending = [...api.pendingSecrets.get(created.data.spaceId)!.values()][0]!;
     pending.attemptsLeft = 0;
 
     const join = await makeService(api, new FakeSecretStore()).joinSpace(
@@ -354,11 +411,14 @@ describe('PairingService', () => {
     expect(api.calls.joinSpace).toBe(0);
   });
 
-  it('mints a fresh secret with the stored token, usable by a second device', async () => {
+  it('mints a secret client-side: a second device joins while K0 stays identical', async () => {
     const api = new FakeRelayAuthApi();
-    const service = makeService(api, new FakeSecretStore());
+    const store = new FakeSecretStore();
+    const service = makeService(api, store);
     const created = await service.createSpace('first');
     if (!created.success) throw new Error('create failed');
+    const keyIdBefore = await storedKeyId(store);
+    expect(keyIdBefore).not.toBeNull();
 
     const minted = await service.mintSecret();
     expect(minted.success).toBe(true);
@@ -370,14 +430,17 @@ describe('PairingService', () => {
     );
     expect(api.calls.mintSecret).toBe(1);
 
+    // The spec's "add another device later" story: the minted secret joins
+    // successfully, and the minting machine's K0 is unchanged.
     const joined = await makeService(api, new FakeSecretStore()).joinSpace(
       minted.data.secret,
       'second'
     );
     expect(joined.success).toBe(true);
+    expect(await storedKeyId(store)).toBe(keyIdBefore);
   });
 
-  it('fails with not_paired when no token is stored, without calling the relay', async () => {
+  it('fails with not_paired when no token or no key is stored, without calling the relay', async () => {
     const api = new FakeRelayAuthApi();
     const service = makeService(api, new FakeSecretStore());
 
@@ -397,13 +460,14 @@ describe('PairingService', () => {
   it('lists devices including the self flag', async () => {
     const api = new FakeRelayAuthApi();
     const service = makeService(api, new FakeSecretStore());
-    await service.createSpace('first');
+    const created = await service.createSpace('first');
+    if (!created.success) throw new Error('create failed');
 
-    const second = await makeService(api, new FakeSecretStore()).joinSpace(
-      [...api.pendingSecrets.keys()][0]!,
+    const joined = await makeService(api, new FakeSecretStore()).joinSpace(
+      created.data.secret,
       'second'
     );
-    expect(second.success).toBe(true);
+    expect(joined.success).toBe(true);
 
     const listed = await service.listDevices();
     expect(listed.success).toBe(true);
@@ -418,10 +482,11 @@ describe('PairingService', () => {
   it('revokes a device by id with the stored token and maps unknown devices', async () => {
     const api = new FakeRelayAuthApi();
     const service = makeService(api, new FakeSecretStore());
-    await service.createSpace('first');
+    const created = await service.createSpace('first');
+    if (!created.success) throw new Error('create failed');
 
     const secondService = makeService(api, new FakeSecretStore());
-    const joined = await secondService.joinSpace([...api.pendingSecrets.keys()][0]!, 'second');
+    const joined = await secondService.joinSpace(created.data.secret, 'second');
     if (!joined.success) throw new Error('join failed');
 
     const missing = await service.revokeDevice('no-such-device');
@@ -483,15 +548,19 @@ describe('PairingService', () => {
 
 describe('joinDeepLink', () => {
   it('builds an emdash://join URL carrying the full secret', () => {
-    const secret = 'emdj1_AB12-34_CD56-78_-aBcDeF';
+    const secret = composeSpaceSecret('AB12-34_CD56-78_EF90-1', mintJoinHalf(), mintK0());
     const link = joinDeepLink(secret);
     expect(link.startsWith('emdash://join?secret=')).toBe(true);
     expect(decodeURIComponent(link.slice('emdash://join?secret='.length))).toBe(secret);
   });
 
-  it('derives the same join hash for the encoded deep-link value', () => {
-    const secret = 'emdj1_AB12-34_CD56-78_-aBcDeF';
+  it('parses the encoded deep-link value into the same halves', () => {
+    const secret = composeSpaceSecret('AB12-34_CD56-78_EF90-1', mintJoinHalf(), mintK0());
     const rawValue = joinDeepLink(secret).split('?secret=')[1]!;
-    expect(deriveJoinHash(decodeURIComponent(rawValue))).toBe(deriveJoinHash(secret));
+    const fromLink = parseSpaceSecret(decodeURIComponent(rawValue));
+    const direct = parseSpaceSecret(secret);
+    expect(fromLink).not.toBeNull();
+    expect(fromLink?.spaceId).toBe(direct?.spaceId);
+    expect(Buffer.from(fromLink!.k0).equals(Buffer.from(direct!.k0))).toBe(true);
   });
 });

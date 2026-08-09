@@ -117,9 +117,7 @@ async function joinWith(
   // Accept both a full secret (extract the credential) and a bare credential,
   // so the pairing tests read naturally either way.
   const credential =
-    secretOrCredential.length === 26
-      ? secretOrCredential
-      : joinCredentialOf(secretOrCredential);
+    secretOrCredential.length === 26 ? secretOrCredential : joinCredentialOf(secretOrCredential);
   return post(db, '/v1/join', { join_hash: credential, space_id: spaceId }, undefined, now);
 }
 
@@ -281,9 +279,9 @@ describe('pairing', () => {
     // Wrong attempts against A's space burn A's budget, leaving B's secret usable.
     const wrong = freshUnknownCredential();
     for (let i = 0; i < MAX_JOIN_ATTEMPTS; i++) {
-      expect(
-        (await post(db, '/v1/join', { join_hash: wrong, space_id: a.space_id })).status
-      ).toBe(401);
+      expect((await post(db, '/v1/join', { join_hash: wrong, space_id: a.space_id })).status).toBe(
+        401
+      );
     }
     expect((await joinWith(db, a.secret, a.space_id)).status).toBe(401);
     expect((await joinWith(db, b.secret, b.space_id)).status).toBe(200);

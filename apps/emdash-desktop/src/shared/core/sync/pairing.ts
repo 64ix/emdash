@@ -13,7 +13,15 @@
 export const PAIRING_SECRET_TTL_MINUTES = 15;
 export const MAX_PAIRING_ATTEMPTS = 5;
 
-/** Prefix of every relay pairing secret (`emdj1_<space>_<random>_<checksum>`). */
+/**
+ * Prefix of every relay pairing secret (spec #130, ticket #134).
+ *
+ * The secret carries the two halves of the space pairing material:
+ * `emdj1_<space id 22>_<join half b32 26>_<k0 b32 52>` (108 chars). The join
+ * half is the only half that ever transits to the relay (and only as
+ * SHA-256); K0 — the space data key for AES-256-GCM row encryption — travels
+ * only inside the pasted secret, machine to machine.
+ */
 export const JOIN_SECRET_PREFIX = 'emdj1_';
 
 /** A device as listed by the relay (`GET /v1/devices`). */

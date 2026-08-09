@@ -258,11 +258,7 @@ export function joinCredentialOf(joinHalf: Uint8Array): string {
 }
 
 /** Composes the user-pasted secret from its three parts. */
-export function composeSpaceSecret(
-  spaceId: string,
-  joinHalf: Uint8Array,
-  k0: Uint8Array
-): string {
+export function composeSpaceSecret(spaceId: string, joinHalf: Uint8Array, k0: Uint8Array): string {
   if (!isSpaceId(spaceId)) {
     throw new Error(`invalid space id: ${spaceId}`);
   }

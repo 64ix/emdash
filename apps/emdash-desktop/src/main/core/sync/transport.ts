@@ -19,11 +19,24 @@ export interface SyncPatch {
   space: string;
   table: string;
   pk: string;
+  /** The per-space monotonic version stamped by the relay at write time. */
   version: number;
+  /**
+   * The version the encrypting machine bound into the body's AEAD AAD (its
+   * last-known version of the row, or 0). Stored verbatim by the relay, so
+   * replaying an old body under newer metadata fails decryption.
+   */
+  client_version: number;
   op: SyncOp;
   deleted: boolean;
   /** Opaque encoded payload; `null` for tombstones. Never inspected by the relay. */
   body: string | null;
+  /**
+   * Set by encrypting transports when a body could not be decrypted
+   * (unknown key id after a rekey, tampering, AAD mismatch). The engine
+   * records the patch's version and skips it instead of wedging the pull.
+   */
+  decryptError?: string;
 }
 
 export interface SyncPullResult {
@@ -36,10 +49,12 @@ export interface SyncMutation {
   table: string;
   pk: string;
   /**
-   * The client's last-known version of this row. Advisory: the relay ignores
-   * it for ordering and applies last-write-wins by server receipt order.
+   * The client's last-known version of this row (0 for never-synced rows).
+   * The relay stores it verbatim as `client_version` and ignores it for
+   * ordering (last-write-wins by server receipt order). Encrypting
+   * transports bind it into the body's AEAD AAD.
    */
-  version?: number;
+  client_version: number;
   body?: string | null;
   op: SyncOp;
 }
@@ -59,6 +74,7 @@ export interface SyncSpaceCreated {
 export interface SyncJoinResult {
   device_id: string;
   device_token: string;
+  space_id: string;
 }
 
 export interface SyncDeviceInfo {
@@ -89,8 +105,17 @@ export class RelayHttpError extends Error {
  */
 export interface RelayTransport {
   createSpace(name?: string): Promise<SyncSpaceCreated>;
-  join(joinHash: string, name?: string): Promise<SyncJoinResult>;
-  mintJoinSecret(): Promise<{ secret: string }>;
+  /**
+   * Joins a space with the base32 join credential extracted from the pairing
+   * secret, plus the space id the client parsed from that secret (the relay
+   * attributes failed attempts to the named space).
+   */
+  join(joinHash: string, spaceId: string, name?: string): Promise<SyncJoinResult>;
+  /**
+   * Registers a client-minted join credential: `joinHash` is the SHA-256 hex
+   * digest of the base32 join credential (K0 never transits).
+   */
+  mintJoinSecret(joinHash: string): Promise<{ join_hash: string }>;
   listDevices(): Promise<{ devices: SyncDeviceInfo[] }>;
   revokeDevice(deviceId: string): Promise<{ device_id: string; revoked: boolean }>;
   push(mutations: SyncMutation[]): Promise<SyncPushResult>;
@@ -112,12 +137,16 @@ export class HttpRelayTransport implements RelayTransport {
     return this.post<SyncSpaceCreated>('/v1/space', { name }, false);
   }
 
-  async join(joinHash: string, name?: string): Promise<SyncJoinResult> {
-    return this.post<SyncJoinResult>('/v1/join', { join_hash: joinHash, name }, false);
+  async join(joinHash: string, spaceId: string, name?: string): Promise<SyncJoinResult> {
+    return this.post<SyncJoinResult>(
+      '/v1/join',
+      { join_hash: joinHash, space_id: spaceId, name },
+      false
+    );
   }
 
-  async mintJoinSecret(): Promise<{ secret: string }> {
-    return this.post<{ secret: string }>('/v1/devices/join-secret', {});
+  async mintJoinSecret(joinHash: string): Promise<{ join_hash: string }> {
+    return this.post<{ join_hash: string }>('/v1/devices/join-secret', { join_hash: joinHash });
   }
 
   async listDevices(): Promise<{ devices: SyncDeviceInfo[] }> {

@@ -56,6 +56,12 @@ export interface SyncSummary {
    * parent was deleted and its tombstone already applied here).
    */
   skippedOrphan: number;
+  /**
+   * Patches skipped because their encrypted body could not be decrypted
+   * (unknown key id after a rekey, tampering, or relay row/version swaps).
+   * The patch's version is recorded so it is not re-fetched or re-pushed.
+   */
+  skippedUndecryptable: number;
 }
 
 export interface SyncEngineOptions {
@@ -78,6 +84,7 @@ const EMPTY_SUMMARY: SyncSummary = {
   skippedDirty: 0,
   skippedSeen: 0,
   skippedOrphan: 0,
+  skippedUndecryptable: 0,
 };
 
 interface PendingUpsert {
@@ -86,6 +93,11 @@ interface PendingUpsert {
   body: string;
   /** The row's clock value read when the mutation was built. */
   syncTs: number;
+  /**
+   * The client's last-known server version of the row (0 for never-synced
+   * rows); encrypting transports bind it into the body's AEAD AAD.
+   */
+  clientVersion: number;
 }
 
 interface PendingTombstone {
@@ -141,6 +153,7 @@ export class SyncEngine {
       skippedDirty: pullResult.data.skippedDirty,
       skippedSeen: pullResult.data.skippedSeen,
       skippedOrphan: pullResult.data.skippedOrphan,
+      skippedUndecryptable: pullResult.data.skippedUndecryptable,
     });
   }
 
@@ -169,6 +182,7 @@ export class SyncEngine {
             pk,
             body: JSON.stringify({ deviceId: this.deviceId, columns }),
             syncTs: rowSyncTs,
+            clientVersion: state?.serverVersion ?? 0,
           });
           if (config.table === 'projects' && state === null) {
             firstPushProjectPks.add(pk);
@@ -195,6 +209,7 @@ export class SyncEngine {
               pk,
               body: JSON.stringify({ deviceId: this.deviceId, columns }),
               syncTs: Number(row.sync_ts),
+              clientVersion: 0,
             });
           }
         }
@@ -216,6 +231,7 @@ export class SyncEngine {
           (item): SyncMutation => ({
             table: item.config.table,
             pk: item.pk,
+            client_version: item.clientVersion,
             body: item.body,
             op: 'upsert',
           })
@@ -224,6 +240,7 @@ export class SyncEngine {
           (item): SyncMutation => ({
             table: item.table,
             pk: item.pk,
+            client_version: 0,
             body: null,
             op: 'delete',
           })
@@ -317,6 +334,7 @@ export class SyncEngine {
         skippedDirty: summary.skippedDirty,
         skippedSeen: summary.skippedSeen,
         skippedOrphan: summary.skippedOrphan,
+        skippedUndecryptable: summary.skippedUndecryptable,
       });
       return ok(summary);
     } catch (error) {
@@ -361,6 +379,15 @@ export class SyncEngine {
       // later re-pull of it is skipped, then let the next push decide.
       upsertRowState(this.sqlite, config.table, patch.pk, patch.version, true, rowSyncTs);
       summary.skippedDirty += 1;
+      return;
+    }
+    if (patch.decryptError !== undefined) {
+      // The body could not be decrypted (rekey, tampering, relay swap):
+      // record the version as seen so the row is neither re-fetched nor
+      // re-pushed (echoing an undecryptable body would wedge every other
+      // machine), then keep pulling the rest of the batch.
+      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+      summary.skippedUndecryptable += 1;
       return;
     }
 

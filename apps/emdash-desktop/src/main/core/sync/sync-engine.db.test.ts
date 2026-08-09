@@ -26,6 +26,8 @@ import {
   projectSettings,
   tasks,
 } from '@main/db/schema';
+import { encryptBody, keyIdOf, mintK0 } from './crypto';
+import { EncryptingRelayTransport } from './encrypting-transport';
 import { SyncEngine } from './engine';
 import type {
   RelayTransport,
@@ -44,6 +46,7 @@ import type {
 
 interface RelayRow {
   version: number;
+  client_version: number;
   body: string | null;
   deleted: boolean;
 }
@@ -73,7 +76,7 @@ class FakeRelayTransport implements RelayTransport {
     this.version += 1;
     const version = this.version;
     const tableRows = this.rows.get(table) ?? new Map<string, RelayRow>();
-    tableRows.set(pk, { version, body, deleted });
+    tableRows.set(pk, { version, client_version: 0, body, deleted });
     this.rows.set(table, tableRows);
     return version;
   }
@@ -86,12 +89,12 @@ class FakeRelayTransport implements RelayTransport {
     return { space_id: 'space-1', device_id: 'device-1', device_token: 'token', secret: 'secret' };
   }
 
-  async join(_joinHash: string, _name?: string): Promise<SyncJoinResult> {
-    return { device_id: 'device-2', device_token: 'token-2' };
+  async join(_joinHash: string, _spaceId: string, _name?: string): Promise<SyncJoinResult> {
+    return { device_id: 'device-2', device_token: 'token-2', space_id: 'space-1' };
   }
 
-  async mintJoinSecret(): Promise<{ secret: string }> {
-    return { secret: 'secret-2' };
+  async mintJoinSecret(_joinHash: string): Promise<{ join_hash: string }> {
+    return { join_hash: 'x'.repeat(64) };
   }
 
   async listDevices(): Promise<{ devices: SyncDeviceInfo[] }> {
@@ -111,6 +114,7 @@ class FakeRelayTransport implements RelayTransport {
       const tableRows = this.rows.get(mutation.table) ?? new Map<string, RelayRow>();
       tableRows.set(mutation.pk, {
         version,
+        client_version: mutation.client_version,
         body: mutation.body ?? null,
         deleted: mutation.op === 'delete',
       });
@@ -131,6 +135,7 @@ class FakeRelayTransport implements RelayTransport {
           table,
           pk,
           version: row.version,
+          client_version: row.client_version,
           op: row.deleted ? 'delete' : 'upsert',
           deleted: row.deleted,
           body: row.body,
@@ -679,7 +684,7 @@ describe('SyncEngine', () => {
       const staleBody = relay.getRow('tasks', TASK_1)?.body;
       const versionBefore = relay.getRow('tasks', TASK_1)?.version ?? 0;
       const stalePush = await relay.push([
-        { table: 'tasks', pk: TASK_1, version: 1, body: staleBody ?? null, op: 'upsert' },
+        { table: 'tasks', pk: TASK_1, client_version: 1, body: staleBody ?? null, op: 'upsert' },
       ]);
       expect(stalePush.results[0]?.version).toBeGreaterThan(versionBefore);
 
@@ -1441,6 +1446,189 @@ describe('SyncEngine', () => {
       }
       expect(relay.maxVersion).toBe(versionBefore);
       expect(readWorld(fixtureA)).toEqual(worldB);
+    });
+  });
+
+  describe('end-to-end encryption (ticket #134)', () => {
+    // One space, one K0, two machines: the same key both machines derived
+    // from the pairing secret.
+    const k0 = mintK0();
+    const keyId = keyIdOf(k0);
+    const keyReader = { get: async () => ({ success: true as const, data: { keyId, k0 } }) };
+
+    function encryptedEngine(
+      fixture: FixtureDb,
+      relay: RelayTransport,
+      deviceId: string
+    ): SyncEngine {
+      return new SyncEngine({
+        sqlite: fixture.sqlite,
+        transport: new EncryptingRelayTransport(relay, keyReader),
+        deviceId,
+      });
+    }
+
+    it('pushes envelopes (no plaintext on the wire) and decrypts on pull', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = encryptedEngine(fixtureA, relay, 'device-a');
+      const engineB = encryptedEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      expectOk(await engineA.syncNow());
+
+      // The fake relay's stored body is a versioned envelope — the plaintext
+      // JSON payload (device id, column names, values) never leaves A.
+      const stored = relay.getRow('projects', PROJECT_A)?.body;
+      expect(stored).not.toBeNull();
+      const envelope = JSON.parse(stored!) as Record<string, unknown>;
+      expect(Object.keys(envelope).sort()).toEqual(['alg', 'ct', 'key_id', 'nonce']);
+      expect(envelope.alg).toBe('AES-256-GCM');
+      expect(envelope.key_id).toBe(keyId);
+      expect(stored).not.toContain('Repo');
+      expect(stored).not.toContain('"columns"');
+      expect(stored).not.toContain('device-a');
+
+      // B pulls and decrypts: the local row content equals A's.
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Repo'
+      );
+    });
+
+    it('sends the client_version on push and decrypts with the stored one on pull', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = encryptedEngine(fixtureA, relay, 'device-a');
+      const engineB = encryptedEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      expectOk(await engineA.syncNow());
+      // First push of a never-synced row carries client_version 0.
+      expect(relay.getRow('projects', PROJECT_A)?.client_version).toBe(0);
+
+      // B applies the row (server version 1), edits it, and pushes the edit
+      // bound to its last-known server version.
+      expectOk(await engineB.syncNow());
+      await fixtureB.db
+        .update(projects)
+        .set({ name: 'Renamed on B' })
+        .where(eq(projects.id, PROJECT_A));
+      expectOk(await engineB.syncNow());
+      expect(relay.getRow('projects', PROJECT_A)?.client_version).toBe(1);
+
+      // A pulls the re-encrypted patch and decrypts it under client_version 1.
+      expectOk(await engineA.syncNow());
+      expect(rawGet(fixtureA, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Renamed on B'
+      );
+    });
+
+    it('continues the pull past an undecryptable patch (rekeyed body) and counts it', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineB = encryptedEngine(fixtureB, relay, 'device-b');
+
+      // One row encrypted under the space key (decryptable), one under a
+      // foreign key (another machine rekeyed the space) and one tampered.
+      const good = encryptBody(
+        k0,
+        keyId,
+        { table: 'projects', pk: PROJECT_A, version: 0, keyId },
+        JSON.stringify({ deviceId: 'a', columns: { id: PROJECT_A, name: 'Repo' } })
+      );
+      const foreignK0 = mintK0();
+      const foreignKeyId = keyIdOf(foreignK0);
+      const foreign = encryptBody(
+        foreignK0,
+        foreignKeyId,
+        { table: 'tasks', pk: TASK_1, version: 0, keyId: foreignKeyId },
+        JSON.stringify({ deviceId: 'x', columns: { id: TASK_1, project_id: PROJECT_A, name: 'X' } })
+      );
+      const tamperedEnvelope = JSON.parse(
+        encryptBody(k0, keyId, { table: 'conversations', pk: CONV_1, version: 0, keyId }, 'old')
+      ) as { ct: string };
+      const tamperedBits = Buffer.from(tamperedEnvelope.ct, 'base64url');
+      tamperedBits[0] = tamperedBits[0]! ^ 1;
+      const tampered = JSON.stringify({
+        ...tamperedEnvelope,
+        ct: tamperedBits.toString('base64url'),
+      });
+
+      relay.seedRow('projects', PROJECT_A, good);
+      relay.seedRow('tasks', TASK_1, foreign);
+      relay.seedRow('conversations', CONV_1, tampered);
+
+      const pull = await engineB.syncNow();
+      expectOk(pull);
+      if (!pull.success) return;
+      expect(pull.data.skippedUndecryptable).toBe(2);
+      // The decryptable row was applied; the undecryptable ones were skipped
+      // without aborting the batch, and the cursor still advanced past all.
+      expect(rawGet(fixtureB, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)).toBeDefined();
+      expect(rawGet(fixtureB, 'SELECT id FROM tasks WHERE id = ?', TASK_1)).toBeUndefined();
+      expect(rawGet(fixtureB, 'SELECT id FROM conversations WHERE id = ?', CONV_1)).toBeUndefined();
+      expect(
+        JSON.parse(
+          rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'sync:cursor'")?.value as string
+        )
+      ).toBe(relay.maxVersion);
+
+      // The skipped rows are recorded as seen: no re-push, no re-fetch wedge.
+      const state = rawGet(fixtureB, 'SELECT * FROM sync_row_state WHERE pk = ?', TASK_1);
+      expect(state?.server_version).toBe(2);
+      expect(state?.dirty).toBe(0);
+    });
+
+    it('keeps the last good content when a newer patch fails to decrypt, and applies later good patches', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = encryptedEngine(fixtureA, relay, 'device-a');
+      const engineB = encryptedEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Repo'
+      );
+
+      // A rekeys and re-encrypts the row under a new key id (simulated by
+      // seeding); B cannot decrypt that patch but keeps its last good row.
+      const foreignK0 = mintK0();
+      const foreignKeyId = keyIdOf(foreignK0);
+      const foreign = encryptBody(
+        foreignK0,
+        foreignKeyId,
+        { table: 'projects', pk: PROJECT_A, version: 1, keyId: foreignKeyId },
+        JSON.stringify({ deviceId: 'a', columns: { id: PROJECT_A, name: 'Rekeyed' } })
+      );
+      relay.seedRow('projects', PROJECT_A, foreign);
+
+      const pull = await engineB.syncNow();
+      expectOk(pull);
+      if (!pull.success) return;
+      expect(pull.data.skippedUndecryptable).toBe(1);
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Repo'
+      );
+
+      // A (still holding K0) pushes a decryptable edit at a newer version;
+      // B applies it once it arrives — the skipped version does not wedge
+      // the row.
+      await fixtureA.db
+        .update(projects)
+        .set({ name: 'Renamed on A' })
+        .where(eq(projects.id, PROJECT_A));
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Renamed on A'
+      );
     });
   });
 });

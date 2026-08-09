@@ -30,6 +30,7 @@ export interface RelaySpaceCreated {
 export interface RelayJoinResult {
   deviceId: string;
   deviceToken: string;
+  spaceId: string;
 }
 
 /** One entry of `GET /v1/devices`. */
@@ -43,9 +44,13 @@ export interface RelayDeviceInfo {
   self: boolean;
 }
 
-/** `POST /v1/devices/join-secret` response. */
+/**
+ * `POST /v1/devices/join-secret` response: the echo of the registered
+ * SHA-256 digest of the join credential. The secret itself is composed
+ * client-side (fresh join half + the stored K0) and never sent.
+ */
 export interface RelaySecretResult {
-  secret: string;
+  join_hash: string;
 }
 
 export type RelayApiError =
@@ -58,8 +63,15 @@ export type RelayApiError =
 /** The pairing surface of the relay, as seen by the app. */
 export interface RelayAuthApi {
   createSpace(name: string): Promise<Result<RelaySpaceCreated, RelayApiError>>;
-  joinSpace(joinHash: string, name: string): Promise<Result<RelayJoinResult, RelayApiError>>;
-  mintJoinSecret(token: string): Promise<Result<RelaySecretResult, RelayApiError>>;
+  joinSpace(
+    joinHash: string,
+    spaceId: string,
+    name: string
+  ): Promise<Result<RelayJoinResult, RelayApiError>>;
+  mintJoinSecret(
+    token: string,
+    joinHash: string
+  ): Promise<Result<RelaySecretResult, RelayApiError>>;
   listDevices(token: string): Promise<Result<RelayDeviceInfo[], RelayApiError>>;
   revokeDevice(token: string, deviceId: string): Promise<Result<void, RelayApiError>>;
 }
@@ -76,15 +88,28 @@ export class HttpRelayAuthApi implements RelayAuthApi {
     return this.post<RelaySpaceCreated, { name?: string }>('/v1/space', { name });
   }
 
-  async joinSpace(joinHash: string, name: string): Promise<Result<RelayJoinResult, RelayApiError>> {
-    return this.post<RelayJoinResult, { join_hash: string; name?: string }>('/v1/join', {
-      join_hash: joinHash,
-      name,
-    });
+  async joinSpace(
+    joinHash: string,
+    spaceId: string,
+    name: string
+  ): Promise<Result<RelayJoinResult, RelayApiError>> {
+    return this.post<RelayJoinResult, { join_hash: string; space_id: string; name?: string }>(
+      '/v1/join',
+      { join_hash: joinHash, space_id: spaceId, name }
+    );
   }
 
-  async mintJoinSecret(token: string): Promise<Result<RelaySecretResult, RelayApiError>> {
-    return this.post<RelaySecretResult>('/v1/devices/join-secret', {}, token);
+  async mintJoinSecret(
+    token: string,
+    joinHash: string
+  ): Promise<Result<RelaySecretResult, RelayApiError>> {
+    return this.post<RelaySecretResult, { join_hash: string }>(
+      '/v1/devices/join-secret',
+      {
+        join_hash: joinHash,
+      },
+      token
+    );
   }
 
   async listDevices(token: string): Promise<Result<RelayDeviceInfo[], RelayApiError>> {
@@ -96,7 +121,7 @@ export class HttpRelayAuthApi implements RelayAuthApi {
   }
 
   async revokeDevice(token: string, deviceId: string): Promise<Result<void, RelayApiError>> {
-    const result = await this.post<{ device_id: string; revoked: boolean }>(
+    const result = await this.post<{ device_id: string; revoked: boolean }, { device_id: string }>(
       '/v1/devices/revoke',
       { device_id: deviceId },
       token
