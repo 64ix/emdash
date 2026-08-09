@@ -29,6 +29,7 @@ import { providerSettingsController } from './core/settings/provider-settings-co
 import { skillsController } from './core/skills/controller';
 import { sshController } from './core/ssh/controller';
 import { storageController } from './core/storage/controller';
+import { syncController } from './core/sync/sync-controller';
 import { taskController } from './core/tasks/controller';
 import { telemetryController } from './core/telemetry/controller';
 import { terminalsController } from './core/terminals/controller';
@@ -71,6 +72,7 @@ export const rpcRouter = createRPCRouter({
   viewState: viewStateController,
   search: searchController,
   projectSettings: projectSettingsController,
+  sync: syncController,
   workspace: createRPCNamespace({
     gitWorktree: gitWorktreeController,
     files: workspaceFileSystemController,
