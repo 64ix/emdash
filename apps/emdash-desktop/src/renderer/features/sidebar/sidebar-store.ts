@@ -69,6 +69,17 @@ function sanitizeHiddenTaskIds(value: Record<string, unknown>): Record<string, s
   return result;
 }
 
+/**
+ * Keeps only string project ids from a persisted snapshot blob (spec #104) —
+ * snapshots from an older or newer app version must not corrupt the Global
+ * Board project filter. A non-array blob (older or foreign shape) is treated
+ * as absent: `undefined` = "all projects", the filter's default.
+ */
+function sanitizeGlobalBoardProjectFilter(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((id): id is string => typeof id === 'string');
+}
+
 export class SidebarStore implements Snapshottable<SidebarSnapshot> {
   projectOrder: string[] = [];
   taskOrderByProject: Record<string, string[]> = {};
@@ -92,6 +103,16 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
    * never matches a row), so the set is never pruned reactively.
    */
   hiddenTaskIdsByProject: Record<string, string[]> = {};
+  /**
+   * Global Board project multi-select (spec #104, ticket #105): the project
+   * ids whose cards the Global Board shows; `undefined` = "all projects" —
+   * the default, and never persisted as a value. The only Global Board filter
+   * that persists (the Board Header's other filters are ephemeral view
+   * state). Scoped per workspace: the sidebar snapshot is app-global today
+   * (a single workspace), so this field holds that workspace's value — if
+   * the app ever gains multiple workspaces, key this field by workspace id.
+   */
+  globalBoardProjectFilter: string[] | undefined = undefined;
 
   constructor(private readonly projectManager: ProjectManagerStore) {
     makeAutoObservable(this, {
@@ -297,6 +318,9 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
       taskSortBy: this.taskSortBy,
       collapsedStageGroupIdsByProject: { ...this.collapsedStageGroupIdsByProject },
       hiddenTaskIdsByProject: { ...this.hiddenTaskIdsByProject },
+      globalBoardProjectFilter: this.globalBoardProjectFilter
+        ? [...this.globalBoardProjectFilter]
+        : undefined,
     };
   }
 
@@ -324,6 +348,11 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
     }
     if (snapshot.hiddenTaskIdsByProject !== undefined) {
       this.hiddenTaskIdsByProject = sanitizeHiddenTaskIds(snapshot.hiddenTaskIdsByProject);
+    }
+    if (snapshot.globalBoardProjectFilter !== undefined) {
+      this.globalBoardProjectFilter = sanitizeGlobalBoardProjectFilter(
+        snapshot.globalBoardProjectFilter
+      );
     }
   }
 
@@ -400,6 +429,15 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
 
   setTaskSortBy(sortBy: SidebarTaskSortBy): void {
     this.taskSortBy = sortBy;
+  }
+
+  /**
+   * Set the Global Board project multi-select (spec #104, ticket #105):
+   * the projects whose cards the Global Board shows. `undefined` resets to
+   * the default — "all projects". Persisted in the sidebar snapshot.
+   */
+  setGlobalBoardProjectFilter(projectIds: string[] | undefined): void {
+    this.globalBoardProjectFilter = projectIds;
   }
 
   /** Set the sort key and clear all manual task orders so the list fully re-sorts. */

@@ -88,3 +88,41 @@ describe('createAppCommandProvider — project-aware Feature Board command (tick
     });
   });
 });
+
+describe('createAppCommandProvider — Global Board command (spec #104, ticket #108)', () => {
+  function commandIds(): string[] {
+    return createAppCommandProvider()
+      .getCommands()
+      .map((c) => c.id);
+  }
+
+  it('offers "Open Global Board" with no project context (e.g. home)', () => {
+    mocks.currentViewId = 'home';
+    mocks.viewParamsStore = {};
+    expect(commandIds()).toContain('app.openGlobalBoard');
+    // Contrast with the project-scoped Feature Board command (ticket #43),
+    // which must NOT be offered without a resolved project.
+    expect(commandIds()).not.toContain('app.openFeatureBoard');
+  });
+
+  it('stays offered while a project is resolved (project/task/board views)', () => {
+    mocks.currentViewId = 'task';
+    mocks.viewParamsStore = { task: { projectId: 'proj-1' } };
+    expect(commandIds()).toContain('app.openGlobalBoard');
+    expect(commandIds()).toContain('app.openFeatureBoard');
+  });
+
+  it('navigates to the Global Board view when executed', () => {
+    mocks.currentViewId = 'home';
+    mocks.viewParamsStore = {};
+    mocks.navigate.mockClear();
+
+    const command = createAppCommandProvider()
+      .getCommands()
+      .find((c) => c.id === 'app.openGlobalBoard');
+    command?.execute();
+
+    expect(mocks.navigate).toHaveBeenCalledTimes(1);
+    expect(mocks.navigate).toHaveBeenCalledWith('global-board');
+  });
+});

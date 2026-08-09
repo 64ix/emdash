@@ -124,8 +124,13 @@ function columnToStage(column: ColumnId): WorkflowStage | null {
  * keeps its cross-stage destinations disabled exactly like a Spec-derived
  * one — otherwise the next `syncProject` pass would silently revert the
  * drag).
+ *
+ * Exported for the Global Board (spec #104, ticket #107), which enforces the
+ * same blocking rules over the same facts — one implementation, never two
+ * that could drift (the assigned-PR precedence above was itself a regression
+ * once, ticket #101 x #48).
  */
-function authorityForTask(
+export function authorityForTask(
   task: Pick<Task, 'workflowStage' | 'linkedIssues' | 'prs' | 'workspaceId' | 'assignedPr'>,
   branchName: string | null
 ): StageAuthority {
@@ -1202,16 +1207,27 @@ const BoardColumn = observer(function BoardColumn({
   );
 });
 
-const BoardCard = observer(function BoardCard({
+/**
+ * The Feature Board's card. Exported for the Global Board (spec #104, ticket
+ * #107), which renders the same card with an optional project marker — the
+ * Feature Board itself never passes `projectLabel`, so its cards are
+ * byte-for-byte unchanged.
+ */
+export const BoardCard = observer(function BoardCard({
   store,
   isSelected,
   onSelect,
   onOpenTask,
+  projectLabel,
 }: {
   store: TaskStore;
   isSelected: boolean;
   onSelect: (taskId: string) => void;
   onOpenTask: (taskId: string) => void;
+  /** Project marker (spec #104): the card's project, rendered as a compact
+   * badge on the Global Board's cross-project columns. Absent on the Feature
+   * Board, where every card's project is the header's own. */
+  projectLabel?: string;
 }) {
   const {
     setNodeRef,
@@ -1366,6 +1382,18 @@ const BoardCard = observer(function BoardCard({
       >
         {task.name}
       </span>
+
+      {/* Project marker (spec #104): the Global Board's cross-project columns
+          mark each card with its project. Only rendered when the prop is
+          provided — the Feature Board never passes it. Padded like the title
+          so it clears the same absolutely-positioned corner buttons. */}
+      {projectLabel && (
+        <div className="w-full px-4">
+          <Badge variant="outline" className="gap-1 text-[10px]">
+            {projectLabel}
+          </Badge>
+        </div>
+      )}
 
       {/* Actionable agent state: the fact the card leads with, since it
           answers "what needs my attention?" (CONTEXT.md). Always carries a

@@ -141,6 +141,23 @@ export function createAppCommandProvider(): CommandProvider {
         });
       }
 
+      // Global Board destination (spec #104, ticket #108): the cross-project
+      // sibling of `app.openFeatureBoard`, deliberately offered regardless of
+      // project context — unlike the Feature Board command it must never be
+      // gated on a resolved project. Navigation records `global_board_viewed`
+      // via the view registry, so no extra telemetry is fired here.
+      const openGlobalBoardDef = appDef('app.openGlobalBoard');
+      commands.push({
+        id: openGlobalBoardDef.id,
+        label: openGlobalBoardDef.label,
+        description: openGlobalBoardDef.description,
+        shortcutKey: openGlobalBoardDef.shortcutKey,
+        group: openGlobalBoardDef.group,
+        execute() {
+          appState.navigation.navigate('global-board');
+        },
+      });
+
       commands.push(
         {
           id: navigateBackDef.id,

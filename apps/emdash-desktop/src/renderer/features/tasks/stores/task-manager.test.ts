@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Task } from '@shared/core/tasks/tasks';
 import { TaskManagerStore } from './task-manager';
-import { createUnprovisionedTask } from './task-store';
+import { createUnprovisionedTask, createUnregisteredTask } from './task-store';
 
 type MockViewModel = {
   initialize: ReturnType<typeof vi.fn>;
@@ -217,6 +217,91 @@ describe('TaskManagerStore archive lifecycle', () => {
     expect(store.viewModel).toBe(mocks.viewModels[1]);
     expect(mocks.viewModels[1].restoreSnapshot).toHaveBeenCalledWith(snapshot);
     expect(mocks.viewModels[1].initialize).toHaveBeenCalledOnce();
+
+    manager.dispose();
+  });
+});
+
+describe('TaskManagerStore.mergeGlobalTasks — Global Board open sync (spec #104, ticket #108)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.draftComments.length = 0;
+    mocks.viewModels.length = 0;
+  });
+
+  it('ingests an unseen task of this project exactly like loadTasks (unprovisioned + registries)', () => {
+    const manager = makeTaskManager();
+    const incoming = makeTask({ id: 'fresh-task', name: 'Fresh task' });
+
+    manager.mergeGlobalTasks([incoming]);
+
+    const store = manager.tasks.get('fresh-task');
+    expect(store).toBeDefined();
+    expect(store?.state).toBe('unprovisioned');
+    expect(store?.phase).toBe('idle');
+    expect(store?.data.name).toBe('Fresh task');
+    expect(mocks.conversationAcquire).toHaveBeenCalledWith('fresh-task', 'project-1', []);
+    expect(mocks.terminalAcquire).toHaveBeenCalledWith('fresh-task', 'project-1');
+
+    manager.dispose();
+  });
+
+  it('refreshes the row of an existing registered store wholesale', () => {
+    const manager = makeTaskManager();
+    const original = makeTask({ name: 'Old name', workflowStage: 'idea' });
+    const store = createUnprovisionedTask(original);
+    manager.tasks.set(original.id, store);
+
+    manager.mergeGlobalTasks([makeTask({ name: 'New name', workflowStage: 'spec' })]);
+
+    const refreshed = store.data as Task;
+    expect(refreshed.name).toBe('New name');
+    expect(refreshed.workflowStage).toBe('spec');
+    // An existing store is refreshed in place — no re-acquisition.
+    expect(mocks.conversationAcquire).not.toHaveBeenCalled();
+    expect(mocks.terminalAcquire).not.toHaveBeenCalled();
+
+    manager.dispose();
+  });
+
+  it('never touches an optimistic (unregistered) store mid-creation', () => {
+    const manager = makeTaskManager();
+    const optimistic = createUnregisteredTask({
+      id: 'task-1',
+      name: 'Optimistic name',
+      status: 'todo',
+      lastInteractedAt: '2026-01-01T00:00:00.000Z',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      statusChangedAt: '2026-01-01T00:00:00.000Z',
+      isPinned: false,
+      type: 'task',
+    });
+    manager.tasks.set('task-1', optimistic);
+
+    manager.mergeGlobalTasks([makeTask({ name: 'DB name' })]);
+
+    expect(optimistic.state).toBe('unregistered');
+    expect(optimistic.data.name).toBe('Optimistic name');
+    expect(mocks.conversationAcquire).not.toHaveBeenCalled();
+
+    manager.dispose();
+  });
+
+  it('ignores tasks of other projects and never removes existing tasks', () => {
+    const manager = makeTaskManager();
+    const keep = makeTask({ name: 'Keep me' });
+    manager.tasks.set(keep.id, createUnprovisionedTask(keep));
+
+    manager.mergeGlobalTasks([
+      makeTask({ id: 'other-project-task', projectId: 'project-2' }),
+      makeTask({ id: 'no-manager-project-task', projectId: 'project-99' }),
+    ]);
+
+    expect(manager.tasks.has('other-project-task')).toBe(false);
+    expect(manager.tasks.has('no-manager-project-task')).toBe(false);
+    expect(manager.tasks.has(keep.id)).toBe(true);
+    expect(manager.tasks.get(keep.id)?.data.name).toBe('Keep me');
+    expect(mocks.conversationAcquire).not.toHaveBeenCalled();
 
     manager.dispose();
   });

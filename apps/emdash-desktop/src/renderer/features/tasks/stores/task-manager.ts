@@ -378,6 +378,33 @@ export class TaskManagerStore {
     return this._loadPromise;
   }
 
+  /**
+   * Global Board open sync (spec #104, ticket #108): merges the result of the
+   * single global `tasks.getTasks()` (no projectId) into this project's task
+   * map. Tasks of other projects are ignored; unseen tasks are ingested
+   * exactly like `loadTasks` (unprovisioned store + conversation/terminal
+   * registries); tasks already registered get their row refreshed wholesale
+   * (the same pattern the store transitions use) — the global path's batched
+   * PRs land with it. Deliberately scoped: optimistic (unregistered) stores
+   * are never touched, and nothing is ever removed — this is a freshness
+   * pass, not an authoritative sync.
+   */
+  mergeGlobalTasks(tasks: readonly Task[]): void {
+    runInAction(() => {
+      for (const task of tasks) {
+        if (task.projectId !== this.projectId) continue;
+        const store = this.tasks.get(task.id);
+        if (!store) {
+          this.tasks.set(task.id, createUnprovisionedTask(task));
+          conversationRegistry.acquire(task.id, this.projectId, []);
+          terminalRegistry.acquire(task.id, this.projectId);
+        } else if (isRegistered(store)) {
+          store.data = task;
+        }
+      }
+    });
+  }
+
   async createTask(params: CreateTaskParams) {
     runInAction(() => {
       const { taskConfig } = params;

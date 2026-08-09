@@ -665,6 +665,54 @@ describe('SidebarStore hidden tasks (spec #85, ticket #87)', () => {
     expect(store.hiddenTaskIdsByProject).toEqual({ 'project-1': ['s1'] });
   });
 
+  it('defaults the Global Board project filter to all projects (undefined)', () => {
+    const store = new SidebarStore(projectManager([]));
+    expect(store.globalBoardProjectFilter).toBeUndefined();
+    expect(store.snapshot.globalBoardProjectFilter).toBeUndefined();
+  });
+
+  it('persists the Global Board project filter in the snapshot and restores it', () => {
+    const store = new SidebarStore(projectManager([]));
+    store.setGlobalBoardProjectFilter(['project-1', 'project-2']);
+
+    const restored = new SidebarStore(projectManager([]));
+    restored.restoreSnapshot(store.snapshot);
+
+    expect(restored.globalBoardProjectFilter).toEqual(['project-1', 'project-2']);
+  });
+
+  it('round-trips an empty Global Board project selection (all projects)', () => {
+    const store = new SidebarStore(projectManager([]));
+    store.setGlobalBoardProjectFilter([]);
+
+    const restored = new SidebarStore(projectManager([]));
+    restored.restoreSnapshot(store.snapshot);
+
+    expect(restored.globalBoardProjectFilter).toEqual([]);
+  });
+
+  it('leaves the filter at its default when a snapshot carries no filter', () => {
+    const store = new SidebarStore(projectManager([]));
+    store.restoreSnapshot({ taskSortBy: 'created-at' });
+    expect(store.globalBoardProjectFilter).toBeUndefined();
+  });
+
+  it('drops non-string ids when restoring the Global Board project filter', () => {
+    const store = new SidebarStore(projectManager([]));
+    store.restoreSnapshot({
+      globalBoardProjectFilter: ['project-1', 42 as unknown as string, null as unknown as string],
+    });
+    expect(store.globalBoardProjectFilter).toEqual(['project-1']);
+  });
+
+  it('treats a non-array filter blob as absent (all projects)', () => {
+    const store = new SidebarStore(projectManager([]));
+    store.restoreSnapshot({
+      globalBoardProjectFilter: 'project-1' as unknown as string[],
+    });
+    expect(store.globalBoardProjectFilter).toBeUndefined();
+  });
+
   it('excludes hidden tasks from per-project navigation order', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([

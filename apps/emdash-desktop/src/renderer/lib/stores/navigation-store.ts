@@ -21,10 +21,14 @@ export const viewEvents: Record<
   | 'mcp_viewed'
   | 'automations_viewed'
   | 'board_viewed'
+  | 'global_board_viewed'
 > = {
   home: 'home_viewed',
   automations: 'automations_viewed',
   board: 'board_viewed',
+  // spec #104: the Global Board is its own view, so its navigation telemetry
+  // is its own event rather than another `board_viewed` source.
+  'global-board': 'global_board_viewed',
   library: 'library_viewed',
   project: 'project_viewed',
   task: 'task_viewed',

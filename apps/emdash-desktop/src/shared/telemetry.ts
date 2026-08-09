@@ -19,7 +19,8 @@ export type FocusView =
   | 'skills'
   | 'mcp'
   | 'automations'
-  | 'board';
+  | 'board'
+  | 'global-board';
 export type FocusMainPanel = 'agents' | 'editor' | 'diff' | 'browser' | 'terminal';
 export type FocusedRegion = 'main' | 'bottom';
 
@@ -70,6 +71,13 @@ export type TelemetryEventProperties = {
   mcp_viewed: { from_view: FocusView | null };
   automations_viewed: { from_view: FocusView | null };
   board_viewed: { from_view: FocusView | null };
+  /**
+   * Navigation into the Global Board (spec #104): the cross-project sibling
+   * of `board_viewed`, kept as its own event so the two boards' navigation
+   * traffic is distinguishable without a `board_opened`-style entry-point
+   * source (the Global Board's entry points are later spec tickets).
+   */
+  global_board_viewed: { from_view: FocusView | null };
   /**
    * Feature Board entry-point instrumentation (spec #25, ticket #43):
    * distinguishes which UI affordance sent the user to a project's board,

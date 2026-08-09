@@ -65,6 +65,14 @@ export const APP_COMMAND_DEFS = defineCommandDefs([
     iconKey: 'kanban',
   },
   {
+    id: 'app.openGlobalBoard',
+    label: 'Open Global Board',
+    description: 'Open the cross-project Global Board',
+    scope: 'app',
+    group: 'App',
+    iconKey: 'kanban',
+  },
+  {
     id: 'app.giveFeedback',
     label: 'Give Feedback',
     description: 'Send feedback to the emdash team',
