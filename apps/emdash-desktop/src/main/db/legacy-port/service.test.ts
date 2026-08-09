@@ -277,7 +277,7 @@ describe('runLegacyPort', () => {
       branch_name: 'feature/legacy-1',
     });
     expect(JSON.parse(importedWorkspace.config)).toEqual({
-      version: '2',
+      version: '3',
       git: { kind: 'use-branch', branchName: 'feature/legacy-1' },
       workspace: { kind: 'new-worktree' },
     });

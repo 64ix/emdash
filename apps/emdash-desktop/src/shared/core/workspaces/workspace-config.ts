@@ -56,10 +56,10 @@ const v1Schema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// v2 schema — current version
+// v2 schema
 // ---------------------------------------------------------------------------
 
-const workspaceTargetSchema = z.discriminatedUnion('kind', [
+const v2WorkspaceTargetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('repository-instance'), workspaceId: z.string() }),
   z.object({ kind: z.literal('new-worktree') }),
   z.object({ kind: z.literal('byoi'), remoteWorkspaceId: z.string().optional() }),
@@ -68,7 +68,27 @@ const workspaceTargetSchema = z.discriminatedUnion('kind', [
 const v2Schema = z.object({
   version: z.literal('2'),
   git: gitSetupSchema,
-  workspace: workspaceTargetSchema,
+  workspace: v2WorkspaceTargetSchema,
+});
+
+// ---------------------------------------------------------------------------
+// v3 schema — current version
+// ---------------------------------------------------------------------------
+
+const v3WorkspaceTargetSchema = z.discriminatedUnion('kind', [
+  // `workspaceId` is a machine-local workspace reference (the project's
+  // repository workspace). Automations store repository-instance targets
+  // without it (v3) so a config synced to another machine resolves against
+  // that machine's own repository workspace at run time.
+  z.object({ kind: z.literal('repository-instance'), workspaceId: z.string().optional() }),
+  z.object({ kind: z.literal('new-worktree') }),
+  z.object({ kind: z.literal('byoi'), remoteWorkspaceId: z.string().optional() }),
+]);
+
+const v3Schema = z.object({
+  version: z.literal('3'),
+  git: gitSetupSchema,
+  workspace: v3WorkspaceTargetSchema,
 });
 
 // ---------------------------------------------------------------------------
@@ -83,6 +103,10 @@ const v2Schema = z.object({
  * the workspace host is local/project-ssh, because the `repositoryWorkspaceId`
  * needed to produce a `repository-instance` target is not available here.
  * Callers that need a fully resolved config for that case must supply context.
+ *
+ * v2 → v3 upgrade: `repository-instance.workspaceId` becomes optional. Stored
+ * automation task configs drop the machine-local workspace id (resolution
+ * happens against the mounted project at run time); v2 blobs keep their id.
  */
 export const workspaceConfig = defineVersionedSchema()
   .initial('1', v1Schema)
@@ -101,17 +125,18 @@ export const workspaceConfig = defineVersionedSchema()
     }
     return { version: '2' as const, git, workspace: { kind: 'new-worktree' as const } };
   })
+  .version('3', v3Schema, (v2) => ({ ...v2, version: '3' as const }))
   .build();
 
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
-/** The Zod schema for the latest (v2) workspace config. */
+/** The Zod schema for the latest (v3) workspace config. */
 export const workspaceConfigSchema = workspaceConfig.schema;
 
-/** The TypeScript type for the latest (v2) workspace config. */
+/** The TypeScript type for the latest (v3) workspace config. */
 export type WorkspaceConfig = typeof workspaceConfig.Type;
 
-/** The TypeScript type for the `workspace` field of a v2 config. */
-export type WorkspaceTarget = z.infer<typeof workspaceTargetSchema>;
+/** The TypeScript type for the `workspace` field of a v3 config. */
+export type WorkspaceTarget = z.infer<typeof v3WorkspaceTargetSchema>;

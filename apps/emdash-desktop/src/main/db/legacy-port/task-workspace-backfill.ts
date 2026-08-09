@@ -31,7 +31,7 @@ function deriveWorkspaceLocation(project: {
 
 function buildImportedWorktreeConfig(branchName: string): WorkspaceConfig {
   return {
-    version: '2',
+    version: '3',
     git: { kind: 'use-branch', branchName },
     workspace: { kind: 'new-worktree' },
   };
@@ -165,7 +165,9 @@ export function ensureImportedTaskWorkspaces(appDb: AppDb): void {
     for (const row of rows) {
       const project = {
         projectId: row.projectId,
-        projectPath: row.projectPath,
+        // Sync-imported projects may have no local path yet; the backfill only
+        // runs for legacy rows that were created with one.
+        projectPath: row.projectPath ?? '',
         workspaceProvider: row.workspaceProvider,
         sshConnectionId: row.sshConnectionId,
         repositoryWorkspaceId:

@@ -208,7 +208,7 @@ describe('WorkspaceBootstrapService', () => {
           path: '/worktrees/broken-task-branch',
           branchName: 'task/branch',
           config: {
-            version: '2',
+            version: '3',
             git: {
               kind: 'create-branch',
               branchName: 'task/branch',

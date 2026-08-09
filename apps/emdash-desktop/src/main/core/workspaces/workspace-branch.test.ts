@@ -3,7 +3,7 @@ import type { WorkspaceConfig } from '@shared/core/workspaces/workspace-config';
 import { getProvisionedWorkspaceBranch, getTaskPrBranch } from './workspace-branch';
 
 const createBranchConfig: WorkspaceConfig = {
-  version: '2',
+  version: '3',
   git: {
     kind: 'create-branch',
     branchName: 'task/provisioned',
@@ -45,7 +45,7 @@ describe('workspace branch metadata', () => {
 
   it('does not treat a worktree row with git none as owning a branch', () => {
     const config: WorkspaceConfig = {
-      version: '2',
+      version: '3',
       git: { kind: 'none' },
       workspace: { kind: 'new-worktree' },
     };

@@ -231,7 +231,7 @@ export function useWorkspaceConfig(opts: {
     } catch {
       // Return a safe fallback when context is incomplete (e.g. PR not yet selected).
       return {
-        version: '2',
+        version: '3',
         git: { kind: 'none' },
         workspace: repositoryWorkspaceId
           ? { kind: 'repository-instance', workspaceId: repositoryWorkspaceId }

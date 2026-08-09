@@ -229,7 +229,7 @@ describe('legacy-port table passes', () => {
         'local',
         'feature/shared',
         JSON.stringify({
-          version: '2',
+          version: '3',
           git: { kind: 'use-branch', branchName: 'feature/shared' },
           workspace: { kind: 'new-worktree' },
         })
@@ -397,7 +397,7 @@ describe('legacy-port table passes', () => {
       branch_name: 'feature/new-legacy',
     });
     expect(JSON.parse(importedWorkspace.config)).toEqual({
-      version: '2',
+      version: '3',
       git: { kind: 'use-branch', branchName: 'feature/new-legacy' },
       workspace: { kind: 'new-worktree' },
     });
