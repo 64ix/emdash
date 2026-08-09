@@ -1,12 +1,27 @@
 /**
  * Credential handling for the relay.
  *
- * Device tokens and pairing secrets are random high-entropy values with a
- * fixed positional layout: `prefix_base64url(secret)_base64url(checksum)`.
- * The checksum is the first 4 bytes of SHA-256 over the secret part; the relay
- * verifies it with a constant-time comparison before hashing the full
- * credential for the store lookup. Only SHA-256 digests of credentials are
- * ever persisted (see `store.ts`).
+ * Device tokens are random high-entropy values with a fixed positional
+ * layout: `emdv1_<43 chars secret>_<6 chars checksum>`. The checksum is the
+ * first 4 bytes of SHA-256 over the secret part; the relay verifies it with a
+ * constant-time comparison before hashing the full credential for the store
+ * lookup. Only SHA-256 digests of credentials are ever persisted (see
+ * `store.ts`).
+ *
+ * Pairing secrets (spec #130, ticket #134) use the two-half model:
+ *
+ *   `emdj1_<space_id 22>_<join_half b32 26>_<k0 b32 52>`  (108 chars)
+ *
+ * - `join_half`: 16 random bytes, base32-encoded (RFC 4648, lowercase, no
+ *   padding). This is the only half that ever transits to the relay, and only
+ *   as SHA-256 for the join.
+ * - `k0`: 32 random bytes, the space data key (AES-256-GCM, HKDF per row).
+ *   The relay never stores it and never receives it — it only travels
+ *   machine-to-machine inside the pasted secret.
+ * - The join **credential** is the base32 join_half alone (26 chars); the
+ *   relay stores only SHA-256 of that credential, and `POST /v1/join`
+ *   compares the SHA-256 of the presented credential against the stored
+ *   digests of the space named in the request.
  *
  * SHA-256 runs on WebCrypto (`crypto.subtle`), which is available on both the
  * Workers runtime and Node >= 18, so the exact same code paths run in
@@ -16,10 +31,21 @@
 const TOKEN_PREFIX = 'emdv1_';
 const JOIN_SECRET_PREFIX = 'emdj1_';
 
-/** 32 random bytes for device tokens, 16 for the join-secret random half. */
+/** 32 random bytes for device tokens, 16 for the join half, 32 for K0. */
 const TOKEN_SECRET_BYTES = 32;
-const JOIN_SECRET_RANDOM_BYTES = 16;
+export const JOIN_HALF_BYTES = 16;
+export const K0_BYTES = 32;
 const CHECKSUM_BYTES = 4;
+
+/**
+ * Base32 (RFC 4648, lowercase, no padding) character counts for the pairing
+ * secret halves: 16 bytes -> 26 chars, 32 bytes -> 52 chars.
+ */
+export const JOIN_CREDENTIAL_CHARS = 26;
+export const K0_B32_CHARS = 52;
+
+/** Full secret length: `emdj1_` + space(22) + `_` + join(26) + `_` + k0(52). */
+export const SPACE_SECRET_CHARS = JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52;
 
 /** Space ids are 16 random bytes base64url encoded: 22 characters. */
 export const SPACE_ID_CHARS = 22;
@@ -113,6 +139,51 @@ export function makeDeviceId(): string {
   return base64url(randomBytes(16));
 }
 
+// ---------------------------------------------------------------------------
+// Base32 (RFC 4648, lowercase, no padding) — the pairing secret halves are
+// user-pasted, so they use a transcription-safe alphabet with no padding.
+// ---------------------------------------------------------------------------
+
+const B32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
+const b32Pattern = /^[a-z2-7]+$/;
+
+export function base32Encode(bytes: Uint8Array): string {
+  let out = '';
+  let bits = 0;
+  let value = 0;
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      out += B32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    out += B32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+  return out;
+}
+
+/** Decodes lowercase base32 (uppercase input is tolerated); null on garbage. */
+export function base32Decode(input: string): Uint8Array | null {
+  const normalized = input.toLowerCase();
+  if (normalized.length === 0) return new Uint8Array(0);
+  if (!b32Pattern.test(normalized)) return null;
+  const bytes: number[] = [];
+  let bits = 0;
+  let value = 0;
+  for (const char of normalized) {
+    value = (value << 5) | B32_ALPHABET.indexOf(char);
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
 async function checksumOf(bytes: Uint8Array): Promise<Uint8Array> {
   // Copy into a fresh ArrayBuffer-backed buffer: `crypto.subtle.digest`
   // requires a BufferSource and rejects SharedArrayBuffer-backed views.
@@ -160,54 +231,73 @@ export async function parseToken(raw: string): Promise<ParsedToken> {
 }
 
 // ---------------------------------------------------------------------------
-// Pairing secrets: `emdj1_<22 chars space id>_<22 chars random>_<6 chars
-// checksum>` (57 total). The space id is embedded (in plaintext, like the
-// space id itself) so the relay can attribute a failed join attempt to the
-// pending secret of that space and charge its attempt budget.
+// Pairing secrets (two-half model, spec #130 ticket #134):
+// `emdj1_<space id 22>_<join half b32 26>_<k0 b32 52>` (108 total).
+// The space id is embedded (in plaintext, like the space id itself) so the
+// joining client can validate the paste; the relay only ever sees the join
+// credential (the base32 join half, 26 chars) and its SHA-256 digest.
 // ---------------------------------------------------------------------------
 
 export function isSpaceId(value: string): boolean {
   return new RegExp(`^[A-Za-z0-9_-]{${SPACE_ID_CHARS}}$`).test(value);
 }
 
-export async function makeJoinSecret(spaceId: string): Promise<string> {
+/** 16 random bytes: the join half of a pairing secret. */
+export function makeJoinHalf(): Uint8Array {
+  return randomBytes(JOIN_HALF_BYTES);
+}
+
+/** 32 random bytes: the space data key (K0). Never stored or transmitted. */
+export function makeK0(): Uint8Array {
+  return randomBytes(K0_BYTES);
+}
+
+/** The join credential of a join half: base32, 26 chars. */
+export function joinCredentialOf(joinHalf: Uint8Array): string {
+  return base32Encode(joinHalf);
+}
+
+/** Composes the user-pasted secret from its three parts. */
+export function composeSpaceSecret(
+  spaceId: string,
+  joinHalf: Uint8Array,
+  k0: Uint8Array
+): string {
   if (!isSpaceId(spaceId)) {
     throw new Error(`invalid space id: ${spaceId}`);
   }
-  const random = randomBytes(JOIN_SECRET_RANDOM_BYTES);
-  const checksum = await checksumOf(random);
-  return `${JOIN_SECRET_PREFIX}${spaceId}_${base64url(random)}_${base64url(checksum)}`;
+  if (joinHalf.length !== JOIN_HALF_BYTES || k0.length !== K0_BYTES) {
+    throw new Error('invalid join half or k0 length');
+  }
+  return `${JOIN_SECRET_PREFIX}${spaceId}_${joinCredentialOf(joinHalf)}_${base32Encode(k0)}`;
 }
 
-export interface ParsedJoinSecret {
+/** Mints a fresh join half + K0 and composes the secret. */
+export function makeSpaceSecret(spaceId: string): { secret: string; credential: string } {
+  const joinHalf = makeJoinHalf();
+  const k0 = makeK0();
+  return {
+    secret: composeSpaceSecret(spaceId, joinHalf, k0),
+    credential: joinCredentialOf(joinHalf),
+  };
+}
+
+export interface ParsedJoinCredential {
   ok: boolean;
-  spaceId: string | null;
 }
 
-export async function parseJoinSecret(raw: string): Promise<ParsedJoinSecret> {
-  const body = raw.startsWith(JOIN_SECRET_PREFIX) ? raw.slice(JOIN_SECRET_PREFIX.length) : null;
-  if (body === null || body.length !== SPACE_ID_CHARS + 1 + 22 + 1 + 6) {
-    return { ok: false, spaceId: null };
+/**
+ * Validates a presented join credential: exactly 26 base32 chars decoding to
+ * 16 bytes. No checksum — the credential is the bare join half, so the relay
+ * compares SHA-256 of the presented value against the stored digests.
+ */
+export function parseJoinCredential(raw: string): ParsedJoinCredential {
+  if (raw.length !== JOIN_CREDENTIAL_CHARS) {
+    return { ok: false };
   }
-  const spaceId = body.slice(0, SPACE_ID_CHARS);
-  const randomB64 = body.slice(SPACE_ID_CHARS + 1, SPACE_ID_CHARS + 1 + 22);
-  const checksumB64 = body.slice(SPACE_ID_CHARS + 1 + 22 + 1);
-  if (!isSpaceId(spaceId)) {
-    return { ok: false, spaceId: null };
+  const decoded = base32Decode(raw);
+  if (decoded === null || decoded.length !== JOIN_HALF_BYTES) {
+    return { ok: false };
   }
-  const random = base64urlDecode(randomB64);
-  const checksum = base64urlDecode(checksumB64);
-  if (
-    random === null ||
-    random.length !== JOIN_SECRET_RANDOM_BYTES ||
-    checksum === null ||
-    checksum.length !== CHECKSUM_BYTES
-  ) {
-    return { ok: false, spaceId: null };
-  }
-  const expected = await checksumOf(random);
-  if (!constantTimeEqual(expected, checksum)) {
-    return { ok: false, spaceId: null };
-  }
-  return { ok: true, spaceId };
+  return { ok: true };
 }

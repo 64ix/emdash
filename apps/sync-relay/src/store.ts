@@ -34,6 +34,7 @@ export interface SyncRow {
   pk: string;
   body: string | null;
   version: number;
+  client_version: number;
   deleted: number;
   updated_at: number;
 }
@@ -215,6 +216,7 @@ export async function stampAndWriteRow(
   pk: string,
   body: string | null,
   deleted: boolean,
+  clientVersion: number,
   now: number
 ): Promise<number> {
   const counter = db
@@ -224,17 +226,18 @@ export async function stampAndWriteRow(
     .bind(spaceId);
   const upsert = db
     .prepare(
-      `INSERT INTO sync_rows (space_id, table_name, pk, body, version, deleted, updated_at)
-       SELECT c.space_id, ?2, ?3, ?4, c.version, ?5, ?6
+      `INSERT INTO sync_rows (space_id, table_name, pk, body, version, client_version, deleted, updated_at)
+       SELECT c.space_id, ?2, ?3, ?4, c.version, ?5, ?6, ?7
        FROM version_counters c
        WHERE c.space_id = ?1
        ON CONFLICT (space_id, table_name, pk) DO UPDATE SET
          body = excluded.body,
          version = excluded.version,
+         client_version = excluded.client_version,
          deleted = excluded.deleted,
          updated_at = excluded.updated_at`
     )
-    .bind(spaceId, table, pk, body, deleted ? 1 : 0, now);
+    .bind(spaceId, table, pk, body, clientVersion, deleted ? 1 : 0, now);
 
   const [counterResult] = await db.batch([counter, upsert]);
   const row = counterResult.results?.[0] as { version: number } | undefined;
@@ -252,7 +255,7 @@ export async function pullRows(
 ): Promise<SyncRow[]> {
   const result = await db
     .prepare(
-      'SELECT space_id, table_name, pk, body, version, deleted, updated_at FROM sync_rows WHERE space_id = ?1 AND version > ?2 ORDER BY version ASC LIMIT ?3'
+      'SELECT space_id, table_name, pk, body, version, client_version, deleted, updated_at FROM sync_rows WHERE space_id = ?1 AND version > ?2 ORDER BY version ASC LIMIT ?3'
     )
     .bind(spaceId, cursor, limit)
     .all<SyncRow>();

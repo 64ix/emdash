@@ -124,7 +124,8 @@ export async function handle(request: Request, db: SqlDb, now: number): Promise<
     }
 
     if (request.method === 'POST' && pathname === '/v1/devices/join-secret') {
-      return json(await mintJoinSecret(db, auth, now));
+      const body = (await readJson(request)) as { join_hash?: unknown };
+      return json(await mintJoinSecret(db, auth, body, now));
     }
     if (request.method === 'GET' && pathname === '/v1/devices') {
       return json(await listDevices(db, auth));

@@ -11,11 +11,12 @@
 import {
   constantTimeEqual,
   hexToBytes,
+  isSpaceId,
   makeDeviceId,
-  makeJoinSecret,
   makeSpaceId,
+  makeSpaceSecret,
   makeToken,
-  parseJoinSecret,
+  parseJoinCredential,
   sha256Bytes,
   sha256Hex,
 } from './crypto';
@@ -72,9 +73,12 @@ export async function createSpace(
   const deviceName =
     typeof input.name === 'string' && input.name.trim() !== '' ? input.name.trim() : 'default';
   const token = await makeToken();
-  const secret = await makeJoinSecret(spaceId);
+  // Two-half pairing secret: the join half transits to the relay only as
+  // SHA-256; K0 (the space data key) never transits at all. The relay mints
+  // both halves at space creation; later devices are minted client-side.
+  const { secret, credential } = makeSpaceSecret(spaceId);
   const tokenSha = await sha256Hex(token);
-  const secretSha = await sha256Hex(secret);
+  const secretSha = await sha256Hex(credential);
 
   await db.batch([
     db.prepare('INSERT INTO spaces (space_id, created_at) VALUES (?1, ?2)').bind(spaceId, now),
@@ -94,19 +98,21 @@ export async function createSpace(
 }
 
 export async function join(db: SqlDb, input: JoinRequest, now: number): Promise<JoinResult> {
-  if (typeof input.join_hash !== 'string') {
-    throw new ApiError(400, 'join_hash must be a string');
+  if (typeof input.join_hash !== 'string' || typeof input.space_id !== 'string') {
+    throw new ApiError(400, 'join_hash and space_id must be strings');
   }
-  const parsed = await parseJoinSecret(input.join_hash);
-  if (!parsed.ok || parsed.spaceId === null) {
+  const parsed = parseJoinCredential(input.join_hash);
+  if (!parsed.ok || !isSpaceId(input.space_id)) {
     throw new ApiError(401, 'invalid join secret');
   }
 
   // The relay stores only SHA-256 of the join credential; the match against
   // the presented credential is decided with a constant-time comparison of
-  // the digests (never of the plaintext credential).
+  // the digests (never of the plaintext credential). The space id comes from
+  // the request (the joining client extracts it from the pairing secret), so
+  // a failed attempt is attributed to the pending secrets of that space.
   const presentedSha = await sha256Bytes(input.join_hash);
-  const pending = await store.listPendingJoinSecrets(db, parsed.spaceId);
+  const pending = await store.listPendingJoinSecrets(db, input.space_id);
   const matched =
     pending.find((secret) => constantTimeEqual(hexToBytes(secret.sha256), presentedSha)) ?? null;
 
@@ -138,31 +144,41 @@ export async function join(db: SqlDb, input: JoinRequest, now: number): Promise<
     typeof input.name === 'string' && input.name.trim() !== '' ? input.name.trim() : 'device';
   await store.insertToken(db, {
     id: deviceId,
-    space_id: parsed.spaceId,
+    space_id: input.space_id,
     device_id: deviceId,
     device_name: name,
     sha256: await sha256Hex(token),
     created_at: now,
   });
 
-  return { device_id: deviceId, device_token: token };
+  return { device_id: deviceId, device_token: token, space_id: input.space_id };
 }
 
+/**
+ * Registers a client-minted join credential for an additional device. The
+ * authenticated device composes the pairing secret locally (a fresh join
+ * half + the space's unchanged K0) and sends the SHA-256 digest of the join
+ * credential; the relay stores only the digest, single-use/TTL/attempt
+ * semantics unchanged. K0 never transits to the relay.
+ */
 export async function mintJoinSecret(
   db: SqlDb,
   auth: AuthContext,
+  input: { join_hash?: unknown },
   now: number
 ): Promise<JoinSecretResult> {
-  const secret = await makeJoinSecret(auth.spaceId);
+  if (typeof input.join_hash !== 'string' || !/^[0-9a-f]{64}$/.test(input.join_hash)) {
+    throw new ApiError(400, 'join_hash must be a 64-char sha256 hex digest');
+  }
   await store.insertJoinSecret(db, {
     secret_id: makeDeviceId(),
     space_id: auth.spaceId,
-    sha256: await sha256Hex(secret),
+    sha256: input.join_hash,
     created_at: now,
     expires_at: now + JOIN_SECRET_TTL_MS,
     attempts_left: MAX_JOIN_ATTEMPTS,
   });
-  return { secret };
+  return { join_hash: input.join_hash };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +235,7 @@ function patchOf(row: store.SyncRow): PullResult['patches'][number] {
     table: row.table_name,
     pk: row.pk,
     version: row.version,
+    client_version: row.client_version,
     op: row.deleted === 1 ? 'delete' : 'upsert',
     deleted: row.deleted === 1,
     body: row.body,
@@ -261,6 +278,14 @@ function validateMutation(mutation: PushRequest['mutations'][number], index: num
   ) {
     throw new ApiError(400, `mutation ${index}: body must be a string or null for 'delete'`);
   }
+  if (
+    mutation.client_version !== undefined &&
+    (typeof mutation.client_version !== 'number' ||
+      !Number.isInteger(mutation.client_version) ||
+      mutation.client_version < 0)
+  ) {
+    throw new ApiError(400, `mutation ${index}: client_version must be a non-negative integer`);
+  }
 }
 
 export async function push(
@@ -289,6 +314,7 @@ export async function push(
       mutation.pk,
       body,
       mutation.op === 'delete',
+      mutation.client_version ?? 0,
       now
     );
     results.push({ table: mutation.table, pk: mutation.pk, version });

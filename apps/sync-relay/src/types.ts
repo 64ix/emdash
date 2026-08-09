@@ -20,18 +20,26 @@ export interface CreateSpaceRequest {
 }
 
 export interface JoinRequest {
-  /** The pairing secret presented by the joining device. */
+  /**
+   * The join credential presented by the joining device: the base32 join
+   * half extracted from the pairing secret (26 chars). The relay compares
+   * SHA-256 of this value against the stored digests of the named space.
+   */
   join_hash: string;
+  /** The space to join, extracted from the pairing secret by the client. */
+  space_id: string;
   name?: string;
 }
 
 export interface JoinResult {
   device_id: string;
   device_token: string;
+  space_id: string;
 }
 
 export interface JoinSecretResult {
-  secret: string;
+  /** Echo of the registered SHA-256 digest of the join credential. */
+  join_hash: string;
 }
 
 export interface DeviceInfo {
@@ -70,7 +78,14 @@ export interface Patch {
   space: string;
   table: string;
   pk: string;
+  /** The per-space monotonic version stamped by the relay at write time. */
   version: number;
+  /**
+   * The version the client encrypted the body under (its last-known version
+   * of the row, or 0). Stored verbatim; decrypting clients bind it into the
+   * AES-GCM AAD, so replaying an old body under newer metadata fails.
+   */
+  client_version: number;
   op: PatchOp;
   deleted: boolean;
   /** Opaque encrypted payload; `null` for tombstones. Never inspected. */
@@ -87,10 +102,11 @@ export interface Mutation {
   table: string;
   pk: string;
   /**
-   * The client's last-known version of this row. Advisory: the relay ignores
-   * it for ordering and applies last-write-wins by server receipt order.
+   * The client's last-known version of this row. Stored verbatim as
+   * `client_version` and returned on pull; the relay ignores it for ordering
+   * and applies last-write-wins by server receipt order.
    */
-  version?: number;
+  client_version?: number;
   /** Opaque encrypted payload; required for `upsert`, optional for `delete`. */
   body?: string | null;
   op: PatchOp;

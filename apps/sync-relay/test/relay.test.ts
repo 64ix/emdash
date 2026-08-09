@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { makeJoinSecret, sha256Hex } from '../src/crypto';
+import { base32Encode, randomBytes, sha256Hex } from '../src/crypto';
 import type { SqlDb } from '../src/db';
 import { handle } from '../src/index';
 import { ensureSchema } from '../src/schema';
@@ -21,6 +21,7 @@ interface SpaceCreated {
 interface JoinResult {
   device_id: string;
   device_token: string;
+  space_id: string;
 }
 
 interface DeviceInfo {
@@ -38,6 +39,7 @@ interface Patch {
   table: string;
   pk: string;
   version: number;
+  client_version: number;
   op: 'upsert' | 'delete';
   deleted: boolean;
   body: string | null;
@@ -93,14 +95,44 @@ async function createSpace(db: SqlDb, name?: string, now: number = T0): Promise<
   return result.body as SpaceCreated;
 }
 
+/**
+ * The join credential of a pairing secret, at its fixed position:
+ * `emdj1_<space 22>_<join credential 26>_<k0 52>`.
+ */
+function joinCredentialOf(secret: string): string {
+  return secret.slice(29, 55);
+}
+
+/** A well-formed credential that the relay has never stored. */
+function freshUnknownCredential(): string {
+  return base32Encode(randomBytes(16));
+}
+
+async function joinWith(
+  db: SqlDb,
+  secretOrCredential: string,
+  spaceId: string,
+  now: number = T0
+): Promise<{ status: number; body: unknown }> {
+  // Accept both a full secret (extract the credential) and a bare credential,
+  // so the pairing tests read naturally either way.
+  const credential =
+    secretOrCredential.length === 26
+      ? secretOrCredential
+      : joinCredentialOf(secretOrCredential);
+  return post(db, '/v1/join', { join_hash: credential, space_id: spaceId }, undefined, now);
+}
+
 describe('space creation', () => {
-  it('creates a space and returns a device token plus a pairing secret', async () => {
+  it('creates a space and returns a device token plus a two-half pairing secret', async () => {
     const db = await makeDb();
     const space = await createSpace(db, 'desk');
     expect(space.space_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(space.device_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(space.device_token).toMatch(/^emdv1_/);
-    expect(space.secret).toMatch(/^emdj1_/);
+    // emdj1_<space 22>_<join b32 26>_<k0 b32 52>: the pasted secret embeds
+    // the join half AND the space data key (K0) for the second machine.
+    expect(space.secret).toMatch(/^emdj1_[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}$/);
 
     const devices = await get(db, '/v1/devices', space.device_token);
     expect(devices.status).toBe(200);
@@ -113,6 +145,17 @@ describe('space creation', () => {
       revoked_at: null,
       self: true,
     });
+  });
+
+  it('stores only the sha256 of the join credential, never K0 or the secret', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    const pending = await store.listPendingJoinSecrets(db, space.space_id);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.sha256).toBe(await sha256Hex(joinCredentialOf(space.secret)));
+    expect(pending[0]!.sha256).not.toBe(space.secret);
+    // K0 (the trailing base32 half) never reaches the store.
+    expect(pending[0]!.sha256).not.toContain(space.secret.slice(56));
   });
 
   it('rejects an unparseable JSON body with 400', async () => {
@@ -141,14 +184,15 @@ describe('space creation', () => {
 });
 
 describe('pairing', () => {
-  it('joins with the correct secret and issues a second device token', async () => {
+  it('joins with the correct join credential and issues a second device token', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    const join = await post(db, '/v1/join', { join_hash: space.secret, name: 'laptop' });
+    const join = await joinWith(db, space.secret, space.space_id);
     expect(join.status).toBe(200);
     const joined = join.body as JoinResult;
     expect(joined.device_token).toMatch(/^emdv1_/);
     expect(joined.device_id).not.toBe(space.device_id);
+    expect(joined.space_id).toBe(space.space_id);
 
     const devices = await get(db, '/v1/devices', space.device_token);
     const list = (devices.body as { devices: DeviceInfo[] }).devices;
@@ -156,27 +200,32 @@ describe('pairing', () => {
     expect(list.map((d) => d.device_id).sort()).toEqual([space.device_id, joined.device_id].sort());
   });
 
-  it('rejects a wrong secret', async () => {
+  it('rejects a wrong credential', async () => {
     const db = await makeDb();
-    await createSpace(db);
-    const join = await post(db, '/v1/join', { join_hash: 'not-a-secret' });
+    const space = await createSpace(db);
+    const join = await post(db, '/v1/join', {
+      join_hash: 'not-a-credential',
+      space_id: space.space_id,
+    });
     expect(join.status).toBe(401);
   });
 
-  it('rejects a well-formed but unknown secret', async () => {
+  it('rejects a well-formed but unknown credential', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    // Same space, but the relay has never stored this credential.
-    const unknown = await makeJoinSecret(space.space_id);
-    const join = await post(db, '/v1/join', { join_hash: unknown });
+    // Well-formed 26-char credential for this space that the relay never saw.
+    const join = await post(db, '/v1/join', {
+      join_hash: freshUnknownCredential(),
+      space_id: space.space_id,
+    });
     expect(join.status).toBe(401);
   });
 
-  it('is single-use: the same secret cannot join twice', async () => {
+  it('is single-use: the same credential cannot join twice', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    expect((await post(db, '/v1/join', { join_hash: space.secret })).status).toBe(200);
-    const second = await post(db, '/v1/join', { join_hash: space.secret });
+    expect((await joinWith(db, space.secret, space.space_id)).status).toBe(200);
+    const second = await joinWith(db, space.secret, space.space_id);
     expect(second.status).toBe(401);
   });
 
@@ -184,71 +233,92 @@ describe('pairing', () => {
     const db = await makeDb();
     const space = await createSpace(db, undefined, T0);
     // One millisecond before expiry: accepted.
-    const before = await post(
-      db,
-      '/v1/join',
-      { join_hash: space.secret },
-      undefined,
-      T0 + JOIN_SECRET_TTL_MS - 1
-    );
+    const before = await joinWith(db, space.secret, space.space_id, T0 + JOIN_SECRET_TTL_MS - 1);
     expect(before.status).toBe(200);
   });
 
   it('is TTL-bounded: joining at or after expiry is refused', async () => {
     const db = await makeDb();
     const space = await createSpace(db, undefined, T0);
-    const atExpiry = await post(
-      db,
-      '/v1/join',
-      { join_hash: space.secret },
-      undefined,
-      T0 + JOIN_SECRET_TTL_MS
-    );
+    const atExpiry = await joinWith(db, space.secret, space.space_id, T0 + JOIN_SECRET_TTL_MS);
     expect(atExpiry.status).toBe(401);
-    const after = await post(
-      db,
-      '/v1/join',
-      { join_hash: space.secret },
-      undefined,
-      T0 + JOIN_SECRET_TTL_MS + 1
-    );
+    const after = await joinWith(db, space.secret, space.space_id, T0 + JOIN_SECRET_TTL_MS + 1);
     expect(after.status).toBe(401);
   });
 
   it('enforces the per-secret attempt budget and purges the secret when exhausted', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    // Well-formed credential for the same space that is not the stored secret:
+    // Well-formed credential for the same space that is not the stored one:
     // each attempt charges the pending secret's budget.
-    const wrong = await makeJoinSecret(space.space_id);
+    const wrong = freshUnknownCredential();
     for (let i = 0; i < MAX_JOIN_ATTEMPTS - 1; i++) {
-      expect((await post(db, '/v1/join', { join_hash: wrong })).status).toBe(401);
+      expect(
+        (await post(db, '/v1/join', { join_hash: wrong, space_id: space.space_id })).status
+      ).toBe(401);
     }
-    // Budget not yet exhausted: the real secret still joins.
-    expect((await post(db, '/v1/join', { join_hash: space.secret })).status).toBe(200);
+    // Budget not yet exhausted: the real credential still joins.
+    expect((await joinWith(db, space.secret, space.space_id)).status).toBe(200);
   });
 
-  it('refuses the real secret once the attempt budget is exhausted', async () => {
+  it('refuses the real credential once the attempt budget is exhausted', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    const wrong = await makeJoinSecret(space.space_id);
+    const wrong = freshUnknownCredential();
     for (let i = 0; i < MAX_JOIN_ATTEMPTS; i++) {
-      expect((await post(db, '/v1/join', { join_hash: wrong })).status).toBe(401);
+      expect(
+        (await post(db, '/v1/join', { join_hash: wrong, space_id: space.space_id })).status
+      ).toBe(401);
     }
-    const join = await post(db, '/v1/join', { join_hash: space.secret });
+    const join = await joinWith(db, space.secret, space.space_id);
     expect(join.status).toBe(401);
   });
 
-  it('lets an existing device mint a fresh pairing secret for a second device', async () => {
+  it('attributes failed attempts to the named space, not other spaces', async () => {
+    const db = await makeDb();
+    const a = await createSpace(db);
+    const b = await createSpace(db);
+    // Wrong attempts against A's space burn A's budget, leaving B's secret usable.
+    const wrong = freshUnknownCredential();
+    for (let i = 0; i < MAX_JOIN_ATTEMPTS; i++) {
+      expect(
+        (await post(db, '/v1/join', { join_hash: wrong, space_id: a.space_id })).status
+      ).toBe(401);
+    }
+    expect((await joinWith(db, a.secret, a.space_id)).status).toBe(401);
+    expect((await joinWith(db, b.secret, b.space_id)).status).toBe(200);
+  });
+
+  it('lets an existing device register a client-minted join credential (digest only)', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    const minted = await post(db, '/v1/devices/join-secret', {}, space.device_token);
+    // The device mints the second secret client-side: a fresh join half +
+    // the unchanged space K0. Only the SHA-256 of the join credential is
+    // registered — K0 never transits.
+    const joinHalf = base32Encode(randomBytes(16));
+    const digest = await sha256Hex(joinHalf);
+    const minted = await post(
+      db,
+      '/v1/devices/join-secret',
+      { join_hash: digest },
+      space.device_token
+    );
     expect(minted.status).toBe(200);
-    const { secret } = minted.body as { secret: string };
-    const join = await post(db, '/v1/join', { join_hash: secret, name: 'phone' });
+    expect(minted.body).toEqual({ join_hash: digest });
+
+    const join = await post(db, '/v1/join', { join_hash: joinHalf, space_id: space.space_id });
     expect(join.status).toBe(200);
     const devices = await get(db, '/v1/devices', space.device_token);
     expect((devices.body as { devices: DeviceInfo[] }).devices).toHaveLength(2);
+  });
+
+  it('rejects a join-secret registration with a malformed digest', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    for (const join_hash of ['not-hex', 'abcd', 'x'.repeat(64)]) {
+      const minted = await post(db, '/v1/devices/join-secret', { join_hash }, space.device_token);
+      expect(minted.status).toBe(400);
+    }
   });
 });
 
@@ -311,7 +381,9 @@ describe('push and the per-space version counter', () => {
       db,
       '/v1/sync/push',
       {
-        mutations: [{ table: 't', pk: 'a', version: 999, body: 'newer-client-view', op: 'upsert' }],
+        mutations: [
+          { table: 't', pk: 'a', client_version: 999, body: 'newer-client-view', op: 'upsert' },
+        ],
       },
       space.device_token
     );
@@ -320,7 +392,11 @@ describe('push and the per-space version counter', () => {
     const stale = await post(
       db,
       '/v1/sync/push',
-      { mutations: [{ table: 't', pk: 'a', version: 1, body: 'older-client-view', op: 'upsert' }] },
+      {
+        mutations: [
+          { table: 't', pk: 'a', client_version: 1, body: 'older-client-view', op: 'upsert' },
+        ],
+      },
       space.device_token
     );
     expect(stale.status).toBe(200);
@@ -333,9 +409,46 @@ describe('push and the per-space version counter', () => {
       pk: 'a',
       body: 'older-client-view',
       version: 2,
+      client_version: 1,
       op: 'upsert',
       deleted: false,
     });
+  });
+
+  it('stores the client_version verbatim and defaults it to 0 when absent', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'with', client_version: 42, body: 'A', op: 'upsert' }] },
+      space.device_token
+    );
+    await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'without', body: 'B', op: 'upsert' }] },
+      space.device_token
+    );
+
+    const pull = await post(db, '/v1/sync/pull', { cursor: 0 }, space.device_token);
+    const patches = (pull.body as PullResult).patches;
+    expect(patches.find((p) => p.pk === 'with')?.client_version).toBe(42);
+    expect(patches.find((p) => p.pk === 'without')?.client_version).toBe(0);
+  });
+
+  it('rejects non-integer and negative client_versions', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    for (const client_version of [-1, 1.5, '1', null]) {
+      const result = await post(
+        db,
+        '/v1/sync/push',
+        { mutations: [{ table: 't', pk: 'a', client_version, body: 'x', op: 'upsert' }] },
+        space.device_token
+      );
+      expect(result.status, `client_version=${String(client_version)}`).toBe(400);
+    }
   });
 
   it('rejects a malformed mutation list without writing anything', async () => {
@@ -385,6 +498,7 @@ describe('request body validation', () => {
       ['/v1/space', undefined],
       ['/v1/join', undefined],
       ['/v1/devices/revoke', space.device_token],
+      ['/v1/devices/join-secret', space.device_token],
       ['/v1/sync/pull', space.device_token],
       ['/v1/sync/push', space.device_token],
       ['/v1/sync/poll', space.device_token],
@@ -544,6 +658,7 @@ describe('pull cursor semantics', () => {
           table: 't',
           pk: 'a',
           version: 3,
+          client_version: 0,
           op: 'upsert',
           deleted: false,
           body: 'A2',
@@ -564,7 +679,7 @@ describe('transactional stamping', () => {
     const insert = (pk: string, body: string) =>
       db
         .prepare(
-          'INSERT INTO sync_rows (space_id, table_name, pk, body, version, deleted, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)'
+          'INSERT INTO sync_rows (space_id, table_name, pk, body, version, client_version, deleted, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, ?6)'
         )
         .bind('s', 't', pk, body, 0, 0);
     // The second write violates the (space_id, table_name, pk) primary key:
@@ -587,17 +702,14 @@ describe('transactional stamping', () => {
 describe('token authentication', () => {
   it('refuses requests without a bearer token', async () => {
     const db = await makeDb();
-    const result = await post(db, '/v1/devices/join-secret', {});
+    const result = await post(db, '/v1/devices/join-secret', { join_hash: 'a'.repeat(64) });
     expect(result.status).toBe(401);
   });
 
   it('refuses garbage tokens and unknown well-formed tokens', async () => {
     const db = await makeDb();
-    await createSpace(db);
     expect((await get(db, '/v1/devices', 'nonsense')).status).toBe(401);
-    expect(
-      (await get(db, '/v1/devices', await makeJoinSecret('0123456789abcdefghijkl'))).status
-    ).toBe(401);
+    expect((await get(db, '/v1/devices', freshUnknownCredential())).status).toBe(401);
   });
 
   it('refuses tokens with a tampered checksum', async () => {
@@ -620,7 +732,7 @@ describe('token authentication', () => {
   it('refuses revoked tokens while keeping the device listed for audit', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    const join = await post(db, '/v1/join', { join_hash: space.secret });
+    const join = await joinWith(db, space.secret, space.space_id);
     const second = join.body as JoinResult;
 
     const revoked = await post(
@@ -644,7 +756,7 @@ describe('token authentication', () => {
     const db = await makeDb();
     const a = await createSpace(db);
     const b = await createSpace(db);
-    const joinB = await post(db, '/v1/join', { join_hash: b.secret });
+    const joinB = await joinWith(db, b.secret, b.space_id);
     const deviceB = (joinB.body as JoinResult).device_id;
 
     // A's token cannot see or revoke B's device: it resolves in a different space.

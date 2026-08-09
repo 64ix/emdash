@@ -10,12 +10,14 @@
  * - `tokens`: device credentials. Only SHA-256 of the device token is stored;
  *   a token is scoped to exactly one space. Revocation sets `revoked_at` and
  *   keeps the row for audit ("revoke token", not "remove device").
- * - `join_secrets`: pending pairing secrets. Stored as SHA-256 only,
- *   single-use (`used_at`), TTL-bounded (`expires_at`), and attempt-limited
- *   (`attempts_left`).
+ * - `join_secrets`: pending pairing secrets. Stored as SHA-256 only (of the
+ *   join credential), single-use (`used_at`), TTL-bounded (`expires_at`), and
+ *   attempt-limited (`attempts_left`).
  * - `sync_rows`: generic KV rows keyed by (space, table, pk). `version` is the
  *   per-space monotonic version stamped transactionally at write time;
- *   tombstones are rows with `deleted = 1`.
+ *   `client_version` is the client's last-known version, stored verbatim so
+ *   decrypting clients can bind it into the body's AEAD AAD. Tombstones are
+ *   rows with `deleted = 1`.
  * - `version_counters`: the per-space monotonic counter, incremented with
  *   `version = version + 1 RETURNING version` in the same transaction as the
  *   row write (see `store.stampAndWriteRow`). No client timestamps, no bare
@@ -58,6 +60,7 @@ CREATE TABLE IF NOT EXISTS sync_rows (
   pk TEXT NOT NULL,
   body TEXT,
   version INTEGER NOT NULL,
+  client_version INTEGER NOT NULL DEFAULT 0,
   deleted INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (space_id, table_name, pk)
