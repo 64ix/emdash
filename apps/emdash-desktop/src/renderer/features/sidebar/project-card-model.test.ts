@@ -401,7 +401,7 @@ describe('buildProjectCards aggregates', () => {
         ['a', 'working'],
         ['b', 'error'],
       ]),
-      attentionTaskIds: new Set(['b']),
+      attentionTaskIdsByProject: new Map([['p1', new Set(['b'])]]),
     };
     expect(build(input)).toEqual(build(input));
   });

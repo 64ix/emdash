@@ -275,9 +275,11 @@ export const SidebarCardList = observer(function SidebarCardList() {
     if (!activeParsed || !overParsed) return;
 
     if (activeParsed.kind === 'project') {
+      if (overParsed.kind !== 'project') return;
       handleProjectDrop(activeParsed.projectId, overParsed.projectId, pointerY, active, over);
       return;
     }
+    if (overParsed.kind !== 'task') return;
     handleTaskDrop(activeParsed, overParsed, pointerY, active, over);
   }
 
@@ -286,7 +288,7 @@ export const SidebarCardList = observer(function SidebarCardList() {
     overProjectId: string,
     pointerY: number | null,
     active: DragEndEvent['active'],
-    over: DragEndEvent['over']
+    over: NonNullable<DragEndEvent['over']>
   ) {
     const overCardIdx = cards.findIndex((card) => card.projectId === overProjectId);
     if (overCardIdx === -1) return;
@@ -306,11 +308,11 @@ export const SidebarCardList = observer(function SidebarCardList() {
   }
 
   function handleTaskDrop(
-    activeParsed: Extract<SidebarDndId, { kind: 'task' }>,
-    overParsed: Extract<SidebarDndId, { kind: 'task' }>,
+    activeParsed: SidebarTaskDndId,
+    overParsed: SidebarTaskDndId,
     pointerY: number | null,
     active: DragEndEvent['active'],
-    over: DragEndEvent['over']
+    over: NonNullable<DragEndEvent['over']>
   ) {
     // Task drags (spec #85, ticket #89, restored on the cards): grouped mode
     // writes the board's stage and Board Rank fields through
@@ -876,9 +878,14 @@ const toProjectDndId = (projectId: string) => `${PROJECT_DND_PREFIX}${projectId}
 const toTaskDndId = (projectId: string, taskId: string) =>
   `${TASK_DND_PREFIX}${projectId}::${taskId}`;
 
-type SidebarDndId =
-  | { kind: 'project'; projectId: string }
-  | { kind: 'task'; projectId: string; taskId: string };
+/**
+ * The two dnd id shapes. Handlers take the member aliases (not
+ * `Extract<SidebarDndId, ...>`) so tsgo — which does not narrow a
+ * discriminant into an `Extract` parameter type — accepts the call sites.
+ */
+type SidebarProjectDndId = { kind: 'project'; projectId: string };
+type SidebarTaskDndId = { kind: 'task'; projectId: string; taskId: string };
+type SidebarDndId = SidebarProjectDndId | SidebarTaskDndId;
 
 /** The entity behind a card-list dnd id, or `null` for anything else. */
 function parseDndId(id: string): SidebarDndId | null {
