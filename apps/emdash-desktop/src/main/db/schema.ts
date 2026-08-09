@@ -424,6 +424,13 @@ export const conversations = sqliteTable(
     isInitialConversation: integer('is_initial_conversation', {
       mode: 'boolean',
     }),
+    /**
+     * Machine-local origin of the conversation row: 'local' for conversations
+     * created on this machine, 'imported' for rows that arrived via multi-
+     * machine sync (set by the sync engine at import; never transported in
+     * the sync payload, like `sessionId`).
+     */
+    source: text('source').notNull().default('local'),
     sessionId: text('session_id'),
     agentStatus: text('agent_status'),
     agentStatusSeen: integer('agent_status_seen').default(1),

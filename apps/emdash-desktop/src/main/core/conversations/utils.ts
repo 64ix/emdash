@@ -27,6 +27,7 @@ export function mapConversationRowToConversation(
     taskId: row.taskId,
     projectId: row.projectId,
     providerId: row.provider as AgentProviderId,
+    source: row.source === 'imported' ? 'imported' : 'local',
     autoApprove: config?.autoApprove,
     sessionId: row.sessionId ?? undefined,
     model: config?.model,

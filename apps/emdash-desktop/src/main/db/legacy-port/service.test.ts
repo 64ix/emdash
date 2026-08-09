@@ -98,6 +98,7 @@ function createAppDb(): Database.Database {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_interacted_at TEXT,
       is_initial_conversation INTEGER,
+      source TEXT NOT NULL DEFAULT 'local',
       agent_status TEXT,
       agent_status_seen INTEGER DEFAULT 1,
       sync_ts INTEGER NOT NULL DEFAULT 0

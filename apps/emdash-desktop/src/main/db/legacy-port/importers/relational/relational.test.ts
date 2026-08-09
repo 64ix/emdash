@@ -103,6 +103,7 @@ function createAppDb(): {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_interacted_at TEXT,
       is_initial_conversation INTEGER,
+      source TEXT NOT NULL DEFAULT 'local',
       session_id TEXT,
       agent_status TEXT,
       agent_status_seen INTEGER DEFAULT 1,

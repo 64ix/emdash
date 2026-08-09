@@ -222,7 +222,8 @@ export const conversationsTable: SyncTableConfig = {
   keyColumns: ['id'],
   mode: 'continuous',
   // Metadata only: transcripts (messages) are out of scope. session_id /
-  // agent_status / agent_status_seen are machine-specific and never sent.
+  // agent_status / agent_status_seen / source are machine-specific and never
+  // sent.
   payloadColumns: [
     'id',
     'project_id',
@@ -237,6 +238,11 @@ export const conversationsTable: SyncTableConfig = {
     'type',
   ],
   rawJsonColumns: ['config'],
+  // `source` is machine-local (never in the payload): fresh imports read as
+  // 'imported' so the receiving machine can mark the conversation "not
+  // resumable on this device" until a local session exists (LWW conflict
+  // updates never touch the column — each machine keeps its own origin).
+  importInsertColumns: { source: 'imported' },
   importSkipIfMissingParent: [
     { column: 'project_id', table: 'projects', columnRef: 'id' },
     { column: 'task_id', table: 'tasks', columnRef: 'id' },
