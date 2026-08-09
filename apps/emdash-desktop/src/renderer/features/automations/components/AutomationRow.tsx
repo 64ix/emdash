@@ -25,6 +25,7 @@ import { cn } from '@renderer/utils/utils';
 import type { Automation } from '@shared/core/automations/automation';
 import type { AutomationRunStatus } from '@shared/core/automations/automation-run';
 import { formatRunTriggerKindLabel } from '../automation-run-format';
+import { automationSourceBadgeLabel } from '../automation-source-badge';
 
 const RUN_STATUS_ICON: Record<
   AutomationRunStatus,
@@ -72,6 +73,7 @@ export const AutomationRow = observer(function AutomationRow({
         }
       })()
     : null;
+  const sourceBadge = automationSourceBadgeLabel(automation.source, automation.enabled);
 
   return (
     <div
@@ -104,6 +106,11 @@ export const AutomationRow = observer(function AutomationRow({
               {automation.name}
             </span>
             <AgentStatusIndicator status={agentStatus} />
+            {sourceBadge && (
+              <span className="shrink-0 rounded-md bg-background-1 px-2 py-1 text-xs text-foreground-muted group-hover:bg-background-2">
+                {sourceBadge}
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 flex-row items-center gap-1 text-xs text-foreground-muted">
             {cronLabel && (

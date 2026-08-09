@@ -79,6 +79,7 @@ function mapAutomationRow(row: AutomationRow): Automation {
     conversationConfig: row.conversationConfig ?? undefined,
     taskConfig: row.taskConfig ?? undefined,
     enabled: row.enabled === 1,
+    source: row.source === 'imported' ? 'imported' : 'local',
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

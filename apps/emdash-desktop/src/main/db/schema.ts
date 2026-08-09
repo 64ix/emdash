@@ -341,6 +341,13 @@ export const automations = sqliteTable(
     conversationConfig: versionedJsonColumn(automationConversationConfig)('conversation_config'),
     taskConfig: versionedJsonColumn(storedAutomationTaskConfig)('task_config'),
     enabled: integer('enabled').notNull().default(1),
+    /**
+     * Machine-local origin of the automation row: 'local' for automations
+     * created on this machine, 'imported' for rows that arrived via multi-
+     * machine sync (set by the sync engine at import; never transported in
+     * the sync payload, like `enabled`).
+     */
+    source: text('source').notNull().default('local'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),

@@ -59,6 +59,9 @@ function workspaceInitialFromConfig(
 
   if (git.kind === 'none') {
     if (workspace.kind === 'repository-instance') {
+      // v3 stored targets carry no machine-local workspace id; the id is
+      // resolved at run time against the project's repository workspace.
+      if (!workspace.workspaceId) return { mode: 'existing', presetId: 'repo-root' };
       return {
         mode: 'existing',
         presetId: 'use-existing',
@@ -162,22 +165,16 @@ export function useAutomationFormState(
     !!effectiveProjectId &&
     workspaceConfig.isValid;
 
-  function buildTaskConfig(targetProjectId: string): StoredAutomationTaskConfig | null {
-    const effectiveRepoWsId =
-      asMounted(getProjectStore(targetProjectId))?.data?.repositoryWorkspaceId ?? null;
-
-    // Re-resolve with the target project's repositoryWorkspaceId in case it differs.
-    // For most cases effectiveProjectId === targetProjectId so workspaceConfig.resolvedConfig is correct.
-    // We only need to patch if mode=existing/repo-root and the workspace ID is project-specific.
+  function buildTaskConfig(): StoredAutomationTaskConfig | null {
+    // v3: repository-instance targets are stored WITHOUT the machine-local
+    // workspace id. A config synced to another machine must not carry this
+    // machine's workspace reference; the run resolves it against the mounted
+    // project's own repository workspace at execution time.
     const wsConfig = workspaceConfig.resolvedConfig;
 
-    // Patch repository-instance workspace if target project differs.
     const patchedConfig =
-      wsConfig.workspace.kind === 'repository-instance' && effectiveRepoWsId
-        ? {
-            ...wsConfig,
-            workspace: { kind: 'repository-instance' as const, workspaceId: effectiveRepoWsId },
-          }
+      wsConfig.workspace.kind === 'repository-instance'
+        ? { ...wsConfig, workspace: { kind: 'repository-instance' as const } }
         : wsConfig;
 
     const result: StoredAutomationTaskConfig = {

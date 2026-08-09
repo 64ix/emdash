@@ -1,0 +1,1 @@
+ALTER TABLE `automations` ADD `source` text DEFAULT 'local' NOT NULL;

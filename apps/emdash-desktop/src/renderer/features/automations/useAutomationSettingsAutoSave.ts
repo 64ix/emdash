@@ -38,7 +38,7 @@ export function useAutomationSettingsAutoSave(automation: Automation) {
   function savePatch(overrideTrigger?: TriggerConfig) {
     if (!effectiveProjectId || !provider) return;
     const activeTrigger = overrideTrigger ?? triggerConfig;
-    const taskConfig = buildTaskConfig(effectiveProjectId);
+    const taskConfig = buildTaskConfig();
     if (!taskConfig) return;
     try {
       assertValidCronTrigger(activeTrigger);

@@ -62,7 +62,7 @@ export const CreateAutomationView = observer(function CreateAutomationView({
   async function handleSave() {
     if (!effectiveProjectId || !provider || !canSave) return;
     setError(null);
-    const taskConfig = buildTaskConfig(effectiveProjectId);
+    const taskConfig = buildTaskConfig();
     if (!taskConfig) return;
     try {
       assertValidCronTrigger(triggerConfig);

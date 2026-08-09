@@ -151,6 +151,7 @@ describe('AutomationScheduler drain serialization', () => {
         conversationConfig: { prompt: 'Check things', provider: 'claude', autoApprove: false },
         projectId: 'project-1',
         enabled: true,
+        source: 'local' as const,
         createdAt: 0,
         updatedAt: 0,
       },

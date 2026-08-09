@@ -13,6 +13,7 @@ import { PanelTabs } from '@renderer/lib/ui/panel-tabs';
 import { Switch } from '@renderer/lib/ui/switch';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/tooltip';
 import type { Automation } from '@shared/core/automations/automation';
+import { automationSourceBadgeLabel } from '../automation-source-badge';
 import { useAutomationEventBridge, useAutomations } from '../use-automations';
 import { useAutomationSettingsAutoSave } from '../useAutomationSettingsAutoSave';
 import { AutomationSettingsFields } from './AutomationSettingsFields';
@@ -53,6 +54,7 @@ export const AutomationDetailView = observer(function AutomationDetailView({
   const { name, setName } = formState;
 
   const { runNow } = useAutomations();
+  const sourceBadge = automationSourceBadgeLabel(automation.source, automation.enabled);
 
   const canRunNow = !!automation.projectId && !runNow.isPending;
 
@@ -70,6 +72,11 @@ export const AutomationDetailView = observer(function AutomationDetailView({
               placeholder="Name this automation"
               className="flex-1"
             />
+            {sourceBadge && (
+              <span className="shrink-0 rounded-md bg-background-1 px-2 py-1 text-xs text-foreground-muted">
+                {sourceBadge}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <DropdownMenu>

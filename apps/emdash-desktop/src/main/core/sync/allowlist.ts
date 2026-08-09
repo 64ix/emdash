@@ -259,9 +259,11 @@ export const automationsTable: SyncTableConfig = {
     'deleted_at',
   ],
   rawJsonColumns: ['trigger_config', 'conversation_config', 'task_config'],
-  // `enabled` is machine-local (never in the payload); fresh imports default
-  // to disabled so the receiving machine opts in explicitly.
-  importInsertColumns: { enabled: '0' },
+  // `enabled` and `source` are machine-local (never in the payload): fresh
+  // imports default to disabled and read as 'imported' so the receiving
+  // machine opts in explicitly and can badge the row. LWW conflict updates
+  // never touch either column — each machine keeps its own.
+  importInsertColumns: { enabled: '0', source: 'imported' },
   importSkipIfMissingParent: [{ column: 'project_id', table: 'projects', columnRef: 'id' }],
 };
 
