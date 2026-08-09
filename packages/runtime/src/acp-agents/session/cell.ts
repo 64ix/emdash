@@ -78,6 +78,13 @@ export class SessionCell {
   private quiesceTimer: ReturnType<typeof setTimeout> | null = null;
   private promptIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private lastRunningAgentCount = 0;
+  /**
+   * Turn id of a prompt the idle watchdog settled as failed. The agent process
+   * may still be alive with an unanswered `prompt` request, so its late output
+   * must be dropped rather than lazily opening a ghost agent-initiated turn
+   * (or leaking into the next user turn). Cleared when a new prompt starts.
+   */
+  private staleSettledTurnId: string | null = null;
   private effectQueue: Effect[] = [];
   private interpretingEffects = false;
   private draft: PromptDraft | null = null;
@@ -196,6 +203,20 @@ export class SessionCell {
 
   push(event: NormalizedEvent): void {
     if (event.kind === 'ignored') return;
+
+    // After the idle watchdog settled a turn the agent never resolved, the
+    // process may still be alive with an unanswered prompt. Its late output
+    // must not lazily open a ghost agent-initiated turn (the reducer opens
+    // one on any transcript event in `ready`) nor fold into the next user
+    // turn — drop transcript events until a new prompt is sent.
+    if (this.staleSettledTurnId !== null && this.isTranscriptEvent(event)) {
+      this.deps.logger.warn('SessionCell: dropping stale output after settled turn', {
+        conversationId: this.conversationId,
+        settledTurnId: this.staleSettledTurnId,
+        phase: this.machine.phase.kind,
+      });
+      return;
+    }
 
     const idleTranscriptEvent = this.isIdleAgentTranscriptEvent(event);
     if (idleTranscriptEvent) this.applyEvent({ type: 'AgentActivity', active: true });
@@ -432,12 +453,14 @@ export class SessionCell {
   processClosed(exitCode: number | null): void {
     this.clearQuiesce();
     this.clearPromptIdleTimer();
+    this.staleSettledTurnId = null;
     this.applyEvent({ type: 'ProcessClosed', exitCode });
   }
 
   dispose(): void {
     this.clearQuiesce();
     this.clearPromptIdleTimer();
+    this.staleSettledTurnId = null;
     this.permissions.drain(this.machine.pendingPermissions);
   }
 
@@ -525,6 +548,17 @@ export class SessionCell {
     );
     if (!started) return ok({ queued: true });
 
+    // A new turn genuinely started: stale output of a previously settled turn
+    // is no longer stale, and this turn's prompt owns the watchdog.
+    this.staleSettledTurnId = null;
+
+    // The turn this prompt request was sent for. The resolution may arrive
+    // long after the machine moved on (idle-watchdog settle, user cancel or
+    // resubmit) — only the matching active turn may be settled, and only its
+    // resolution may clear the idle watchdog (clearing it from a stale
+    // resolution would silently disarm the current turn's watchdog).
+    const sentTurnId = this.machine.phase.kind === 'working' ? this.machine.phase.turn.id : null;
+
     const messageId = `${this.conversationId}-${this.machine.nextTurnIndex}-user`;
     this.transcript.pushEvent({
       kind: 'message',
@@ -566,23 +600,27 @@ export class SessionCell {
       });
       this.armPromptIdleTimer();
       const response = await this.deps.agent.prompt(promptRequest);
-      this.clearPromptIdleTimer();
       this.rawLog.record({
         kind: 'prompt_result',
         sessionId: this.acpSessionId,
         stopReason: response.stopReason,
       });
-      this.settleTurn(outcomeFromStopReason(response.stopReason));
+      if (this.turnStillActive(sentTurnId)) {
+        this.clearPromptIdleTimer();
+        this.settleTurn(outcomeFromStopReason(response.stopReason));
+      }
       return ok({ queued: false });
     } catch (e) {
-      this.clearPromptIdleTimer();
       const err = acpErr.promptFailed(toSerializedError(e));
       this.rawLog.record({
         kind: 'prompt_result',
         sessionId: this.acpSessionId,
         stopReason: null,
       });
-      this.settleTurn({ kind: 'error', reason: 'prompt_failed' });
+      if (this.turnStillActive(sentTurnId)) {
+        this.clearPromptIdleTimer();
+        this.settleTurn({ kind: 'error', reason: 'prompt_failed' });
+      }
       return err;
     }
   }
@@ -670,6 +708,18 @@ export class SessionCell {
     this.promptIdleTimer = setTimeout(() => {
       this.promptIdleTimer = null;
       if (this.machine.phase.kind !== 'working') return;
+
+      // A pending permission request means the turn is healthy but blocked on
+      // the user: the agent is waiting for the host's answer, not stalled, and
+      // emits nothing while it waits. Settling here would mark a live turn
+      // `prompt_failed` and leave the permission modal open over a ready
+      // session — re-arm instead. Once the permission resolves, the next
+      // expiry settles a genuinely silent turn.
+      if (this.machine.pendingPermissions.length > 0) {
+        this.armPromptIdleTimer();
+        return;
+      }
+
       this.deps.logger.warn(
         'SessionCell: prompt turn stalled with no activity, settling as failed',
         {
@@ -682,6 +732,8 @@ export class SessionCell {
         sessionId: this.acpSessionId,
         stopReason: null,
       });
+      // Remember the settled turn so its late output is dropped (see `push`).
+      this.staleSettledTurnId = this.machine.phase.turn.id;
       this.settleTurn({ kind: 'error', reason: 'prompt_failed' });
     }, ACP_PROMPT_IDLE_TIMEOUT_MS);
   }
@@ -694,6 +746,18 @@ export class SessionCell {
     if (!this.promptIdleTimer) return;
     clearTimeout(this.promptIdleTimer);
     this.promptIdleTimer = null;
+  }
+
+  /**
+   * True when the machine is still on the turn a sent prompt request belongs
+   * to. `cancelling` is accepted: `cancel()` moves the machine there and
+   * depends on the prompt's resolution reaching `settleTurn` to return to
+   * `ready`.
+   */
+  private turnStillActive(sentTurnId: string | null): boolean {
+    const { kind } = this.machine.phase;
+    if (kind !== 'working' && kind !== 'cancelling') return false;
+    return this.machine.phase.turn.id === sentTurnId;
   }
 
   private context(): SessionMachineContext {

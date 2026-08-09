@@ -383,24 +383,26 @@ export class TaskManagerStore {
    * single global `tasks.getTasks()` (no projectId) into this project's task
    * map. Tasks of other projects are ignored; unseen tasks are ingested
    * exactly like `loadTasks` (unprovisioned store + conversation/terminal
-   * registries); tasks already registered get their row refreshed wholesale
-   * (the same pattern the store transitions use) — the global path's batched
-   * PRs land with it. Deliberately scoped: optimistic (unregistered) stores
-   * are never touched, and nothing is ever removed — this is a freshness
-   * pass, not an authoritative sync.
+   * registries). Already-registered stores are deliberately **never
+   * replaced**: the payload is a snapshot of the DB taken when the board
+   * opened, so a wholesale `data` swap would regress any write that landed
+   * while the round-trip was in flight — a board drag snaps back to its old
+   * column, an archive made in that window resurrects the task, and
+   * decorated per-task PRs are downgraded to the batch's undecorated rows.
+   * Registered stores stay fresh through their own in-place optimistic
+   * writes and the task/PR event streams, and the board re-fetches on every
+   * open (`canActivate`), so this stays a freshness pass — never an
+   * authoritative sync. Optimistic (unregistered) stores are never touched,
+   * and nothing is ever removed.
    */
   mergeGlobalTasks(tasks: readonly Task[]): void {
     runInAction(() => {
       for (const task of tasks) {
         if (task.projectId !== this.projectId) continue;
-        const store = this.tasks.get(task.id);
-        if (!store) {
-          this.tasks.set(task.id, createUnprovisionedTask(task));
-          conversationRegistry.acquire(task.id, this.projectId, []);
-          terminalRegistry.acquire(task.id, this.projectId);
-        } else if (isRegistered(store)) {
-          store.data = task;
-        }
+        if (this.tasks.has(task.id)) continue;
+        this.tasks.set(task.id, createUnprovisionedTask(task));
+        conversationRegistry.acquire(task.id, this.projectId, []);
+        terminalRegistry.acquire(task.id, this.projectId);
       }
     });
   }
