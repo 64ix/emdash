@@ -548,6 +548,7 @@ export class TaskManagerStore {
 
     const savedSnapshot = (await viewStateCache.get(`task:${taskId}`)) as
       | TaskViewSnapshot
+      | null
       | undefined;
 
     runInAction(() => {
@@ -576,6 +577,7 @@ export class TaskManagerStore {
   ): Promise<void> {
     const savedSnapshot = (await viewStateCache.get(`task:${taskId}`)) as
       | TaskViewSnapshot
+      | null
       | undefined;
     runInAction(() => {
       const current = this.tasks.get(taskId);

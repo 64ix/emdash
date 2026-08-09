@@ -192,33 +192,37 @@ export class WorkspaceViewModel implements ILifecycle {
    * Restore persisted UI state from a saved snapshot. Call this before
    * initialize() so the reaction baseline is correct.
    *
-   * The snapshot may be partial or absent: tab state lives in the dedicated
-   * `task:${id}:tabs` view-state key (read by the pane-layout persistor), so
-   * the aggregate key — which is only written when sidebar/editor/terminal
-   * state changes — can legitimately be missing while tabs are persisted.
+   * The snapshot may be partial, absent, or null: tab state lives in the
+   * dedicated `task:${id}:tabs` view-state key (read by the pane-layout
+   * persistor), so the aggregate key — which is only written when
+   * sidebar/editor/terminal state changes — can legitimately be missing
+   * while tabs are persisted. `null` is what `viewStateCache.get` actually
+   * returns for a missing key (the `= {}` default only covers `undefined`),
+   * so it is normalized here rather than at every call site.
    */
-  restoreSnapshot(savedSnapshot: Partial<TaskViewSnapshot> = {}): void {
-    this.sidebarTab = (savedSnapshot.sidebarTab as SidebarTab | undefined) ?? 'conversations';
-    this.isSidebarCollapsed = savedSnapshot.isSidebarCollapsed ?? true;
-    this.focusedRegion = savedSnapshot.focusedRegion === 'bottom' ? 'bottom' : 'main';
-    this.isTerminalDrawerOpen = savedSnapshot.isTerminalDrawerOpen ?? false;
-    this.terminalDrawerActiveItem = savedSnapshot.terminalDrawerActiveItem;
+  restoreSnapshot(savedSnapshot: Partial<TaskViewSnapshot> | null = {}): void {
+    const snapshot = savedSnapshot ?? {};
+    this.sidebarTab = (snapshot.sidebarTab as SidebarTab | undefined) ?? 'conversations';
+    this.isSidebarCollapsed = snapshot.isSidebarCollapsed ?? true;
+    this.focusedRegion = snapshot.focusedRegion === 'bottom' ? 'bottom' : 'main';
+    this.isTerminalDrawerOpen = snapshot.isTerminalDrawerOpen ?? false;
+    this.terminalDrawerActiveItem = snapshot.terminalDrawerActiveItem;
 
     // Pass the aggregate blob as fallback so the persistor can migrate legacy
     // tabGroups/tabManager/conversations fields when no dedicated key exists yet.
-    this._seeder.markConsumed(this.paneLayout.hydrate(savedSnapshot));
+    this._seeder.markConsumed(this.paneLayout.hydrate(snapshot));
 
-    if (savedSnapshot.terminals) {
-      this.terminalTabs.restoreSnapshot(savedSnapshot.terminals);
+    if (snapshot.terminals) {
+      this.terminalTabs.restoreSnapshot(snapshot.terminals);
     }
-    if (savedSnapshot.editor) {
-      this.editorView.restoreSnapshot(savedSnapshot.editor);
+    if (snapshot.editor) {
+      this.editorView.restoreSnapshot(snapshot.editor);
     }
-    if (savedSnapshot.diffView) {
-      this._savedDiffViewSnapshot = savedSnapshot.diffView;
+    if (snapshot.diffView) {
+      this._savedDiffViewSnapshot = snapshot.diffView;
     }
-    if (savedSnapshot.changesRail) {
-      this.changesRail.restoreSnapshot(savedSnapshot.changesRail);
+    if (snapshot.changesRail) {
+      this.changesRail.restoreSnapshot(snapshot.changesRail);
     }
   }
 
