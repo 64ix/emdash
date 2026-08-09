@@ -8,6 +8,8 @@ import { ProjectConfigImportModal } from '@renderer/features/projects/components
 import { ShareProjectConfigModal } from '@renderer/features/projects/components/settings-view/share-project-config-modal';
 import { AgentSignInModal } from '@renderer/features/settings/agents-page/AgentSignInModal';
 import { GithubConnectModal } from '@renderer/features/settings/components/github-connect-modal';
+import { JoinSyncSpaceModal } from '@renderer/features/settings/components/join-sync-space-modal';
+import { PairingSecretModal } from '@renderer/features/settings/components/pairing-secret-modal';
 import { CreateSkillModal } from '@renderer/features/skills/components/CreateSkillModal';
 import { AddRemoteModal } from '@renderer/features/tasks/add-remote-modal';
 import { CreateTaskModal } from '@renderer/features/tasks/create-task-modal/create-task-modal';
@@ -66,6 +68,8 @@ export const modalRegistry = {
   projectConfigImportModal: createModal(ProjectConfigImportModal, { size: 'md' }),
   integrationSetupModal: createModal(IntegrationSetupModal, { size: 'md' }),
   githubConnectModal: createModal(GithubConnectModal, { size: 'md' }),
+  joinSyncSpaceModal: createModal(JoinSyncSpaceModal, { size: 'sm' }),
+  pairingSecretModal: createModal(PairingSecretModal, { size: 'md' }),
   agentSignInModal: createModal(AgentSignInModal, { size: 'lg' }),
   addRemoteModal: createModal(AddRemoteModal),
   deleteTaskModal: createModal(DeleteTaskModal, { size: 'sm' }),

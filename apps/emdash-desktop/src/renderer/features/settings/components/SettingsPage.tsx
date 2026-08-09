@@ -9,6 +9,7 @@ import { SettingsSearchProvider } from '../search/settings-search-context';
 import { SETTINGS_TABS, type SettingsPageTab } from '../settings-tabs';
 import { AccountTab } from './AccountTab';
 import { BrowserSettingsCard } from './BrowserSettingsCard';
+import { DevicesSettingsCard } from './DevicesSettingsCard';
 import HiddenToolsSettingsCard from './HiddenToolsSettingsCard';
 import IntegrationsCard from './IntegrationsCard';
 import InterfaceSettingsCard from './InterfaceSettingsCard';
@@ -88,6 +89,19 @@ function ConnectionsSettingsPage() {
   );
 }
 
+function DevicesSettingsPage() {
+  return (
+    <div className="space-y-8">
+      <PageHeader
+        sticky
+        title="Devices"
+        description="Pair this machine with other devices and manage your sync space."
+      />
+      <DevicesSettingsCard />
+    </div>
+  );
+}
+
 function RepositorySettingsPage() {
   return (
     <div className="space-y-8">
@@ -161,6 +175,7 @@ const TAB_CONTENT: Record<Exclude<SettingsPageTab, 'docs'>, React.ComponentType>
   'clis-models': AgentsSettingsPage,
   integrations: IntegrationsSettingsPage,
   connections: ConnectionsSettingsPage,
+  devices: DevicesSettingsPage,
   browser: BrowserSettingsPage,
   repository: RepositorySettingsPage,
   storage: StorageTabPage,
