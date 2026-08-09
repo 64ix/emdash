@@ -19,6 +19,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import type { SidebarRow } from '@renderer/features/sidebar/stage-group-row-model';
+import type { LinkedIssueRoles } from '@shared/core/linked-issue';
 
 type MockTaskStatus = 'idle' | 'working' | 'awaiting-input' | 'error' | 'completed' | null;
 
@@ -30,6 +31,9 @@ type MockTaskStore = {
     type: string;
     prs: unknown[];
     workflowStage?: string;
+    boardRank?: string;
+    linkedIssues?: LinkedIssueRoles;
+    workspaceId?: string;
     createdAt?: string;
     updatedAt?: string;
     isPinned?: boolean;
@@ -37,6 +41,7 @@ type MockTaskStore = {
   };
   isBootstrapping: boolean;
   status: MockTaskStatus;
+  updateBoardPosition: ReturnType<typeof vi.fn>;
 };
 
 type MockProject = {
@@ -83,6 +88,8 @@ const mocks = vi.hoisted(() => ({
   showModal: vi.fn(),
   confirmDeleteProject: vi.fn(),
   setProjectOrder: vi.fn(),
+  toast: vi.fn(),
+  taskGitWorktree: undefined as { branchName: string } | undefined,
   currentView: 'project' as string,
   taskParams: {} as Record<string, string>,
   projectParams: {} as Record<string, string>,
@@ -207,7 +214,7 @@ vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
   getTaskStore: (projectId: string, taskId: string) =>
     managersByProject.get(projectId)?.get(taskId),
   taskAgentStatus: (store: MockTaskStore) => store.status,
-  getTaskGitWorktreeStore: () => undefined,
+  getTaskGitWorktreeStore: () => mocks.taskGitWorktree,
   getWorkspaceForTask: () => undefined,
   // The remaining exports are read by real modules in the `task-store`
   // import chain; never exercised here.
@@ -241,8 +248,8 @@ vi.mock('@renderer/features/settings/use-app-settings-key', () => ({
 }));
 
 vi.mock('@renderer/lib/hooks/use-toast', () => ({
-  useToast: () => ({ toast: vi.fn() }),
-  toast: vi.fn(),
+  useToast: () => ({ toast: mocks.toast }),
+  toast: mocks.toast,
 }));
 
 vi.mock('@renderer/utils/telemetryClient', () => ({
@@ -281,6 +288,21 @@ function makeTask(
     },
     isBootstrapping: false,
     status,
+    updateBoardPosition: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+/** An open GitHub Spec issue — governs Spec (ticket #48). */
+function openSpecLink(): LinkedIssueRoles {
+  return {
+    version: '1',
+    spec: {
+      provider: 'github',
+      url: 'https://github.com/acme/repo/issues/42',
+      title: 'Spec issue',
+      identifier: '#42',
+      status: 'open',
+    },
   };
 }
 
@@ -456,6 +478,8 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
     mocks.captureTelemetry.mockClear();
     mocks.confirmDeleteProject.mockClear();
     mocks.setProjectOrder.mockClear();
+    mocks.toast.mockClear();
+    mocks.taskGitWorktree = undefined;
     mocks.currentView = 'project';
     mocks.taskParams = {};
     mocks.projectParams = {};
@@ -585,7 +609,7 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
     expect(mocks.setProjectOrder).not.toHaveBeenCalled();
   });
 
-  it('never starts a drag from a task row inside an expanded card', async () => {
+  it('a task drag never reorders projects, and the task row keeps its click-to-task', async () => {
     store().rawSidebarRows = [
       { kind: 'project', projectId: 'p1' },
       { kind: 'task', projectId: 'p1', taskId: 't1' },
@@ -605,16 +629,204 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
     const taskRow = host.querySelector('[data-sidebar-task-id="t1"]') as HTMLElement;
     expect(taskRow).not.toBeNull();
 
-    // A full gesture from the task row onto another card: nothing may
-    // happen — no drag starts (no overlay, no indicator), no reorder write.
+    // Task drags stay inside their own project: dragging onto another
+    // project's card may resolve to the nearest own-project row, but the
+    // project order is never touched.
     await dragCardTo(taskRow, () => cardContainer('p2'), 'bottom');
     expect(mocks.setProjectOrder).not.toHaveBeenCalled();
-    expect(insertionIndicator()).toBeNull();
-    expect(dragOverlay()).toBeNull();
 
-    // And the task row keeps its own click-to-task navigation.
+    // And the task row keeps its own click-to-task navigation. The drag
+    // above leaves dnd-kit's ~50ms click-suppression window open (the click
+    // that follows a drag release), so wait it out before the plain click.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await settle();
     taskRow.querySelector('button')?.click();
     await settle();
     expect(mocks.navigate).toHaveBeenCalledWith('task', { projectId: 'p1', taskId: 't1' });
+  });
+});
+
+/**
+ * One expanded project with two Stage Groups — the task drag-reorder
+ * baseline (spec #85 ticket #89, restored on the cards).
+ */
+function groupedProjectRows(): SidebarRow[] {
+  return [
+    { kind: 'project', projectId: 'p1' },
+    { kind: 'stage-group', projectId: 'p1', stage: 'idea', label: 'Idea', count: 3 },
+    { kind: 'task', projectId: 'p1', taskId: 'idea-1' },
+    { kind: 'task', projectId: 'p1', taskId: 'idea-2' },
+    { kind: 'task', projectId: 'p1', taskId: 'idea-3' },
+    { kind: 'stage-group', projectId: 'p1', stage: 'spec', label: 'Spec', count: 2 },
+    { kind: 'task', projectId: 'p1', taskId: 'spec-1' },
+    { kind: 'task', projectId: 'p1', taskId: 'spec-2' },
+  ];
+}
+
+function groupedManagers() {
+  managersByProject.set(
+    'p1',
+    new Map([
+      ['idea-1', makeTask('idea-1', 'idle', { workflowStage: 'idea', boardRank: 'a' })],
+      ['idea-2', makeTask('idea-2', 'idle', { workflowStage: 'idea', boardRank: 'm' })],
+      ['idea-3', makeTask('idea-3', 'idle', { workflowStage: 'idea', boardRank: 'z' })],
+      ['spec-1', makeTask('spec-1', 'idle', { workflowStage: 'spec', boardRank: 'a' })],
+      ['spec-2', makeTask('spec-2', 'idle', { workflowStage: 'spec', boardRank: 'm' })],
+    ])
+  );
+}
+
+/** The sortable task row wrapper (dnd-kit listeners + data-sidebar-task-id). */
+function taskRow(taskId: string): HTMLElement {
+  const el = host.querySelector<HTMLElement>(`[data-sidebar-task-id="${taskId}"]`);
+  if (!el) throw new Error(`no rendered task row for ${taskId}`);
+  return el;
+}
+
+/** Press on `from`, walk to the target in steps, hover a beat, release. */
+async function dragTo(
+  from: Element,
+  toX: number,
+  toY: number,
+  hoverFrames = 6,
+  onHover?: () => void
+) {
+  const start = center(from);
+  from.dispatchEvent(pointer('pointerdown', start.x, start.y));
+  await settle();
+  // Exceed the 6px activation constraint, then walk to the target in steps so
+  // dnd-kit gets intermediate collision passes (like a real hand would).
+  document.dispatchEvent(pointer('pointermove', start.x + 10, start.y + 2));
+  await settle();
+  const steps = 6;
+  for (let i = 1; i <= steps; i++) {
+    const x = start.x + ((toX - start.x) * i) / steps;
+    const y = start.y + ((toY - start.y) * i) / steps;
+    document.dispatchEvent(pointer('pointermove', x, y));
+    await settle(2);
+  }
+  await settle(hoverFrames);
+  onHover?.();
+  document.dispatchEvent(pointer('pointerup', toX, toY));
+  await settle();
+}
+
+describe('SidebarCardList task drag & drop between Stage Groups (spec #85, ticket #89, restored on cards)', () => {
+  beforeEach(async () => {
+    await page.viewport(400, 800);
+    style = document.createElement('style');
+    style.textContent = LAYOUT_CSS;
+    document.head.appendChild(style);
+    host = document.createElement('div');
+    host.id = 'card-dnd-host';
+    document.body.appendChild(host);
+    root = createRoot(host);
+
+    managersByProject.clear();
+    mocks.navigate.mockClear();
+    mocks.captureTelemetry.mockClear();
+    mocks.confirmDeleteProject.mockClear();
+    mocks.setProjectOrder.mockClear();
+    mocks.toast.mockClear();
+    mocks.taskGitWorktree = undefined;
+    mocks.currentView = 'project';
+    mocks.taskParams = {};
+    mocks.projectParams = {};
+    mocks.boardParams = {};
+    mocks.projectViewKind = 'ready';
+    mocks.sshState = 'connected';
+    mocks.getProjectStore.mockImplementation((id: string) => defaultProject(id));
+    mocks.interfaceSettings = {};
+    mocks.TaskGitDiffStats.mockClear();
+    mocks.PrBadge.mockClear();
+    mocks.RelativeTime.mockClear();
+
+    const s = store();
+    s.rawSidebarRows = groupedProjectRows();
+    s.orderedProjects = [{ id: 'p1' }];
+    s.expandedProjectIds.clear();
+    s.expandedProjectIds.add('p1');
+    s.collapsedStageGroupIdsByProject = {};
+    s.hiddenTaskIdsByProject = {};
+    s.visibleTaskIdsByProject = {};
+    s.taskSortBy = 'created-at';
+    groupedManagers();
+  });
+
+  afterEach(() => {
+    root.unmount();
+    host.remove();
+    style.remove();
+  });
+
+  it('writes the stage and an interpolated rank when dragging between groups', async () => {
+    await mount(<SidebarCardList />);
+
+    // idea-2 (rank 'm') dropped above spec-1 (rank 'a'): the Spec group's
+    // first slot — a rank strictly before spec-1's.
+    const spec1Center = center(taskRow('spec-1'));
+    await dragTo(taskRow('idea-2'), spec1Center.x, spec1Center.y - 5);
+
+    const idea2 = managersByProject.get('p1')!.get('idea-2')!;
+    expect(idea2.updateBoardPosition).toHaveBeenCalledTimes(1);
+    const [stage, rank] = idea2.updateBoardPosition.mock.calls[0]!;
+    expect(stage).toBe('spec');
+    expect(rank).toBeTruthy();
+    expect(rank < 'a').toBe(true);
+  });
+
+  it('reorders within a group by interpolating between the neighbours it lands between', async () => {
+    await mount(<SidebarCardList />);
+
+    // idea-3 (rank 'z') dropped above idea-2 (rank 'm'): a rank strictly
+    // between idea-1's 'a' and idea-2's 'm'.
+    const idea2Center = center(taskRow('idea-2'));
+    await dragTo(taskRow('idea-3'), idea2Center.x, idea2Center.y - 5);
+
+    const idea3 = managersByProject.get('p1')!.get('idea-3')!;
+    expect(idea3.updateBoardPosition).toHaveBeenCalledTimes(1);
+    const [stage, rank] = idea3.updateBoardPosition.mock.calls[0]!;
+    expect(stage).toBe('idea');
+    expect(rank > 'a' && rank < 'm').toBe(true);
+  });
+
+  it('leaves a task unranked when dropped at the end of a group', async () => {
+    await mount(<SidebarCardList />);
+
+    // idea-1 (rank 'a') dropped below idea-3, the group's last visible row:
+    // an end-of-group drop — stage-only, no rank.
+    const idea3Center = center(taskRow('idea-3'));
+    await dragTo(taskRow('idea-1'), idea3Center.x, idea3Center.y + 5);
+
+    const idea1 = managersByProject.get('p1')!.get('idea-1')!;
+    expect(idea1.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(idea1.updateBoardPosition).toHaveBeenCalledWith('idea', null);
+  });
+
+  it('rejects a cross-stage drop a GitHub fact would overwrite, with the board gating feedback and no promise line', async () => {
+    // spec-1 is held in Spec by an open Spec issue: the Idea group is a
+    // destination the next sync pass would reassert over (ADR 0006).
+    managersByProject.get('p1')!.set(
+      'spec-1',
+      makeTask('spec-1', 'idle', {
+        workflowStage: 'spec',
+        boardRank: 'a',
+        linkedIssues: openSpecLink(),
+      })
+    );
+    await mount(<SidebarCardList />);
+
+    const idea1Center = center(taskRow('idea-1'));
+    let indicatorSeen = false;
+    await dragTo(taskRow('spec-1'), idea1Center.x, idea1Center.y - 5, 6, () => {
+      indicatorSeen = insertionIndicator() !== null;
+    });
+
+    expect(indicatorSeen).toBe(false);
+    const spec1 = managersByProject.get('p1')!.get('spec-1')!;
+    expect(spec1.updateBoardPosition).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+    const toastCall = mocks.toast.mock.calls[0]![0] as { title?: string };
+    expect(toastCall.title).toBe('Stage move blocked');
   });
 });

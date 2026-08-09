@@ -43,7 +43,7 @@ export const SidebarStageGroupItem = observer(function SidebarStageGroupItem({
   const isShipped = stage === 'shipped';
   return (
     <SidebarMenuRow
-      className={cn('group/row h-8 justify-between gap-1 px-1 pl-8', className)}
+      className={cn('group/row h-8 justify-between gap-1 px-1 pl-8 cursor-pointer', className)}
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => sidebarStore.toggleStageGroupCollapsed(projectId, stage)}
     >

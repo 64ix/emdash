@@ -38,12 +38,20 @@ interface SidebarTaskItemProps {
    * one.
    */
   rowVariant?: 'underProject' | 'pinned' | 'grouped' | 'card';
+  /**
+   * Extra row classes (spec #120 fix): the card list deepens the indent of
+   * tasks inside a Stage Group past the group header's label, so member
+   * tasks visibly nest under their category. Merged after the variant's
+   * padding, so `pl-*` here overrides the variant default.
+   */
+  className?: string;
 }
 
 export const SidebarTaskItem = observer(function SidebarTaskItem({
   taskId,
   projectId,
   rowVariant = 'underProject',
+  className,
 }: SidebarTaskItemProps) {
   const { navigate } = useNavigate();
   const showRename = useShowModal('renameTaskModal');
@@ -144,14 +152,15 @@ export const SidebarTaskItem = observer(function SidebarTaskItem({
     >
       <SidebarMenuRow
         className={cn(
-          'group/row flex items-center justify-between px-1 py-1.5 h-8 gap-1',
+          'group/row flex items-center justify-between px-1 py-1.5 h-8 gap-1 cursor-pointer',
           rowVariant === 'pinned'
             ? 'pl-2'
             : rowVariant === 'card'
               ? 'pl-1'
               : rowVariant === 'grouped'
                 ? 'pl-12'
-                : 'pl-8'
+                : 'pl-8',
+          className
         )}
         isActive={isActive}
         style={isActive ? { backgroundColor: JADE_ACTIVE_BACKGROUND } : undefined}

@@ -26,6 +26,7 @@ vi.mock('@renderer/lib/layout/navigation-provider', () => ({
   useNavigate: () => ({ navigate: mocks.navigate }),
   useWorkspaceSlots: () => ({ currentView: mocks.currentView }),
   isCurrentView: (current: string | null | undefined, target: string) => current === target,
+  useParams: () => ({ params: {} }),
 }));
 
 vi.mock('@renderer/lib/layout/layout-provider', () => ({
@@ -37,10 +38,50 @@ vi.mock('@renderer/lib/layout/layout-provider', () => ({
 
 vi.mock('@renderer/lib/modal/modal-provider', () => ({
   useShowModal: () => vi.fn(),
+  showModal: vi.fn(),
+}));
+
+// The real app-state singleton spins up store resources that RPC-fetch on
+// construction (ssh.getHealthStates) — unavailable in the browser harness —
+// so the sidebar store is stubbed with the empty-project double the other
+// sidebar suites use; the empty state is what the real chain renders anyway.
+vi.mock('@renderer/lib/stores/app-state', () => ({
+  appState: {
+    sshConnections: {
+      stateFor: () => 'connected' as string | null,
+      connect: vi.fn(),
+    },
+  },
+  sidebarStore: {
+    get sidebarRows() {
+      return [];
+    },
+    get isEmpty() {
+      return true;
+    },
+    orderedProjects: [] as { id: string }[],
+    expandedProjectIds: {
+      has: () => false,
+      add: vi.fn(),
+      delete: vi.fn(),
+      clear: vi.fn(),
+    },
+    collapsedStageGroupIdsByProject: {},
+    hiddenTaskIdsByProject: {},
+    taskSortBy: 'created-at',
+    ensureProjectExpanded: vi.fn(),
+    toggleProjectExpanded: vi.fn(),
+    toggleStageGroupCollapsed: vi.fn(),
+    isStageGroupCollapsed: () => false,
+    visibleTaskIdsForProject: () => [],
+    hideTaskFromSidebar: vi.fn(),
+    showTaskInSidebar: vi.fn(),
+  },
 }));
 
 vi.mock('@renderer/lib/ui/shortcut', () => ({
   BoundShortcut: () => null,
+  Shortcut: () => null,
 }));
 
 vi.mock('@renderer/features/provider-usage/provider-usage-gauges', () => ({

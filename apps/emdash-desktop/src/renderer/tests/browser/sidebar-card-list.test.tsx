@@ -410,7 +410,7 @@ describe('SidebarCardList (spec #120, ticket #122)', () => {
     expect(host.querySelector('button[aria-label="Expand Project One"]')).not.toBeNull();
   });
 
-  it('collapsed project header shows aggregate signal, attention chip and task count from the store refs seam', async () => {
+  it('collapsed project header shows aggregate signal and attention chip from the store refs seam', async () => {
     // Collapsed project: the stream carries only the project row; the
     // header aggregates come from the caller-supplied visible task refs
     // (ticket #121 review — the wiring this ticket owes).
@@ -431,9 +431,6 @@ describe('SidebarCardList (spec #120, ticket #122)', () => {
     // Attention chip counts both tasks (error + awaiting-input).
     const attention = host.querySelector('[aria-label$="need attention"]');
     expect(attention?.textContent).toBe('2');
-    // Task count badge from the refs.
-    const count = host.querySelector('[aria-label="2 tasks"]');
-    expect(count?.textContent).toBe('2');
   });
 
   it('opens the Feature Board on header click, with no expand toggle', async () => {
@@ -489,6 +486,54 @@ describe('SidebarCardList (spec #120, ticket #122)', () => {
     // Task rows render nested under the rail.
     expect(host.querySelector('button[aria-label="Open task t1"]')).not.toBeNull();
     expect(host.querySelector('button[aria-label="Open task t2"]')).not.toBeNull();
+  });
+
+  it('renders each task under its own Stage Group, in stream order (spec #85 grouping preserved)', async () => {
+    store().rawSidebarRows = expandedProjectRows();
+    store().expandedProjectIds.add('p1');
+    managersByProject.set(
+      'p1',
+      new Map([
+        ['t1', makeTask('t1', 'idle')],
+        ['t2', makeTask('t2', 'idle')],
+      ])
+    );
+    await mount(<SidebarCardList />);
+
+    // The body must interleave group headers with their tasks — not render
+    // all headers first and all tasks after (the release regression: tasks
+    // no longer sat inside their category).
+    const order = Array.from(
+      host.querySelectorAll<HTMLElement>(
+        '[aria-label^="Idea,"], [aria-label^="Spec,"], [aria-label="Open task t1"], [aria-label="Open task t2"]'
+      )
+    ).map((el) => el.getAttribute('aria-label'));
+    expect(order).toEqual(['Idea, 1 task', 'Open task t1', 'Spec, 1 task', 'Open task t2']);
+  });
+
+  it('renders Unstaged loose task rows above the first Stage Group header', async () => {
+    store().rawSidebarRows = [
+      { kind: 'project', projectId: 'p1' },
+      { kind: 'task', projectId: 'p1', taskId: 'loose' },
+      { kind: 'stage-group', projectId: 'p1', stage: 'idea', label: 'Idea', count: 1 },
+      { kind: 'task', projectId: 'p1', taskId: 't1' },
+    ];
+    store().expandedProjectIds.add('p1');
+    managersByProject.set(
+      'p1',
+      new Map([
+        ['loose', makeTask('loose', 'idle')],
+        ['t1', makeTask('t1', 'idle')],
+      ])
+    );
+    await mount(<SidebarCardList />);
+
+    const order = Array.from(
+      host.querySelectorAll<HTMLElement>(
+        '[aria-label^="Idea,"], [aria-label="Open task loose"], [aria-label="Open task t1"]'
+      )
+    ).map((el) => el.getAttribute('aria-label'));
+    expect(order).toEqual(['Open task loose', 'Idea, 1 task', 'Open task t1']);
   });
 
   it('collapses a Stage Group on its header click, hiding only its tasks', async () => {
@@ -575,6 +620,36 @@ describe('SidebarCardList (spec #120, ticket #122)', () => {
     await mount(<SidebarCardList />);
 
     expect(host.textContent).toContain('No projects yet — use the + button to add one.');
+  });
+
+  it('explains why the card body is empty instead of asking to add a task when tasks are hidden', async () => {
+    store().rawSidebarRows = [{ kind: 'project', projectId: 'p1' }];
+    store().expandedProjectIds.add('p1');
+    store().hiddenTaskIdsByProject = { p1: ['t1', 't2'] };
+    managersByProject.set(
+      'p1',
+      new Map([
+        ['t1', makeTask('t1', 'idle')],
+        ['t2', makeTask('t2', 'idle')],
+      ])
+    );
+    await mount(<SidebarCardList />);
+
+    expect(host.textContent).toContain(
+      'All tasks are hidden from the sidebar — show them from the project view.'
+    );
+    expect(host.textContent).not.toContain('add one from the project');
+  });
+
+  it('keeps the hover-revealed New Task button on the card header', async () => {
+    store().rawSidebarRows = [{ kind: 'project', projectId: 'p1' }];
+    await mount(<SidebarCardList />);
+
+    const button = host.querySelector<HTMLElement>('button[aria-label="New task for Project One"]');
+    expect(button).not.toBeNull();
+    button!.click();
+    await settle();
+    expect(mocks.showModal).toHaveBeenCalledWith({ projectId: 'p1' });
   });
 });
 

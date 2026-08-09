@@ -35,26 +35,23 @@ export function SidebarSignalDot({
   className?: string;
 }) {
   if (!signal) return null;
-  if (signal === 'working') {
-    return (
-      <span
-        className={cn('flex size-3.5 shrink-0 items-center justify-center', className)}
-        title={SIGNAL_LABELS.working}
-        aria-label={SIGNAL_LABELS.working}
-      >
-        <CLISpinner />
-      </span>
-    );
-  }
   return (
     <span
-      className={cn('size-2 shrink-0 rounded-full', className, {
-        'bg-foreground-warning': signal === 'awaiting-input',
-        'bg-foreground-error': signal === 'error',
-        'bg-foreground-success': signal === 'completed',
-      })}
+      className={cn(className, 'flex size-3.5 shrink-0 items-center justify-center')}
       title={SIGNAL_LABELS[signal]}
       aria-label={SIGNAL_LABELS[signal]}
-    />
+    >
+      {signal === 'working' ? (
+        <CLISpinner />
+      ) : (
+        <span
+          className={cn('size-2 shrink-0 rounded-full', {
+            'bg-foreground-warning': signal === 'awaiting-input',
+            'bg-foreground-error': signal === 'error',
+            'bg-foreground-success': signal === 'completed',
+          })}
+        />
+      )}
+    </span>
   );
 }
