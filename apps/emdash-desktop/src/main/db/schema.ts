@@ -52,7 +52,10 @@ export const projects = sqliteTable(
   {
     id: text('id').primaryKey(),
     name: text('name').notNull(),
-    path: text('path').notNull(),
+    // Nullable for multi-machine sync: projects created on another machine have
+    // no local path until the workspace is provisioned here (spec #130). The
+    // unique index on path still holds — SQLite treats NULLs as distinct.
+    path: text('path'),
     workspaceProvider: text('workspace_provider').notNull().default('local'), // 'local' | 'ssh'
     baseRef: text('base_ref'),
     sshConnectionId: text('ssh_connection_id').references(() => sshConnections.id, {
@@ -66,6 +69,10 @@ export const projects = sqliteTable(
     updatedAt: text('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Sync clock (ms epoch), maintained by AFTER INSERT/UPDATE triggers
+    // (trg_projects_sync_ts_ins/upd) for multi-machine push detection
+    // (WHERE sync_ts > lastPushed). Not wired into behaviour yet (spec #130).
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     pathIdx: uniqueIndex('idx_projects_path').on(table.path),
@@ -81,6 +88,8 @@ export const projectRemotes = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     remoteName: text('remote_name').notNull(),
     remoteUrl: text('remote_url').notNull(),
+    // Sync clock (ms epoch) maintained by trg_project_remotes_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.projectId, table.remoteName] }),
@@ -100,6 +109,8 @@ export const projectSettings = sqliteTable('project_settings', {
   updatedAt: text('updated_at')
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
+  // Sync clock (ms epoch) maintained by trg_project_settings_sync_ts_ins/upd.
+  syncTs: integer('sync_ts').notNull().default(0),
 });
 
 export const appSettings = sqliteTable(
@@ -156,6 +167,8 @@ export const tasks = sqliteTable(
     assignedPrUrl: text('assigned_pr_url').references(() => pullRequests.url, {
       onDelete: 'set null',
     }),
+    // Sync clock (ms epoch) maintained by trg_tasks_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     projectIdIdx: index('idx_tasks_project_id').on(table.projectId),
@@ -328,6 +341,8 @@ export const automations = sqliteTable(
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),
+    // Sync clock (ms epoch) maintained by trg_automations_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     projectIdIdx: index('idx_automations_project_id').on(table.projectId),
@@ -403,6 +418,8 @@ export const conversations = sqliteTable(
     agentStatus: text('agent_status'),
     agentStatusSeen: integer('agent_status_seen').default(1),
     type: text('type'),
+    // Sync clock (ms epoch) maintained by trg_conversations_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     taskIdIdx: index('idx_conversations_task_id').on(table.taskId),
