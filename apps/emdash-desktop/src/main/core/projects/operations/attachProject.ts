@@ -259,6 +259,7 @@ async function findMergeCandidates(
       // remotes match (handled by the scan below), but when neither carries
       // remotes the unique path index makes the attach impossible — hard
       // conflict instead of an uncaught SQLITE constraint on the UPDATE.
+      if (p.path === null) continue;
       const live = await readLiveRemotes(p.path);
       if (!live.success || !remotePairSetsMatch(live.data, pickedRemotes)) {
         return {
