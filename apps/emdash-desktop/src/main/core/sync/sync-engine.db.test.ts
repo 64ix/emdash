@@ -12,6 +12,7 @@
  * test is the RelayTransport interface; the fake implements exactly the
  * observable contract the relay documents.
  */
+import type { Result } from '@emdash/shared';
 import { openFixture } from '@tooling/utils/db';
 import type { FixtureDb } from '@tooling/utils/db';
 import { eq } from 'drizzle-orm';
@@ -175,8 +176,9 @@ function makeEngine(
   return new SyncEngine({ sqlite: fixture.sqlite, transport: relay, deviceId, ...options });
 }
 
-function expectOk(summary: { success: boolean }): void {
-  expect(summary.success, `expected ok, got ${JSON.stringify(summary)}`).toBe(true);
+/** Asserts a Result is ok and narrows it so `result.data` typechecks. */
+function expectOk<T>(result: Result<T, unknown>): asserts result is { success: true; data: T } {
+  expect(result.success, `expected ok, got ${JSON.stringify(result)}`).toBe(true);
 }
 
 function bodyColumns(
@@ -1209,10 +1211,17 @@ describe('SyncEngine', () => {
       expectOk(await engineA.syncNow());
       expectOk(await engineB.syncNow());
 
-      // Fresh import defaults to disabled.
+      // Fresh import defaults to disabled and reads as imported.
       expect(
         rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
       ).toBe(0);
+      expect(rawGet(fixtureB, 'SELECT source FROM automations WHERE id = ?', AUTO_1)?.source).toBe(
+        'imported'
+      );
+      // The creating machine keeps its own origin.
+      expect(rawGet(fixtureA, 'SELECT source FROM automations WHERE id = ?', AUTO_1)?.source).toBe(
+        'local'
+      );
 
       // B enables it locally; the payload still carries no `enabled` and A's
       // own value is untouched when B's row wins LWW.
@@ -1225,6 +1234,86 @@ describe('SyncEngine', () => {
       ).toBe(1);
       expect(
         rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(1);
+    });
+
+    it('syncs automation config edits whole-row LWW while enabled and source stay local', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      const triggerA = JSON.stringify({ expr: '0 9 * * *', tz: 'UTC' });
+      await seedProject(fixtureA, PROJECT_A);
+      fixtureA.sqlite
+        .prepare(
+          `INSERT INTO automations (id, name, project_id, trigger_config, conversation_config, enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 1, 0, 0)`
+        )
+        .run(
+          AUTO_1,
+          'Daily',
+          PROJECT_A,
+          triggerA,
+          JSON.stringify({ prompt: 'Check things', provider: 'claude' })
+        );
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+
+      // B receives the row disabled and imported; A stays enabled and local.
+      expect(
+        rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(0);
+      expect(rawGet(fixtureB, 'SELECT source FROM automations WHERE id = ?', AUTO_1)?.source).toBe(
+        'imported'
+      );
+      expect(
+        rawGet(fixtureA, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(1);
+
+      // B enables it locally and edits the name (a whole-row config edit).
+      fixtureB.sqlite
+        .prepare('UPDATE automations SET enabled = 1, name = ? WHERE id = ?')
+        .run('Daily (edited on B)', AUTO_1);
+      expectOk(await engineB.syncNow());
+      // The payload carries the config columns but never enabled/source.
+      const pushed = bodyColumns(relay, 'automations', AUTO_1);
+      expect(pushed?.name).toBe('Daily (edited on B)');
+      expect(pushed).not.toHaveProperty('enabled');
+      expect(pushed).not.toHaveProperty('source');
+
+      // A pulls B's edit: the name lands, A's enabled and source survive.
+      expectOk(await engineA.syncNow());
+      expect(rawGet(fixtureA, 'SELECT name FROM automations WHERE id = ?', AUTO_1)?.name).toBe(
+        'Daily (edited on B)'
+      );
+      expect(
+        rawGet(fixtureA, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(1);
+      expect(rawGet(fixtureA, 'SELECT source FROM automations WHERE id = ?', AUTO_1)?.source).toBe(
+        'local'
+      );
+
+      // A edits the trigger config; B pulls it while keeping its local state.
+      const triggerA2 = JSON.stringify({ expr: '0 10 * * *', tz: 'UTC' });
+      fixtureA.sqlite
+        .prepare('UPDATE automations SET trigger_config = ? WHERE id = ?')
+        .run(triggerA2, AUTO_1);
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(
+        rawGet(fixtureB, 'SELECT trigger_config FROM automations WHERE id = ?', AUTO_1)
+          ?.trigger_config
+      ).toBe(triggerA2);
+      expect(
+        rawGet(fixtureB, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
+      ).toBe(1);
+      expect(rawGet(fixtureB, 'SELECT source FROM automations WHERE id = ?', AUTO_1)?.source).toBe(
+        'imported'
+      );
+      expect(
+        rawGet(fixtureA, 'SELECT enabled FROM automations WHERE id = ?', AUTO_1)?.enabled
       ).toBe(1);
     });
 
