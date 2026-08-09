@@ -191,9 +191,14 @@ export class WorkspaceViewModel implements ILifecycle {
   /**
    * Restore persisted UI state from a saved snapshot. Call this before
    * initialize() so the reaction baseline is correct.
+   *
+   * The snapshot may be partial or absent: tab state lives in the dedicated
+   * `task:${id}:tabs` view-state key (read by the pane-layout persistor), so
+   * the aggregate key — which is only written when sidebar/editor/terminal
+   * state changes — can legitimately be missing while tabs are persisted.
    */
-  restoreSnapshot(savedSnapshot: TaskViewSnapshot): void {
-    this.sidebarTab = (savedSnapshot.sidebarTab as SidebarTab) ?? 'conversations';
+  restoreSnapshot(savedSnapshot: Partial<TaskViewSnapshot> = {}): void {
+    this.sidebarTab = (savedSnapshot.sidebarTab as SidebarTab | undefined) ?? 'conversations';
     this.isSidebarCollapsed = savedSnapshot.isSidebarCollapsed ?? true;
     this.focusedRegion = savedSnapshot.focusedRegion === 'bottom' ? 'bottom' : 'main';
     this.isTerminalDrawerOpen = savedSnapshot.isTerminalDrawerOpen ?? false;

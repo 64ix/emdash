@@ -150,6 +150,22 @@ describe('TaskStore frontend runtime lifecycle', () => {
     expect(order).toEqual(['acquire', 'restore', 'initialize']);
   });
 
+  it('restores the snapshot even when no aggregate view-state was saved', () => {
+    // The aggregate `task:${id}` key is only persisted when sidebar/editor/terminal
+    // state changes; a task whose user only opened conversation tabs can have a
+    // dedicated `task:${id}:tabs` key with no aggregate. restoreSnapshot must still
+    // be invoked (with no snapshot) so the pane-layout persistor can read the
+    // dedicated tabs key — otherwise tabs are silently lost after an app restart.
+    const task = makeTask();
+    const store = createUnprovisionedTask(task);
+    const viewModel = mocks.viewModels[0];
+
+    store.transitionToProvisioned(task, '/tmp/workspace-1', 'workspace-1', {} as never);
+
+    expect(viewModel.restoreSnapshot).toHaveBeenCalledTimes(1);
+    expect(viewModel.initialize).toHaveBeenCalledTimes(1);
+  });
+
   it('recreates registered stores before reprovisioning a dry task', () => {
     const task = makeTask();
     const store = createUnprovisionedTask(task);
