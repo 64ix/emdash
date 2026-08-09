@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { makeJoinSecret, sha256Hex } from '../src/crypto';
 import type { SqlDb } from '../src/db';
 import { handle } from '../src/index';
@@ -377,6 +377,56 @@ describe('push and the per-space version counter', () => {
   });
 });
 
+describe('request body validation', () => {
+  it('rejects a JSON null body with 400 instead of 500 on every endpoint', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    const cases: Array<[string, string | undefined]> = [
+      ['/v1/space', undefined],
+      ['/v1/join', undefined],
+      ['/v1/devices/revoke', space.device_token],
+      ['/v1/sync/pull', space.device_token],
+      ['/v1/sync/push', space.device_token],
+      ['/v1/sync/poll', space.device_token],
+    ];
+    for (const [path, token] of cases) {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (token !== undefined) {
+        headers.authorization = `Bearer ${token}`;
+      }
+      const response = await handle(
+        new Request(`https://relay.local${path}`, { method: 'POST', headers, body: 'null' }),
+        db,
+        T0
+      );
+      expect(response.status, path).toBe(400);
+    }
+  });
+
+  it('rejects JSON primitives as request bodies with 400', async () => {
+    const db = await makeDb();
+    const response = await handle(
+      new Request('https://relay.local/v1/space', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '42',
+      }),
+      db,
+      T0
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it('defaults a non-string device name instead of crashing', async () => {
+    const db = await makeDb();
+    const result = await post(db, '/v1/space', { name: 42 });
+    expect(result.status).toBe(200);
+    const space = result.body as SpaceCreated;
+    const devices = await get(db, '/v1/devices', space.device_token);
+    expect((devices.body as { devices: DeviceInfo[] }).devices[0].name).toBe('default');
+  });
+});
+
 describe('pull cursor semantics', () => {
   it('returns only rows with version greater than the cursor, ordered ascending', async () => {
     const db = await makeDb();
@@ -435,6 +485,21 @@ describe('pull cursor semantics', () => {
     expect((page2.body as PullResult).patches.map((p) => p.pk)).toEqual(['b']);
   });
 
+  it('validates cursor and limit boundaries', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    for (const cursor of [-1, 1.5, '1', null]) {
+      const result = await post(db, '/v1/sync/pull', { cursor }, space.device_token);
+      expect(result.status, `cursor=${String(cursor)}`).toBe(400);
+    }
+    for (const limit of [0, 1001, 1.5, '1']) {
+      const result = await post(db, '/v1/sync/pull', { limit }, space.device_token);
+      expect(result.status, `limit=${String(limit)}`).toBe(400);
+    }
+    const atLimit = await post(db, '/v1/sync/pull', { cursor: 0, limit: 1000 }, space.device_token);
+    expect(atLimit.status).toBe(200);
+  });
+
   it('returns tombstones as rows with the deleted flag and re-upserts supersede them', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
@@ -485,6 +550,37 @@ describe('pull cursor semantics', () => {
         },
       ],
     });
+  });
+});
+
+describe('transactional stamping', () => {
+  it('rolls back the counter increment when the batch fails', async () => {
+    const db = await makeDb();
+    const counter = db
+      .prepare(
+        'INSERT INTO version_counters (space_id, version) VALUES (?1, 1) ON CONFLICT (space_id) DO UPDATE SET version = version + 1 RETURNING version'
+      )
+      .bind('s');
+    const insert = (pk: string, body: string) =>
+      db
+        .prepare(
+          'INSERT INTO sync_rows (space_id, table_name, pk, body, version, deleted, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)'
+        )
+        .bind('s', 't', pk, body, 0, 0);
+    // The second write violates the (space_id, table_name, pk) primary key:
+    // the whole batch must roll back, including the counter increment — a
+    // failed batch can never leave a stale counter or orphan rows.
+    await expect(db.batch([counter, insert('k', 'one'), insert('k', 'two')])).rejects.toThrow();
+    const counterRow = await db
+      .prepare('SELECT version FROM version_counters WHERE space_id = ?1')
+      .bind('s')
+      .first<{ version: number }>();
+    expect(counterRow).toBeNull();
+    const rows = await db
+      .prepare('SELECT pk FROM sync_rows WHERE space_id = ?1')
+      .bind('s')
+      .all<{ pk: string }>();
+    expect(rows.results).toHaveLength(0);
   });
 });
 
@@ -607,5 +703,41 @@ describe('long-poll notification channel', () => {
     );
     const poll = await post(db, '/v1/sync/poll', { cursor: 1, timeout_ms: 0 }, space.device_token);
     expect(poll.body).toEqual({ cursor: 1, patches: [] });
+  });
+
+  it('holds the request until the timeout and then returns empty patches', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const db = await makeDb();
+      const space = await createSpace(db);
+      const promise = post(
+        db,
+        '/v1/sync/poll',
+        { cursor: 0, timeout_ms: 3000 },
+        space.device_token
+      );
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      // Advance in ~1s steps (the poll's re-check cadence), deliberately off
+      // the exact 1000ms boundaries: the request must stay open past the
+      // first re-checks and only resolve at the timeout.
+      await vi.advanceTimersByTimeAsync(1050);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1050);
+      expect(settled).toBe(false);
+      // The timeout (3000ms) fires after the third step; loop until the
+      // request settles, with a generous cap.
+      for (let i = 0; i < 6 && !settled; i++) {
+        await vi.advanceTimersByTimeAsync(1050);
+      }
+      expect(settled).toBe(true);
+      const result = await promise;
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual({ cursor: 0, patches: [] });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
