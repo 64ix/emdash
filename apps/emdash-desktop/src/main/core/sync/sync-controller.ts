@@ -10,6 +10,11 @@ import { pairingService } from './pairing-service-instance';
 
 type PairingFailure = { success: false; code: PairingErrorCode; message: string };
 
+type PairingCreated = { success: true; spaceId: string; secret: string; deepLink: string };
+type PairingJoined = { success: true; spaceId: string };
+type PairingMinted = { success: true; secret: string; deepLink: string };
+type PairingRevoked = { success: true };
+
 function failure(error: { code: PairingErrorCode; message: string }): PairingFailure {
   return { success: false, code: error.code, message: error.message };
 }
@@ -25,21 +30,24 @@ export const syncController = createRPCController({
   },
 
   /** Creates a space with this machine as its first device; returns the pairing secret. */
-  createSpace: async (deviceName?: string) => {
+  createSpace: async (deviceName?: string): Promise<PairingCreated | PairingFailure> => {
     const result = await pairingService.createSpace(deviceName);
     if (!result.success) return failure(result.error);
-    return { success: true, spaceId: result.data.spaceId, ...result.data };
+    return { success: true, ...result.data };
   },
 
   /** Joins a space with a pasted pairing secret. */
-  joinSpace: async (secret: string, deviceName?: string) => {
+  joinSpace: async (
+    secret: string,
+    deviceName?: string
+  ): Promise<PairingJoined | PairingFailure> => {
     const result = await pairingService.joinSpace(secret, deviceName);
     if (!result.success) return failure(result.error);
     return { success: true, spaceId: result.data.spaceId };
   },
 
   /** Mints a fresh single-use pairing secret for an additional device. */
-  mintSecret: async () => {
+  mintSecret: async (): Promise<PairingMinted | PairingFailure> => {
     const result = await pairingService.mintSecret();
     if (!result.success) return failure(result.error);
     return { success: true, ...result.data };
@@ -53,7 +61,7 @@ export const syncController = createRPCController({
   },
 
   /** Revokes a device of the paired space. */
-  revokeDevice: async (deviceId: string) => {
+  revokeDevice: async (deviceId: string): Promise<PairingRevoked | PairingFailure> => {
     const result = await pairingService.revokeDevice(deviceId);
     if (!result.success) return failure(result.error);
     return { success: true };

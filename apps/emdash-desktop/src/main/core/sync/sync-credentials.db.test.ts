@@ -38,9 +38,13 @@ vi.mock('@main/db/client', () => ({
 import { SyncCredentialsStore, type SyncCredential } from './sync-credentials';
 
 /** Fake safeStorage: deterministic base64-obscured round trip. */
-function fakeSafeStorage(available = true, backend = 'keychain') {
+function fakeSafeStorage(
+  available = true,
+  backend: 'basic_text' | 'gnome_libsecret' | 'kwallet' | 'unknown' = 'kwallet'
+) {
   return {
     isEncryptionAvailable: () => available,
+    setUsePlainTextEncryption: (_usePlainText: boolean) => {},
     encryptString: (plain: string) => Buffer.from(`enc:${plain}`, 'utf8'),
     decryptString: (encrypted: Buffer) => encrypted.toString('utf8').slice(4),
     getSelectedStorageBackend: () => backend,

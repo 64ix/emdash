@@ -129,7 +129,7 @@ export class HttpRelayAuthApi implements RelayAuthApi {
     return result.success ? ok() : result;
   }
 
-  private post<TData, TBody extends Record<string, unknown>>(
+  private post<TData, TBody extends Record<string, unknown> = Record<string, never>>(
     path: string,
     body: TBody,
     token?: string

@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
     getHealthStates,
     getConnectionState,
     toast: vi.fn(),
-    onEvent: vi.fn(() => () => {}),
+    onEvent: vi.fn((_channel: { name?: string }, _handler: unknown) => () => {}),
   };
 });
 
