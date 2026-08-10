@@ -35,8 +35,8 @@ import type { DeviceIdentity } from './device-identity';
 import { EncryptingRelayTransport } from './encrypting-transport';
 import { SyncEngine, type SyncEngineOptions, type SyncError } from './engine';
 import type { SpaceKey, SpaceKeyStoreError } from './space-key-store';
-import { RelayHttpError } from './transport';
 import type { SyncCredential, SyncCredentialError } from './sync-credentials';
+import { RelayHttpError } from './transport';
 import type { RelayTransport } from './transport';
 
 /** Relay long-poll clamp (apps/sync-relay README): 25 s. */

@@ -53,3 +53,18 @@ jobs:
           pnpm exec vitest run
           --project node --project main-db --project migrations --project scripts
           --testTimeout 20000
+
+      # The self-operated sync relay (spec #130) is a separate app; its handlers
+      # run against an in-process node:sqlite D1 fake (no workerd), so its suite
+      # runs in the fork gate too.
+      - name: Sync relay — typecheck
+        working-directory: apps/sync-relay
+        run: pnpm typecheck
+
+      - name: Sync relay — lint
+        working-directory: apps/sync-relay
+        run: pnpm exec oxlint .
+
+      - name: Sync relay — tests
+        working-directory: apps/sync-relay
+        run: pnpm exec vitest run

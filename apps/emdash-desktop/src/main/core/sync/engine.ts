@@ -573,7 +573,9 @@ export class SyncEngine {
       const childConfig = SYNC_TABLES_BY_NAME.get(child.table);
       if (childConfig === undefined) continue;
       const rows = this.sqlite
-        .prepare(`SELECT ${this.selectColumns(childConfig)} FROM \`${child.table}\` WHERE \`${child.fk}\` = ?`)
+        .prepare(
+          `SELECT ${this.selectColumns(childConfig)} FROM \`${child.table}\` WHERE \`${child.fk}\` = ?`
+        )
         .all(parentId) as Array<Record<string, unknown>>;
       for (const row of rows) {
         out.push({

@@ -373,7 +373,9 @@ async function mergeInto(
   // are children reloaded on task/view open. Emit after commit so listeners
   // never observe the pre-merge state.
   for (const row of reparented) {
-    events.emit(taskCreatedChannel, { task: mapTaskRowToTask({ ...row, projectId: targetProjectId }) });
+    events.emit(taskCreatedChannel, {
+      task: mapTaskRowToTask({ ...row, projectId: targetProjectId }),
+    });
   }
 
   return ok({ project: target, mergedInto: targetProjectId });
