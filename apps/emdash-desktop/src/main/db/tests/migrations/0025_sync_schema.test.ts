@@ -237,11 +237,18 @@ describe('0025 sync schema (nullable projects.path + sync_ts + triggers)', () =>
   it('creates the sync_ts triggers for exactly the portable tables', async () => {
     fixture = await openFixture('pre-0025');
 
+    // Scope to the sync clock/tombstone triggers this migration owns — every
+    // one is named `trg_<table>_sync_ts_<ins|upd|del>`. Other subsystems create
+    // their own unrelated triggers (e.g. the workspace-file FTS5 index's
+    // `workspace_files_ad/ai/au` shadow triggers), which must not make this
+    // "exactly the portable tables" assertion brittle.
     const triggers = (
       fixture.sqlite
         .prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`)
         .all() as { name: string }[]
-    ).map((r) => r.name);
+    )
+      .map((r) => r.name)
+      .filter((name) => name.includes('_sync_ts_'));
 
     // The 12 clock triggers from 0025, plus 0026's clocks for the kv-style
     // tables (app_settings, kv) and the deletion-tombstone triggers on every
