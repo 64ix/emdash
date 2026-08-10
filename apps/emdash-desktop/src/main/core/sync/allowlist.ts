@@ -213,6 +213,15 @@ export const tasksTable: SyncTableConfig = {
   // board_rank (derived fractional-index state) and the dead
   // workspace_provider_data / workspace_intent columns are never sent.
   rawJsonColumns: ['linked_issue'],
+  // `workspace_id` is a machine-local reference to a per-machine `workspaces`
+  // row (worktrees are not synced), exactly like `projects.repository_workspace_id`
+  // above: carried for observability but never applied at import. A fresh
+  // import leaves it NULL — the task provisions its own local workspace on
+  // demand (WorkspaceBootstrapService, spec #130 ticket #136 / story 25) — and
+  // an already-provisioned local row keeps its own id across every later sync.
+  // (Nulling-if-missing-FK would instead clobber the receiver's own workspace
+  // on every pull, orphaning its worktree.)
+  importPreserveLocalColumns: ['workspace_id'],
   importNullIfMissingFk: [{ column: 'assigned_pr_url', table: 'pull_requests', columnRef: 'url' }],
   importSkipIfMissingParent: [{ column: 'project_id', table: 'projects', columnRef: 'id' }],
 };

@@ -1250,6 +1250,47 @@ describe('SyncEngine', () => {
       ).toBe('https://github.com/example/repo/pull/42');
     });
 
+    it('never applies workspace_id at import: NULL on fresh import, local value preserved on update', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      // A's task references A's own (machine-local) workspace row.
+      fixtureA.sqlite
+        .prepare('INSERT INTO workspaces (id, type) VALUES (?, ?)')
+        .run('ws-a', 'local');
+      await seedTask(fixtureA, TASK_1, PROJECT_A, { workspaceId: 'ws-a', taskBranch: 'task/x' });
+      expectOk(await engineA.syncNow());
+
+      // Fresh import: A's workspace id is never carried; B's task arrives with
+      // no workspace and provisions its own on demand later.
+      expectOk(await engineB.syncNow());
+      expect(
+        rawGet(fixtureB, 'SELECT workspace_id FROM tasks WHERE id = ?', TASK_1)?.workspace_id
+      ).toBeNull();
+
+      // B provisions its own workspace, then A edits the task and pushes: LWW
+      // must not clobber B's machine-local workspace id.
+      fixtureB.sqlite
+        .prepare('INSERT INTO workspaces (id, type) VALUES (?, ?)')
+        .run('ws-b', 'local');
+      fixtureB.sqlite.prepare('UPDATE tasks SET workspace_id = ? WHERE id = ?').run('ws-b', TASK_1);
+      expectOk(await engineB.syncNow());
+      await fixtureA.db.update(tasks).set({ name: 'Renamed on A' }).where(eq(tasks.id, TASK_1));
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+
+      expect(rawGet(fixtureB, 'SELECT name FROM tasks WHERE id = ?', TASK_1)?.name).toBe(
+        'Renamed on A'
+      );
+      expect(
+        rawGet(fixtureB, 'SELECT workspace_id FROM tasks WHERE id = ?', TASK_1)?.workspace_id
+      ).toBe('ws-b');
+    });
+
     it('imports automations as disabled; enabled stays machine-local', async () => {
       fixtureA = await openDb();
       fixtureB = await openDb();
