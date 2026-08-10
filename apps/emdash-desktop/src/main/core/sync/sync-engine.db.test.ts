@@ -1649,6 +1649,37 @@ describe('SyncEngine', () => {
       expect(relay.getRow('tasks', TASK_1)?.deleted).toBe(true);
     });
 
+    it('a pulled parent delete does not destroy a synced child with unpushed local edits', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      await seedTask(fixtureA, TASK_1, PROJECT_A, { name: 'Original' });
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow()); // B now has the project + task
+
+      // B edits the task locally and has NOT pushed it yet (dirty).
+      await fixtureB.db.update(tasks).set({ name: 'B local edit' }).where(eq(tasks.id, TASK_1));
+
+      // A deletes the project (cascade removes A's task) and pushes the tombstone.
+      await fixtureA.db.delete(projects).where(eq(projects.id, PROJECT_A));
+      expectOk(await engineA.syncNow());
+
+      // B pulls the delete: the project delete would cascade B's dirty task, so
+      // the data-loss guard skips it; the task's own tombstone is skipped by the
+      // existing dirty guard. B's unpushed edit survives.
+      const pull = await engineB.pull();
+      expectOk(pull);
+      expect(pull.data.skippedDirty).toBeGreaterThan(0);
+      expect(rawGet(fixtureB, 'SELECT name FROM tasks WHERE id = ?', TASK_1)?.name).toBe(
+        'B local edit'
+      );
+      expect(rawGet(fixtureB, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)).toBeDefined();
+    });
+
     it('a machine joining after a project delete skips the carried remotes', async () => {
       fixtureA = await openDb();
       fixtureB = await openDb();

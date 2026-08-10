@@ -38,6 +38,27 @@ import type { RelayTransport, SyncMutation, SyncPatch, SyncPushResult } from './
 
 export type SyncError = { type: 'transport'; message: string } | { type: 'apply'; message: string };
 
+/**
+ * Synced child tables that SQLite `ON DELETE CASCADE` removes when a parent row
+ * is deleted — the sync allowlist's own FK graph. Applying a parent tombstone
+ * used to let that raw cascade run, which (a) destroyed a synced child carrying
+ * an unpushed local edit, bypassing the per-row dirty guard, and (b) left the
+ * children's own tombstones to be echoed back to the relay. Machine-local
+ * children (workspaces, terminals, editor_buffers, messages) also cascade but
+ * are not synced, so their loss is expected and never echoed. Every descendant
+ * of `projects` carries `project_id`, so a single level per parent is
+ * sufficient (no recursion).
+ */
+const SYNCED_CASCADE_CHILDREN: Record<string, ReadonlyArray<{ table: string; fk: string }>> = {
+  projects: [
+    { table: 'tasks', fk: 'project_id' },
+    { table: 'conversations', fk: 'project_id' },
+    { table: 'project_settings', fk: 'project_id' },
+    { table: 'project_remotes', fk: 'project_id' },
+  ],
+  tasks: [{ table: 'conversations', fk: 'task_id' }],
+};
+
 export interface SyncSummary {
   /** Upserts acknowledged by the relay in the push phase. */
   pushed: number;
@@ -456,9 +477,40 @@ export class SyncEngine {
 
     if (patch.op === 'delete' || patch.deleted) {
       if (localRow !== undefined) {
+        // Data-loss guard: a parent delete cascade-deletes synced children (FK
+        // ON DELETE CASCADE) outside the per-row dirty guard. If any synced
+        // descendant carries an unpushed local edit, dropping the parent would
+        // destroy it (violating "a pull never clobbers local edits", spec #130
+        // story 17). Preserve local work — record the version as seen (so it is
+        // neither re-fetched nor re-pushed) and skip the delete. The next push
+        // flushes the child; a later delete applies cleanly once nothing is
+        // dirty.
+        if (SYNCED_CASCADE_CHILDREN[config.table] !== undefined) {
+          const descendants = this.collectSyncedDescendants(
+            config.table,
+            this.pkParams(config, patch.pk)[0]
+          );
+          const dirty = descendants.some((child) =>
+            this.isDirty(
+              child.rowSyncTs,
+              lastPushed.get(child.config.table) ?? 0,
+              getRowState(this.sqlite, child.config.table, child.pk)
+            )
+          );
+          if (dirty) {
+            upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+            summary.skippedDirty += 1;
+            return;
+          }
+        }
         statements.deleteRow.run(...this.pkParams(config, patch.pk));
         // The AFTER DELETE trigger recorded a tombstone for our own apply;
-        // clear it so the deletion is not echoed back to the relay.
+        // clear it so the deletion is not echoed back to the relay. A cascade
+        // also tombstones synced children, but those are left to push: the
+        // child may still be alive on the relay (this machine's own upsert won
+        // an earlier LWW), so pushing its tombstone genuinely converges it —
+        // and a redundant push where the relay already has the child deleted is
+        // an idempotent, harmless delete-of-a-delete.
         deleteTombstones(this.sqlite, [{ table: config.table, pk: patch.pk }]);
       }
       upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
@@ -505,6 +557,33 @@ export class SyncEngine {
       });
     }
     summary.applied += 1;
+  }
+
+  /**
+   * The synced child rows a cascade would delete with this parent, each with
+   * the clock + row-state the dirty guard needs. Used to apply a parent delete
+   * through the guard instead of via SQLite's raw CASCADE.
+   */
+  private collectSyncedDescendants(
+    parentTable: string,
+    parentId: string
+  ): Array<{ config: SyncTableConfig; pk: string; rowSyncTs: number }> {
+    const out: Array<{ config: SyncTableConfig; pk: string; rowSyncTs: number }> = [];
+    for (const child of SYNCED_CASCADE_CHILDREN[parentTable] ?? []) {
+      const childConfig = SYNC_TABLES_BY_NAME.get(child.table);
+      if (childConfig === undefined) continue;
+      const rows = this.sqlite
+        .prepare(`SELECT ${this.selectColumns(childConfig)} FROM \`${child.table}\` WHERE \`${child.fk}\` = ?`)
+        .all(parentId) as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        out.push({
+          config: childConfig,
+          pk: this.rowPk(childConfig, row),
+          rowSyncTs: Number(row.sync_ts),
+        });
+      }
+    }
+    return out;
   }
 
   private isDirty(
