@@ -7,7 +7,7 @@
     {
       "binding": "SYNC_RELAY_DB",
       "database_name": "emdash-sync-relay",
-      "database_id": "REPLACE-ME",
+      "database_id": "ae46a381-8ed2-47b7-b5f9-4d6ece3037a2",
     },
   ],
 }
