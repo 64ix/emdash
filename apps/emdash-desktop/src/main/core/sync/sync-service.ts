@@ -310,6 +310,13 @@ export class SyncService {
         // failure means the connection is back — drain local pending rows.
         if (reconnected || result.patches.length > 0) {
           await this.syncNow();
+        } else if (engine !== null && engine.pendingCount() > 0) {
+          // The relay is quiet, but this machine has local edits the other
+          // machine has not seen (spec #130: pushes on local writes,
+          // debounced by the poll cadence). Without this branch a quiet
+          // relay would never wake the loop and the edits would wait for a
+          // relaunch or a manual Sync now.
+          await this.syncNow();
         } else {
           await this.sleep(this.pollIdleDelayMs);
         }

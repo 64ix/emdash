@@ -481,6 +481,36 @@ describe('SyncService', () => {
       }
     });
 
+    it('pushes local edits while the relay is quiet (poll cadence)', async () => {
+      await seedLocalProject();
+      vi.useFakeTimers();
+      service.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The launch sync drained the seeded project; nothing is pending.
+      expect(relay.storedRows().some((r) => r.table === 'projects' && r.pk === PROJECT_A)).toBe(
+        true
+      );
+      expect(lastStatus().pendingCount).toBe(0);
+
+      // A local edit arrives while the relay has nothing new for this
+      // machine: the next idle poll cycle pushes it instead of sleeping
+      // (spec #130: pushes on local writes, debounced by the poll cadence).
+      await fixture.db.insert(tasks).values({
+        id: TASK_A1,
+        projectId: PROJECT_A,
+        name: 'Local edit',
+        status: 'todo',
+      });
+      await vi.advanceTimersByTimeAsync(100); // idle poll delay
+      await vi.advanceTimersByTimeAsync(1000); // poll cycle
+      await vi.advanceTimersByTimeAsync(100); // settle
+
+      expect(relay.storedRows().some((r) => r.table === 'tasks' && r.pk === TASK_A1)).toBe(true);
+      expect(lastStatus().pendingCount).toBe(0);
+    });
+
     it('reconnects with backoff after poll failures and syncs on reconnect', async () => {
       await seedLocalProject();
       vi.useFakeTimers();
