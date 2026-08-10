@@ -317,8 +317,10 @@ describe('PairingService', () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.secret.startsWith(JOIN_SECRET_PREFIX)).toBe(true);
-    // Two-half format: emdj1_<space>_<join b32>_<k0 b32>.
-    expect(result.data.secret).toMatch(/^emdj1_[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}$/);
+    // Two-half format plus checksum: emdj1_<space>_<join b32>_<k0 b32>_<checksum b32>.
+    expect(result.data.secret).toMatch(
+      /^emdj1_[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}_[a-z2-7]{7}$/
+    );
     expect(result.data.deepLink).toBe(
       `emdash://join?secret=${encodeURIComponent(result.data.secret)}`
     );
@@ -449,6 +451,28 @@ describe('PairingService', () => {
     expect(join.success).toBe(false);
     if (join.success) return;
     expect(join.error.code).toBe('invalid_secret_format');
+    expect(api.calls.joinSpace).toBe(0);
+  });
+
+  it('rejects a secret with one corrupted character locally (checksum) without calling the relay', async () => {
+    const api = new FakeRelayAuthApi();
+    const created = await makeService(api, new FakeSecretStore()).createSpace('first');
+    if (!created.success) throw new Error('create failed');
+
+    // A single flipped character anywhere in an otherwise-valid secret -- a
+    // typo or OCR mistake -- no longer matches its checksum. Previously this
+    // would have "parsed" successfully with silently wrong key material,
+    // surfacing only later as a mysterious decrypt failure on this machine.
+    const secret = created.data.secret;
+    const lastChar = secret[secret.length - 1]!;
+    const corrupted = secret.slice(0, -1) + (lastChar === 'a' ? 'b' : 'a');
+
+    const service = makeService(api, new FakeSecretStore());
+    const join = await service.joinSpace(corrupted, 'second');
+    expect(join.success).toBe(false);
+    if (join.success) return;
+    expect(join.error.code).toBe('invalid_secret_format');
+    expect(join.error.message).toBe(userFacingPairingMessage('invalid_secret_format'));
     expect(api.calls.joinSpace).toBe(0);
   });
 

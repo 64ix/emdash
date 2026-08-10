@@ -85,7 +85,7 @@ export async function createSpace(
   // Two-half pairing secret: the join half transits to the relay only as
   // SHA-256; K0 (the space data key) never transits at all. The relay mints
   // both halves at space creation; later devices are minted client-side.
-  const { secret, credential } = makeSpaceSecret(spaceId);
+  const { secret, credential } = await makeSpaceSecret(spaceId);
   const tokenSha = await sha256Hex(token);
   const secretSha = await sha256Hex(credential);
 

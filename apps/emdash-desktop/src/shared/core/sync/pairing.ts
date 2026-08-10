@@ -16,11 +16,14 @@ export const MAX_PAIRING_ATTEMPTS = 5;
 /**
  * Prefix of every relay pairing secret (spec #130, ticket #134).
  *
- * The secret carries the two halves of the space pairing material:
- * `emdj1_<space id 22>_<join half b32 26>_<k0 b32 52>` (108 chars). The join
- * half is the only half that ever transits to the relay (and only as
- * SHA-256); K0 — the space data key for AES-256-GCM row encryption — travels
- * only inside the pasted secret, machine to machine.
+ * The secret carries the two halves of the space pairing material plus a
+ * checksum: `emdj1_<space id 22>_<join half b32 26>_<k0 b32 52>_<checksum
+ * b32 7>` (116 chars). The join half is the only half that ever transits to
+ * the relay (and only as SHA-256); K0 — the space data key for AES-256-GCM
+ * row encryption — travels only inside the pasted secret, machine to
+ * machine. The trailing checksum covers all three parts so a mistyped/OCR'd
+ * character is caught at parse time (see parseSpaceSecret in
+ * src/main/core/sync/crypto.ts).
  */
 export const JOIN_SECRET_PREFIX = 'emdj1_';
 

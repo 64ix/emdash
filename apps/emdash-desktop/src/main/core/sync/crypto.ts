@@ -22,11 +22,17 @@
  *   metadata fails authentication. Binding table+pk defeats row swaps by the
  *   relay; binding keyId defeats cross-key confusion after a rekey.
  *
- * Pairing secret (two-half model): `emdj1_<space 22>_<join b32 26>_<k0 b32
- * 52>`. The join half (16 random bytes) is the only half that ever transits
- * to the relay (as SHA-256); K0 (32 random bytes) is the space data key and
- * travels only machine-to-machine inside the pasted secret. K0 is stored
- * machine-locally in safeStorage (see space-key-store.ts).
+ * Pairing secret (two-half model plus checksum): `emdj1_<space 22>_<join b32
+ * 26>_<k0 b32 52>_<checksum b32 7>`. The join half (16 random bytes) is the
+ * only half that ever transits to the relay (as SHA-256); K0 (32 random
+ * bytes) is the space data key and travels only machine-to-machine inside
+ * the pasted secret. K0 is stored machine-locally in safeStorage (see
+ * space-key-store.ts). The trailing checksum is the first 4 bytes of
+ * SHA-256(space id bytes, join half, k0), base32-encoded: the same
+ * truncated-SHA-256 approach as the device token checksum (see checksumOf in
+ * apps/sync-relay/src/crypto.ts), so a mistyped/OCR'd character anywhere in
+ * the pasted secret fails in `parseSpaceSecret` instead of surfacing later
+ * as a mysterious decrypt failure on the joining machine.
  *
  * The base32 encoding (RFC 4648, lowercase, unpadded) and the secret layout
  * are mirrored by apps/sync-relay/src/crypto.ts; join-credential.test.ts
@@ -42,6 +48,8 @@ export const K0_BYTES = 32;
 export const NONCE_BYTES = 12;
 export const AUTH_TAG_BYTES = 16;
 export const KEY_ID_HEX_CHARS = 16;
+/** Pairing-secret checksum: first 4 bytes of SHA-256, same as device tokens (see checksumOf in apps/sync-relay/src/crypto.ts). */
+export const CHECKSUM_BYTES = 4;
 
 /**
  * The node:crypto algorithm name for the GCM overloads (case-insensitive at
@@ -52,12 +60,17 @@ const NODE_GCM_ALG = 'aes-256-gcm';
 /** Base32 (RFC 4648, lowercase, unpadded) character counts of the halves. */
 export const JOIN_CREDENTIAL_CHARS = 26;
 export const K0_B32_CHARS = 52;
+/** Base32 length of the CHECKSUM_BYTES-byte pairing-secret checksum. */
+export const CHECKSUM_B32_CHARS = 7;
 
 /** The relay space id length (base64url of 16 bytes). */
 export const SPACE_ID_CHARS = 22;
 
-/** Full pasted-secret length: `emdj1_` + space + `_` + join + `_` + k0. */
-export const SPACE_SECRET_CHARS = JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52;
+/**
+ * Full pasted-secret length: `emdj1_` + space + `_` + join + `_` + k0 + `_`
+ * + checksum.
+ */
+export const SPACE_SECRET_CHARS = JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52 + 1 + 7;
 
 /** The versioned ciphertext envelope that travels as the row body. */
 export interface SyncEnvelope {
@@ -150,6 +163,24 @@ export function joinCredentialOf(joinHalf: Uint8Array): string {
   return base32Encode(joinHalf);
 }
 
+/**
+ * The checksum segment of a pairing secret: base32 of the first
+ * CHECKSUM_BYTES bytes of SHA-256(space id bytes, join half, k0). Same
+ * truncated-SHA-256 approach as the device token checksum (see checksumOf in
+ * apps/sync-relay/src/crypto.ts), but base32 rather than base64url since the
+ * rest of the secret already speaks base32. Covering all three parts means a
+ * typo anywhere in the pasted secret changes the expected checksum, so
+ * `parseSpaceSecret` catches it at parse time.
+ */
+function pairingChecksumOf(spaceId: string, joinHalf: Uint8Array, k0: Uint8Array): string {
+  const digest = createHash('sha256')
+    .update(Buffer.from(spaceId, 'base64url'))
+    .update(joinHalf)
+    .update(k0)
+    .digest();
+  return base32Encode(digest.subarray(0, CHECKSUM_BYTES));
+}
+
 /** Composes the user-pasted pairing secret from its three parts. */
 export function composeSpaceSecret(spaceId: string, joinHalf: Uint8Array, k0: Uint8Array): string {
   if (!spaceIdPattern.test(spaceId)) {
@@ -158,14 +189,18 @@ export function composeSpaceSecret(spaceId: string, joinHalf: Uint8Array, k0: Ui
   if (joinHalf.length !== JOIN_HALF_BYTES || k0.length !== K0_BYTES) {
     throw new Error('invalid join half or k0 length');
   }
-  return `${JOIN_SECRET_PREFIX}${spaceId}_${joinCredentialOf(joinHalf)}_${base32Encode(k0)}`;
+  const checksum = pairingChecksumOf(spaceId, joinHalf, k0);
+  return `${JOIN_SECRET_PREFIX}${spaceId}_${joinCredentialOf(joinHalf)}_${base32Encode(k0)}_${checksum}`;
 }
 
 /**
  * Parses a pasted pairing secret into its halves. Rejects anything that is
- * not exactly `emdj1_<22>_<26>_<52>` with valid encodings. `null` on any
- * mismatch — the relay is the authority on validity, this only gates the
- * format (and keeps garbage pastes from reaching the relay at all).
+ * not exactly `emdj1_<22>_<26>_<52>_<7>` with valid encodings and a checksum
+ * that matches the space id, join half, and k0 it carries. `null` on any
+ * mismatch — the relay is still the authority on join-secret validity, but a
+ * mistyped/OCR'd character anywhere in the pasted secret is now caught here
+ * instead of surfacing later as a decrypt failure (or, for the relay-facing
+ * join half, a relay 401) on the joining machine.
  */
 export function parseSpaceSecret(secret: string): SpaceSecretParts | null {
   const trimmed = secret.trim();
@@ -175,7 +210,9 @@ export function parseSpaceSecret(secret: string): SpaceSecretParts | null {
   const body = trimmed.slice(JOIN_SECRET_PREFIX.length);
   const spaceId = body.slice(0, SPACE_ID_CHARS);
   const joinB32 = body.slice(SPACE_ID_CHARS + 1, SPACE_ID_CHARS + 1 + JOIN_CREDENTIAL_CHARS);
-  const k0B32 = body.slice(SPACE_ID_CHARS + 1 + JOIN_CREDENTIAL_CHARS + 1);
+  const k0Start = SPACE_ID_CHARS + 1 + JOIN_CREDENTIAL_CHARS + 1;
+  const k0B32 = body.slice(k0Start, k0Start + K0_B32_CHARS);
+  const checksumB32 = body.slice(k0Start + K0_B32_CHARS + 1);
   if (!spaceIdPattern.test(spaceId)) {
     return null;
   }
@@ -183,6 +220,12 @@ export function parseSpaceSecret(secret: string): SpaceSecretParts | null {
   const k0 = base32Decode(k0B32);
   if (joinHalf === null || joinHalf.length !== JOIN_HALF_BYTES) return null;
   if (k0 === null || k0.length !== K0_BYTES) return null;
+  // The checksum covers the whole payload (space id + join half + k0), so a
+  // typo in any of them — not just the checksum segment itself — is caught
+  // here rather than surfacing later as a mysterious decrypt failure.
+  if (checksumB32.toLowerCase() !== pairingChecksumOf(spaceId, joinHalf, k0)) {
+    return null;
+  }
   return { spaceId, joinHalf, k0 };
 }
 

@@ -8,9 +8,11 @@
  * lookup. Only SHA-256 digests of credentials are ever persisted (see
  * `store.ts`).
  *
- * Pairing secrets (spec #130, ticket #134) use the two-half model:
+ * Pairing secrets (spec #130, ticket #134) use the two-half model plus a
+ * checksum:
  *
- *   `emdj1_<space_id 22>_<join_half b32 26>_<k0 b32 52>`  (108 chars)
+ *   `emdj1_<space_id 22>_<join_half b32 26>_<k0 b32 52>_<checksum b32 7>`
+ *   (116 chars)
  *
  * - `join_half`: 16 random bytes, base32-encoded (RFC 4648, lowercase, no
  *   padding). This is the only half that ever transits to the relay, and only
@@ -18,6 +20,12 @@
  * - `k0`: 32 random bytes, the space data key (AES-256-GCM, HKDF per row).
  *   The relay never stores it and never receives it — it only travels
  *   machine-to-machine inside the pasted secret.
+ * - `checksum`: the first 4 bytes of SHA-256(space_id bytes ‖ join_half ‖
+ *   k0), base32-encoded — the exact truncated-SHA-256 approach as the
+ *   device token checksum above (`checksumOf`), so a mistyped/OCR'd
+ *   character anywhere in the pasted secret is rejected by the joining
+ *   client's `parseSpaceSecret` at paste time instead of surfacing later as
+ *   an opaque decrypt failure.
  * - The join **credential** is the base32 join_half alone (26 chars); the
  *   relay stores only SHA-256 of that credential, and `POST /v1/join`
  *   compares the SHA-256 of the presented credential against the stored
@@ -39,13 +47,18 @@ const CHECKSUM_BYTES = 4;
 
 /**
  * Base32 (RFC 4648, lowercase, no padding) character counts for the pairing
- * secret halves: 16 bytes -> 26 chars, 32 bytes -> 52 chars.
+ * secret halves: 16 bytes -> 26 chars, 32 bytes -> 52 chars. The trailing
+ * checksum is CHECKSUM_BYTES bytes -> 7 chars.
  */
 export const JOIN_CREDENTIAL_CHARS = 26;
 export const K0_B32_CHARS = 52;
+export const CHECKSUM_B32_CHARS = 7;
 
-/** Full secret length: `emdj1_` + space(22) + `_` + join(26) + `_` + k0(52). */
-export const SPACE_SECRET_CHARS = JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52;
+/**
+ * Full secret length: `emdj1_` + space(22) + `_` + join(26) + `_` + k0(52) +
+ * `_` + checksum(7).
+ */
+export const SPACE_SECRET_CHARS = JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52 + 1 + 7;
 
 /** Space ids are 16 random bytes base64url encoded: 22 characters. */
 export const SPACE_ID_CHARS = 22;
@@ -231,11 +244,14 @@ export async function parseToken(raw: string): Promise<ParsedToken> {
 }
 
 // ---------------------------------------------------------------------------
-// Pairing secrets (two-half model, spec #130 ticket #134):
-// `emdj1_<space id 22>_<join half b32 26>_<k0 b32 52>` (108 total).
-// The space id is embedded (in plaintext, like the space id itself) so the
-// joining client can validate the paste; the relay only ever sees the join
-// credential (the base32 join half, 26 chars) and its SHA-256 digest.
+// Pairing secrets (two-half model + checksum, spec #130 ticket #134):
+// `emdj1_<space id 22>_<join half b32 26>_<k0 b32 52>_<checksum b32 7>`
+// (116 total). The space id is embedded (in plaintext, like the space id
+// itself) so the joining client can validate the paste; the relay only ever
+// sees the join credential (the base32 join half, 26 chars) and its SHA-256
+// digest. The checksum covers the whole payload (space id + join half + k0)
+// so a mistyped/OCR'd character anywhere is caught by the joining client at
+// parse time instead of surfacing later as a decrypt failure.
 // ---------------------------------------------------------------------------
 
 export function isSpaceId(value: string): boolean {
@@ -257,23 +273,56 @@ export function joinCredentialOf(joinHalf: Uint8Array): string {
   return base32Encode(joinHalf);
 }
 
+/**
+ * The checksum segment of a pairing secret: the first CHECKSUM_BYTES bytes
+ * of SHA-256(space id bytes, join half, k0), base32-encoded (7 chars). Same
+ * truncated-SHA-256 approach as the device token checksum (`checksumOf`
+ * above), but base32 rather than base64url since the rest of the secret
+ * already speaks base32. Decoding the space id back to its raw 16 bytes
+ * (rather than hashing its base64url text) covers the exact same payload the
+ * joining client independently recomputes in its own crypto.ts.
+ */
+async function pairingChecksumOf(
+  spaceId: string,
+  joinHalf: Uint8Array,
+  k0: Uint8Array
+): Promise<string> {
+  const spaceIdBytes = base64urlDecode(spaceId);
+  if (spaceIdBytes === null) {
+    // Unreachable via composeSpaceSecret, which validates spaceId first.
+    throw new Error(`invalid space id: ${spaceId}`);
+  }
+  const payload = new Uint8Array(spaceIdBytes.length + joinHalf.length + k0.length);
+  payload.set(spaceIdBytes, 0);
+  payload.set(joinHalf, spaceIdBytes.length);
+  payload.set(k0, spaceIdBytes.length + joinHalf.length);
+  return base32Encode(await checksumOf(payload));
+}
+
 /** Composes the user-pasted secret from its three parts. */
-export function composeSpaceSecret(spaceId: string, joinHalf: Uint8Array, k0: Uint8Array): string {
+export async function composeSpaceSecret(
+  spaceId: string,
+  joinHalf: Uint8Array,
+  k0: Uint8Array
+): Promise<string> {
   if (!isSpaceId(spaceId)) {
     throw new Error(`invalid space id: ${spaceId}`);
   }
   if (joinHalf.length !== JOIN_HALF_BYTES || k0.length !== K0_BYTES) {
     throw new Error('invalid join half or k0 length');
   }
-  return `${JOIN_SECRET_PREFIX}${spaceId}_${joinCredentialOf(joinHalf)}_${base32Encode(k0)}`;
+  const checksum = await pairingChecksumOf(spaceId, joinHalf, k0);
+  return `${JOIN_SECRET_PREFIX}${spaceId}_${joinCredentialOf(joinHalf)}_${base32Encode(k0)}_${checksum}`;
 }
 
 /** Mints a fresh join half + K0 and composes the secret. */
-export function makeSpaceSecret(spaceId: string): { secret: string; credential: string } {
+export async function makeSpaceSecret(
+  spaceId: string
+): Promise<{ secret: string; credential: string }> {
   const joinHalf = makeJoinHalf();
   const k0 = makeK0();
   return {
-    secret: composeSpaceSecret(spaceId, joinHalf, k0),
+    secret: await composeSpaceSecret(spaceId, joinHalf, k0),
     credential: joinCredentialOf(joinHalf),
   };
 }

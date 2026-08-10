@@ -67,6 +67,31 @@ describe('join credential derivation (client ↔ relay)', () => {
     expect(joined.space_id).toBe(parts.spaceId);
   });
 
+  it('mints a secret on the relay whose checksum verifies on the client (cross-side agreement)', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db, { name: 'first' }, T0);
+
+    // The relay (apps/sync-relay/src/crypto.ts) and the client (this
+    // directory's crypto.ts) each compute the pairing-secret checksum
+    // independently -- same truncated-SHA-256-then-base32 approach, but one
+    // runs on WebCrypto and the other on node:crypto. This proves they agree
+    // byte-for-byte on a REAL relay-minted secret, not just a client-composed
+    // fixture: if parseSpaceSecret returned null here, the two sides would
+    // have disagreed on the checksum and every real join would fail.
+    const parts = parseSpaceSecret(space.secret);
+    expect(parts).not.toBeNull();
+    if (parts === null) return;
+    expect(parts.spaceId).toBe(space.space_id);
+    expect(parts.joinHalf.length).toBe(16);
+    expect(parts.k0.length).toBe(32);
+
+    // A single corrupted character anywhere in the relay-minted secret is
+    // rejected by the client -- the checksum, not just the shape, must agree.
+    const lastChar = space.secret[space.secret.length - 1]!;
+    const corrupted = space.secret.slice(0, -1) + (lastChar === 'a' ? 'b' : 'a');
+    expect(parseSpaceSecret(corrupted)).toBeNull();
+  });
+
   it('is rejected by the relay when the client pre-hashes the credential', async () => {
     const db = await makeDb();
     const space = await createSpace(db, { name: 'first' }, T0);
@@ -105,13 +130,14 @@ describe('join credential derivation (client ↔ relay)', () => {
     });
   });
 
-  it('matches the relay secret format exactly (prefix + space + join half + k0)', () => {
+  it('matches the relay secret format exactly (prefix + space + join half + k0 + checksum)', () => {
     const spaceId = 'AB12-34_CD56-78_EF90-1';
     const secret = composeSpaceSecret(spaceId, mintJoinHalf(), mintK0());
 
     expect(secret.startsWith(JOIN_SECRET_PREFIX)).toBe(true);
-    // emdj1_ (6) + space (22) + _ (1) + join b32 (26) + _ (1) + k0 b32 (52)
-    expect(secret.length).toBe(JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52);
+    // emdj1_ (6) + space (22) + _ (1) + join b32 (26) + _ (1) + k0 b32 (52) +
+    // _ (1) + checksum b32 (7)
+    expect(secret.length).toBe(JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52 + 1 + 7);
 
     const parts = parseSpaceSecret(secret);
     expect(parts).not.toBeNull();

@@ -181,9 +181,11 @@ describe('space creation', () => {
     expect(space.space_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(space.device_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(space.device_token).toMatch(/^emdv1_/);
-    // emdj1_<space 22>_<join b32 26>_<k0 b32 52>: the pasted secret embeds
-    // the join half AND the space data key (K0) for the second machine.
-    expect(space.secret).toMatch(/^emdj1_[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}$/);
+    // emdj1_<space 22>_<join b32 26>_<k0 b32 52>_<checksum b32 7>: the pasted
+    // secret embeds the join half AND the space data key (K0) for the second
+    // machine, plus a checksum over all three so a mistyped/OCR'd character
+    // is caught by the joining client at parse time.
+    expect(space.secret).toMatch(/^emdj1_[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}_[a-z2-7]{7}$/);
 
     const devices = await get(db, '/v1/devices', space.device_token);
     expect(devices.status).toBe(200);
@@ -205,8 +207,8 @@ describe('space creation', () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]!.sha256).toBe(await sha256Hex(joinCredentialOf(space.secret)));
     expect(pending[0]!.sha256).not.toBe(space.secret);
-    // K0 (the trailing base32 half) never reaches the store.
-    expect(pending[0]!.sha256).not.toContain(space.secret.slice(56));
+    // K0 (the base32 half before the trailing checksum) never reaches the store.
+    expect(pending[0]!.sha256).not.toContain(space.secret.slice(56, 108));
   });
 
   it('rejects an unparseable JSON body with 400', async () => {

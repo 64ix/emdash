@@ -208,9 +208,9 @@ describe('two-half pairing secret format', () => {
     const secret = composeSpaceSecret(spaceId, joinHalf, mintK0());
 
     expect(secret.startsWith(JOIN_SECRET_PREFIX)).toBe(true);
-    expect(secret.length).toBe(JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52);
+    expect(secret.length).toBe(JOIN_SECRET_PREFIX.length + 22 + 1 + 26 + 1 + 52 + 1 + 7);
     expect(secret).toMatch(
-      new RegExp(`^${JOIN_SECRET_PREFIX}[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}$`)
+      new RegExp(`^${JOIN_SECRET_PREFIX}[A-Za-z0-9_-]{22}_[a-z2-7]{26}_[a-z2-7]{52}_[a-z2-7]{7}$`)
     );
 
     const parts = parseSpaceSecret(secret);
@@ -249,6 +249,30 @@ describe('two-half pairing secret format', () => {
     // A swapped half (k0 length wrong) is rejected.
     const bad = secret.slice(0, 56) + secret.slice(56, 60);
     expect(parseSpaceSecret(bad)).toBeNull();
+  });
+
+  it('rejects a secret with a single character flipped anywhere in the payload (checksum catches typos)', () => {
+    const secret = composeSpaceSecret('AB12-34_CD56-78_EF90-1', mintJoinHalf(), mintK0());
+    expect(parseSpaceSecret(secret)).not.toBeNull();
+
+    function flip(index: number): string {
+      const original = secret[index]!;
+      const replacement = original === 'a' ? 'b' : 'a';
+      return secret.slice(0, index) + replacement + secret.slice(index + 1);
+    }
+
+    // One flip inside each data segment -- space id, join half, k0, and the
+    // checksum itself -- and every one of them must be caught: the checksum
+    // covers the whole payload, so a typo in any of the first three no
+    // longer matches the trailing checksum, and a typo in the checksum no
+    // longer matches the (unchanged) recomputed value. Before the checksum
+    // existed, a typo inside k0 (the most consequential case) would have
+    // "parsed" successfully with silently wrong key material, surfacing only
+    // later as a decrypt failure on the second machine.
+    expect(parseSpaceSecret(flip(10))).toBeNull(); // inside the space id
+    expect(parseSpaceSecret(flip(35))).toBeNull(); // inside the join half
+    expect(parseSpaceSecret(flip(70))).toBeNull(); // inside k0
+    expect(parseSpaceSecret(flip(secret.length - 1))).toBeNull(); // inside the checksum
   });
 
   it('tolerates paste whitespace', () => {
