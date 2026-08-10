@@ -32,6 +32,7 @@ import {
   encodePk,
   getRowState,
   listTombstones,
+  NEVER_PULLED_CLIENT_VERSION,
   upsertRowState,
 } from './row-state';
 import type { RelayTransport, SyncMutation, SyncPatch, SyncPushResult } from './transport';
@@ -83,6 +84,14 @@ export interface SyncSummary {
    * The patch's version is recorded so it is not re-fetched or re-pushed.
    */
   skippedUndecryptable: number;
+  /**
+   * Patches skipped because their client_version regressed relative to the
+   * one already recorded for this row (spec #130 anti-replay hardening): a
+   * relay that replays an old body under a newer server version passes the
+   * serverVersion check but is caught here. The patch's version is recorded
+   * so the cursor still advances; its content is never applied.
+   */
+  skippedReplayed: number;
 }
 
 export interface SyncEngineOptions {
@@ -115,6 +124,7 @@ const EMPTY_SUMMARY: SyncSummary = {
   skippedSeen: 0,
   skippedOrphan: 0,
   skippedUndecryptable: 0,
+  skippedReplayed: 0,
 };
 
 interface PendingUpsert {
@@ -186,6 +196,7 @@ export class SyncEngine {
       skippedSeen: pullResult.data.skippedSeen,
       skippedOrphan: pullResult.data.skippedOrphan,
       skippedUndecryptable: pullResult.data.skippedUndecryptable,
+      skippedReplayed: pullResult.data.skippedReplayed,
     });
   }
 
@@ -330,7 +341,18 @@ export class SyncEngine {
           for (const item of pending) {
             const version = acked.get(`${item.config.table}:${item.pk}`);
             if (version === undefined) continue;
-            upsertRowState(this.sqlite, item.config.table, item.pk, version, false, item.syncTs);
+            // Push-ack, not a pulled patch: never touch client_version here —
+            // lowering the replay guard's recorded baseline on our OWN edit
+            // being acked would reopen the window it closes.
+            upsertRowState(
+              this.sqlite,
+              item.config.table,
+              item.pk,
+              version,
+              false,
+              item.syncTs,
+              null
+            );
           }
           deleteTombstones(
             this.sqlite,
@@ -418,6 +440,7 @@ export class SyncEngine {
         skippedSeen: summary.skippedSeen,
         skippedOrphan: summary.skippedOrphan,
         skippedUndecryptable: summary.skippedUndecryptable,
+        skippedReplayed: summary.skippedReplayed,
       });
       return ok(summary);
     } catch (error) {
@@ -460,8 +483,10 @@ export class SyncEngine {
     const watermark = lastPushed.get(config.table) ?? 0;
     if (this.isDirty(rowSyncTs, watermark, state)) {
       // Local unpushed edits win: record the patch's version as dirty so a
-      // later re-pull of it is skipped, then let the next push decide.
-      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, true, rowSyncTs);
+      // later re-pull of it is skipped, then let the next push decide. This
+      // branch also sees delete patches (client_version is meaningless — always
+      // 0), so client_version is never touched here.
+      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, true, rowSyncTs, null);
       summary.skippedDirty += 1;
       return;
     }
@@ -469,9 +494,35 @@ export class SyncEngine {
       // The body could not be decrypted (rekey, tampering, relay swap):
       // record the version as seen so the row is neither re-fetched nor
       // re-pushed (echoing an undecryptable body would wedge every other
-      // machine), then keep pulling the rest of the batch.
-      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+      // machine), then keep pulling the rest of the batch. client_version is
+      // never touched: it is only trustworthy once AEAD authentication (which
+      // binds it) has actually succeeded.
+      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs, null);
       summary.skippedUndecryptable += 1;
+      return;
+    }
+    // Anti-replay hardening (spec #130 amendment): a relay that replays an old
+    // (but validly-encrypted) body under a newer server version passes the
+    // serverVersion check above. client_version is the pusher's own
+    // last-known server version at push time, so — for a given row — it only
+    // regresses if a patch is being replayed; a patch whose client_version is
+    // <= the last one recorded for this row is dropped, but its (higher)
+    // server version is still recorded so the cursor advances. Deletes always
+    // carry client_version 0 (see transport.ts) and are handled by the branch
+    // below instead — the exact negation of its own condition keeps this from
+    // ever misclassifying a delete as an upsert to guard. NEVER_PULLED_CLIENT_VERSION
+    // excludes rows that only exist from this machine's own push-acks: two
+    // machines independently pushing the very same never-before-synced row
+    // both legitimately carry the real client_version 0, so there is no
+    // baseline yet to replay-check against (row-state.ts).
+    if (
+      state !== null &&
+      state.clientVersion !== NEVER_PULLED_CLIENT_VERSION &&
+      !(patch.op === 'delete' || patch.deleted) &&
+      patch.client_version <= state.clientVersion
+    ) {
+      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs, null);
+      summary.skippedReplayed += 1;
       return;
     }
 
@@ -498,7 +549,17 @@ export class SyncEngine {
             )
           );
           if (dirty) {
-            upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+            // A delete's client_version is always 0 (transport.ts); never
+            // touch the recorded value on this row.
+            upsertRowState(
+              this.sqlite,
+              config.table,
+              patch.pk,
+              patch.version,
+              false,
+              rowSyncTs,
+              null
+            );
             summary.skippedDirty += 1;
             return;
           }
@@ -513,7 +574,9 @@ export class SyncEngine {
         // an idempotent, harmless delete-of-a-delete.
         deleteTombstones(this.sqlite, [{ table: config.table, pk: patch.pk }]);
       }
-      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+      // A delete's client_version is always 0 (transport.ts); never touch the
+      // recorded value on this row.
+      upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs, null);
       summary.applied += 1;
       return;
     }
@@ -537,7 +600,18 @@ export class SyncEngine {
         (e) => e.config.table === config.table && e.column === fk.column
       );
       if (entry?.stmt.get(value) === undefined) {
-        upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs);
+        // The patch already passed the replay guard above (or this is the
+        // row's first-ever patch), so its client_version is a genuine, newer
+        // value for this row even though its content is not applied here.
+        upsertRowState(
+          this.sqlite,
+          config.table,
+          patch.pk,
+          patch.version,
+          false,
+          rowSyncTs,
+          patch.client_version
+        );
         summary.skippedOrphan += 1;
         return;
       }
@@ -549,7 +623,17 @@ export class SyncEngine {
       | { sync_ts: unknown }
       | undefined;
     const appliedSyncTs = appliedRow === undefined ? 0 : Number(appliedRow.sync_ts);
-    upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, appliedSyncTs);
+    // Genuine apply: record this patch's client_version as the new baseline
+    // for the replay guard.
+    upsertRowState(
+      this.sqlite,
+      config.table,
+      patch.pk,
+      patch.version,
+      false,
+      appliedSyncTs,
+      patch.client_version
+    );
     if (config.table === 'projects' && localRow === undefined) {
       freshProjectIds.push({
         id: patch.pk,

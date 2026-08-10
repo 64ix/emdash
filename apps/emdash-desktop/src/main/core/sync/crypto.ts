@@ -14,13 +14,15 @@
  * - Envelope: `{alg: "AES-256-GCM", key_id, nonce, ct}` (base64url nonce and
  *   ciphertext; the 16-byte auth tag is appended to the ciphertext inside
  *   `ct`).
- * - AAD: UTF-8 JSON array `[table, pk, version, keyId]`. `version` is the
- *   CLIENT version the encrypting machine knew for the row (see
+ * - AAD: UTF-8 JSON array `[spaceId, table, pk, version, keyId]`. `version` is
+ *   the CLIENT version the encrypting machine knew for the row (see
  *   `client_version` in transport.ts / the relay protocol) — the relay
  *   stores it verbatim and returns it on pull, so the encrypting and
  *   decrypting sides always agree, while a body replayed under different
- *   metadata fails authentication. Binding table+pk defeats row swaps by the
- *   relay; binding keyId defeats cross-key confusion after a rekey.
+ *   metadata fails authentication. Binding spaceId defeats a body encrypted
+ *   for one space being replayed into another (a relay hosting more than one
+ *   space); binding table+pk defeats row swaps by the relay; binding keyId
+ *   defeats cross-key confusion after a rekey.
  *
  * Pairing secret (two-half model plus checksum): `emdj1_<space 22>_<join b32
  * 26>_<k0 b32 52>_<checksum b32 7>`. The join half (16 random bytes) is the
@@ -84,6 +86,8 @@ export interface SyncEnvelope {
 
 /** The metadata bound into the AEAD AAD on both encrypt and decrypt. */
 export interface RowAad {
+  /** The relay space this row belongs to (defeats cross-space replay). */
+  spaceId: string;
   table: string;
   pk: string;
   /** The client version of the row (0 for never-synced rows). */
@@ -253,9 +257,12 @@ export function rowIdOf(table: string, pk: string): Uint8Array {
   return Buffer.from(JSON.stringify([table, pk]), 'utf8');
 }
 
-/** The AEAD AAD bytes: UTF-8 JSON array of [table, pk, version, keyId]. */
+/** The AEAD AAD bytes: UTF-8 JSON array of [spaceId, table, pk, version, keyId]. */
 export function aadOf(aad: RowAad): Uint8Array {
-  return Buffer.from(JSON.stringify([aad.table, aad.pk, aad.version, aad.keyId]), 'utf8');
+  return Buffer.from(
+    JSON.stringify([aad.spaceId, aad.table, aad.pk, aad.version, aad.keyId]),
+    'utf8'
+  );
 }
 
 /** HKDF-SHA256 per-row key: 32 bytes, deterministic for (K0, table, pk). */

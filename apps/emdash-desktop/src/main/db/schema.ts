@@ -566,6 +566,12 @@ export const appSecrets = sqliteTable(
  * most tables, an array for composite keys). `row_sync_ts` is the row's
  * `sync_ts` clock value at the moment of the last push-ack or remote apply;
  * when the live row's clock differs, the row has unpushed local edits.
+ * `client_version` is the `client_version` of the last PULLED patch actually
+ * processed for this row (anti-replay hardening, spec #130 amendment): a
+ * relay that replays an old (but validly-encrypted) body under a newer
+ * server version carries a client_version that regresses relative to this
+ * recorded value, so the engine can drop it instead of applying stale
+ * content — see the client_version check in engine.ts's `applyPatch`.
  */
 export const syncRowState = sqliteTable(
   'sync_row_state',
@@ -575,6 +581,7 @@ export const syncRowState = sqliteTable(
     serverVersion: integer('server_version').notNull(),
     dirty: integer('dirty').notNull().default(0),
     rowSyncTs: integer('row_sync_ts').notNull().default(0),
+    clientVersion: integer('client_version').notNull().default(0),
   },
   (table) => ({
     pkKey: primaryKey({ columns: [table.tableName, table.pk] }),

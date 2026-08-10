@@ -123,7 +123,8 @@ describe('two-client end-to-end through the real relay', () => {
       sqlite: fixtureA.sqlite,
       transport: new EncryptingRelayTransport(
         new InProcessRelayTransport(relayDb, authA),
-        keyReader(k0)
+        keyReader(k0),
+        parts.spaceId
       ),
       deviceId: 'device-a',
     });
@@ -131,7 +132,8 @@ describe('two-client end-to-end through the real relay', () => {
       sqlite: fixtureB.sqlite,
       transport: new EncryptingRelayTransport(
         new InProcessRelayTransport(relayDb, authB),
-        keyReader(k0)
+        keyReader(k0),
+        parts.spaceId
       ),
       deviceId: 'device-b',
     });

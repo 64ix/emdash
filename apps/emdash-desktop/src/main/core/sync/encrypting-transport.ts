@@ -17,6 +17,14 @@
  * The wrapper needs the space key (K0 + key_id) from `SpaceKeyStore`; when
  * no key is stored, pushes fail with a clear error and pulls flag every
  * body-carrying patch as undecryptable instead of wedging.
+ *
+ * The AAD also binds `spaceId` (spec #130 anti-replay hardening): the
+ * caller's OWN paired space id is used, never the `space` field a pulled
+ * patch carries — a patch's `space` is relay-supplied metadata, exactly like
+ * its `key_id`, and using it to build the very AAD that is supposed to
+ * authenticate that metadata would defeat the check. A body encrypted for
+ * one space and replayed into another therefore fails decryption even if
+ * every other AAD field happens to line up.
  */
 import { log } from '@main/lib/logger';
 import { decryptBody, encryptBody, type SyncCryptoError } from './crypto';
@@ -45,7 +53,9 @@ export type SpaceKeyReader = Pick<SpaceKeyStore, 'get'>;
 export class EncryptingRelayTransport implements RelayTransport {
   constructor(
     private readonly inner: RelayTransport,
-    private readonly keys: SpaceKeyReader
+    private readonly keys: SpaceKeyReader,
+    /** This machine's own paired space id, bound into every AAD. */
+    private readonly spaceId: string
   ) {}
 
   async createSpace(name?: string): Promise<SyncSpaceCreated> {
@@ -82,7 +92,13 @@ export class EncryptingRelayTransport implements RelayTransport {
         body: encryptBody(
           key.k0,
           key.keyId,
-          { table: mutation.table, pk: mutation.pk, version, keyId: key.keyId },
+          {
+            spaceId: this.spaceId,
+            table: mutation.table,
+            pk: mutation.pk,
+            version,
+            keyId: key.keyId,
+          },
           mutation.body
         ),
       };
@@ -113,6 +129,7 @@ export class EncryptingRelayTransport implements RelayTransport {
       return { ...patch, decryptError: 'no sync space encryption key on this machine' };
     }
     const aad = {
+      spaceId: this.spaceId,
       table: patch.table,
       pk: patch.pk,
       version: patch.client_version,

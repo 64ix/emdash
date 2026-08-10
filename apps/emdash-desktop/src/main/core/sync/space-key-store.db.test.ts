@@ -102,7 +102,7 @@ describe('sync space key storage (safeStorage-backed app_secrets)', () => {
     const oldEnvelope = encrypt(
       oldK0,
       oldKeyId,
-      { table: 't', pk: 'a', version: 1, keyId: oldKeyId },
+      { spaceId: 'space-1', table: 't', pk: 'a', version: 1, keyId: oldKeyId },
       'old'
     );
 
@@ -119,7 +119,7 @@ describe('sync space key storage (safeStorage-backed app_secrets)', () => {
     // Envelopes encrypted under the old key fail with a clear typed error.
     const result = decrypt(
       newK0,
-      { table: 't', pk: 'a', version: 1, keyId: newKeyId },
+      { spaceId: 'space-1', table: 't', pk: 'a', version: 1, keyId: newKeyId },
       oldEnvelope
     );
     expect(result.success).toBe(false);

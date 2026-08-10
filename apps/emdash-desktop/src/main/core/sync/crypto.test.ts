@@ -38,6 +38,9 @@ vi.mock('@main/lib/logger', () => ({
 
 const k0 = mintK0();
 const keyId = keyIdOf(k0);
+/** Arbitrary AAD space id for tests outside the pairing-secret format suite
+ * (which uses its own 22-char space id literals matching SPACE_ID_CHARS). */
+const AAD_SPACE_ID = 'space-1';
 
 function envelopeOf(body: string): SyncEnvelope {
   return JSON.parse(body) as SyncEnvelope;
@@ -55,14 +58,20 @@ function expectCryptoError(
 describe('envelope format', () => {
   it('round-trips a plaintext body through encrypt/decrypt', () => {
     const body = JSON.stringify({ deviceId: 'd', columns: { name: 'Repo', id: 'x' } });
-    const envelope = encrypt(k0, keyId, { table: 'projects', pk: 'x', version: 3, keyId }, body);
-    const decrypted = decrypt(k0, { table: 'projects', pk: 'x', version: 3, keyId }, envelope);
+    const aad = { spaceId: AAD_SPACE_ID, table: 'projects', pk: 'x', version: 3, keyId };
+    const envelope = encrypt(k0, keyId, aad, body);
+    const decrypted = decrypt(k0, aad, envelope);
     expect(decrypted.success).toBe(true);
     if (decrypted.success) expect(decrypted.data).toBe(body);
   });
 
   it('produces a versioned envelope with exactly alg, key_id, nonce and ct', () => {
-    const envelope = encrypt(k0, keyId, { table: 't', pk: 'a', version: 0, keyId }, 'payload');
+    const envelope = encrypt(
+      k0,
+      keyId,
+      { spaceId: AAD_SPACE_ID, table: 't', pk: 'a', version: 0, keyId },
+      'payload'
+    );
     expect(Object.keys(envelope).sort()).toEqual(['alg', 'ct', 'key_id', 'nonce']);
     expect(envelope.alg).toBe(SYNC_ALG);
     expect(envelope.key_id).toBe(keyId);
@@ -75,7 +84,7 @@ describe('envelope format', () => {
   });
 
   it('uses a fresh random nonce per encryption (and never reuses ciphertext)', () => {
-    const aad = { table: 't', pk: 'a', version: 1, keyId };
+    const aad = { spaceId: AAD_SPACE_ID, table: 't', pk: 'a', version: 1, keyId };
     const first = encrypt(k0, keyId, aad, 'same payload');
     const second = encrypt(k0, keyId, aad, 'same payload');
     expect(first.nonce).not.toBe(second.nonce);
@@ -88,7 +97,12 @@ describe('envelope format', () => {
   });
 
   it('serializes to the opaque JSON string the relay stores as the body', () => {
-    const body = encryptBody(k0, keyId, { table: 't', pk: 'a', version: 0, keyId }, 'secret');
+    const body = encryptBody(
+      k0,
+      keyId,
+      { spaceId: AAD_SPACE_ID, table: 't', pk: 'a', version: 0, keyId },
+      'secret'
+    );
     const envelope = envelopeOf(body);
     expect(envelope.alg).toBe(SYNC_ALG);
     const parsed = parseEnvelope(body);
@@ -124,8 +138,12 @@ describe('per-row key derivation', () => {
 
 describe('AAD binding (relay row/version swaps fail)', () => {
   const body = 'row-content';
-  const aad = { table: 'projects', pk: 'p1', version: 7, keyId };
+  const aad = { spaceId: AAD_SPACE_ID, table: 'projects', pk: 'p1', version: 7, keyId };
   const envelope = encrypt(k0, keyId, aad, body);
+
+  it('rejects decrypting under a different space id (cross-space replay)', () => {
+    expectCryptoError(decrypt(k0, { ...aad, spaceId: 'space-2' }, envelope), 'aad_mismatch');
+  });
 
   it('rejects decrypting under a different table', () => {
     expectCryptoError(decrypt(k0, { ...aad, table: 'tasks' }, envelope), 'aad_mismatch');
@@ -158,7 +176,7 @@ describe('AAD binding (relay row/version swaps fail)', () => {
 });
 
 describe('decrypt failure modes', () => {
-  const aad = { table: 't', pk: 'a', version: 1, keyId };
+  const aad = { spaceId: AAD_SPACE_ID, table: 't', pk: 'a', version: 1, keyId };
 
   it('rejects an unknown key id (rekeyed space) with unknown_key_id', () => {
     const otherK0 = mintK0();
@@ -231,7 +249,13 @@ describe('two-half pairing secret format', () => {
     // key_id -> identical row keys -> interchangeable ciphertexts.
     expect(Buffer.from(machineA.k0).equals(Buffer.from(machineB.k0))).toBe(true);
     expect(keyIdOf(machineA.k0)).toBe(keyIdOf(machineB.k0));
-    const aad = { table: 't', pk: 'a', version: 0, keyId: keyIdOf(machineA.k0) };
+    const aad = {
+      spaceId: AAD_SPACE_ID,
+      table: 't',
+      pk: 'a',
+      version: 0,
+      keyId: keyIdOf(machineA.k0),
+    };
     const ciphertext = encryptBody(machineA.k0, keyIdOf(machineA.k0), aad, 'shared');
     const decrypted = decryptBody(machineB.k0, { ...aad, keyId: keyIdOf(machineB.k0) }, ciphertext);
     expect(decrypted.success && decrypted.data).toBe('shared');

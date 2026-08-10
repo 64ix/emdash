@@ -1877,7 +1877,7 @@ describe('SyncEngine', () => {
     ): SyncEngine {
       return new SyncEngine({
         sqlite: fixture.sqlite,
-        transport: new EncryptingRelayTransport(relay, keyReader),
+        transport: new EncryptingRelayTransport(relay, keyReader, 'space-1'),
         deviceId,
       });
     }
@@ -1951,7 +1951,7 @@ describe('SyncEngine', () => {
       const good = encryptBody(
         k0,
         keyId,
-        { table: 'projects', pk: PROJECT_A, version: 0, keyId },
+        { spaceId: 'space-1', table: 'projects', pk: PROJECT_A, version: 0, keyId },
         JSON.stringify({ deviceId: 'a', columns: { id: PROJECT_A, name: 'Repo' } })
       );
       const foreignK0 = mintK0();
@@ -1959,11 +1959,16 @@ describe('SyncEngine', () => {
       const foreign = encryptBody(
         foreignK0,
         foreignKeyId,
-        { table: 'tasks', pk: TASK_1, version: 0, keyId: foreignKeyId },
+        { spaceId: 'space-1', table: 'tasks', pk: TASK_1, version: 0, keyId: foreignKeyId },
         JSON.stringify({ deviceId: 'x', columns: { id: TASK_1, project_id: PROJECT_A, name: 'X' } })
       );
       const tamperedEnvelope = JSON.parse(
-        encryptBody(k0, keyId, { table: 'conversations', pk: CONV_1, version: 0, keyId }, 'old')
+        encryptBody(
+          k0,
+          keyId,
+          { spaceId: 'space-1', table: 'conversations', pk: CONV_1, version: 0, keyId },
+          'old'
+        )
       ) as { ct: string };
       const tamperedBits = Buffer.from(tamperedEnvelope.ct, 'base64url');
       tamperedBits[0] = tamperedBits[0]! ^ 1;
@@ -2018,7 +2023,7 @@ describe('SyncEngine', () => {
       const foreign = encryptBody(
         foreignK0,
         foreignKeyId,
-        { table: 'projects', pk: PROJECT_A, version: 1, keyId: foreignKeyId },
+        { spaceId: 'space-1', table: 'projects', pk: PROJECT_A, version: 1, keyId: foreignKeyId },
         JSON.stringify({ deviceId: 'a', columns: { id: PROJECT_A, name: 'Rekeyed' } })
       );
       relay.seedRow('projects', PROJECT_A, foreign);
@@ -2042,6 +2047,92 @@ describe('SyncEngine', () => {
       expectOk(await engineB.syncNow());
       expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
         'Renamed on A'
+      );
+    });
+
+    it('drops an old envelope replayed under a fabricated newer server version (anti-replay hardening)', async () => {
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = encryptedEngine(fixtureA, relay, 'device-a');
+      const engineB = encryptedEngine(fixtureB, relay, 'device-b');
+
+      // A's first push: client_version 0, decryptable, content 'Repo'.
+      await seedProject(fixtureA, PROJECT_A);
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Repo'
+      );
+      // A relay-supplied server version is NOT part of the AAD (only
+      // client_version is, per crypto.ts) — capture the FIRST envelope
+      // byte-for-byte before it goes stale, so replaying it later is
+      // indistinguishable, at the crypto layer, from a genuine old patch.
+      const staleEnvelope = relay.getRow('projects', PROJECT_A)?.body ?? null;
+
+      // A edits and pushes again: client_version now bumps to 1 (A's own
+      // last-known server version), content 'Renamed'. B applies it.
+      await fixtureA.db.update(projects).set({ name: 'Renamed' }).where(eq(projects.id, PROJECT_A));
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Renamed'
+      );
+      const rowStateAfterRename = rawGet(
+        fixtureB,
+        'SELECT server_version, client_version FROM sync_row_state WHERE table_name = ? AND pk = ?',
+        'projects',
+        PROJECT_A
+      );
+
+      // A malicious/buggy relay now replays the FIRST (stale) envelope
+      // unchanged, but reports it at the next (higher) server version —
+      // exactly what a genuinely newer edit would look like. It decrypts
+      // perfectly (identical body, identical AAD: the wire client_version
+      // seedRow assigns is 0, matching what the envelope was originally
+      // bound to) and would pass the serverVersion check alone; only the
+      // client_version regression guard catches it.
+      relay.seedRow('projects', PROJECT_A, staleEnvelope);
+
+      const pull = await engineB.syncNow();
+      expectOk(pull);
+      if (!pull.success) return;
+      expect(pull.data.skippedReplayed).toBe(1);
+      // The stale content never applies: B keeps 'Renamed', not 'Repo'.
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Renamed'
+      );
+      // The previously-applied client_version (and server_version) baseline
+      // is preserved, not reset by the dropped replay.
+      const rowStateAfterReplay = rawGet(
+        fixtureB,
+        'SELECT server_version, client_version FROM sync_row_state WHERE table_name = ? AND pk = ?',
+        'projects',
+        PROJECT_A
+      );
+      expect(rowStateAfterReplay?.client_version).toBe(rowStateAfterRename?.client_version);
+      // The row's own server_version DOES advance to the replayed (higher)
+      // version, so the same replay is never re-processed on a future pull.
+      expect(rowStateAfterReplay?.server_version).toBe(relay.maxVersion);
+      expect(rowStateAfterReplay?.server_version).toBeGreaterThan(
+        rowStateAfterRename?.server_version as number
+      );
+      // The cursor still advances past the replayed version (no wedge).
+      expect(
+        JSON.parse(
+          rawGet(fixtureB, "SELECT value FROM kv WHERE key = 'sync:cursor'")?.value as string
+        )
+      ).toBe(relay.maxVersion);
+
+      // A genuinely newer, decryptable edit from A still applies afterwards.
+      await fixtureA.db
+        .update(projects)
+        .set({ name: 'Renamed again' })
+        .where(eq(projects.id, PROJECT_A));
+      expectOk(await engineA.syncNow());
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Renamed again'
       );
     });
   });

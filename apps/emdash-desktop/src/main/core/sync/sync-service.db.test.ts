@@ -429,7 +429,11 @@ describe('SyncService', () => {
       const fixtureB = await openFixture('empty');
       const other = new SyncEngine({
         sqlite: fixtureB.sqlite,
-        transport: new EncryptingRelayTransport(relay, { get: async () => ok(KEY) }),
+        transport: new EncryptingRelayTransport(
+          relay,
+          { get: async () => ok(KEY) },
+          CREDENTIAL.spaceId
+        ),
         deviceId: 'device-b',
       });
       await fixtureB.db.insert(projects).values({

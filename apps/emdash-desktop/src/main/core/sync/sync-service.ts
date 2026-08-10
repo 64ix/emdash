@@ -291,9 +291,11 @@ export class SyncService {
     // push (SyncSpaceKeyMissingError → error status with the re-join message)
     // rather than silently downgrade to plaintext — unencrypted bodies would
     // leak row contents to the relay and wedge every keyed machine's pull.
-    const transport = new EncryptingRelayTransport(base, {
-      get: () => this.deps.getSpaceKey(),
-    });
+    const transport = new EncryptingRelayTransport(
+      base,
+      { get: () => this.deps.getSpaceKey() },
+      credential.data.spaceId
+    );
     return new SyncEngine({
       sqlite: this.deps.sqlite,
       transport,
@@ -317,7 +319,10 @@ export class SyncService {
         continue;
       }
       try {
-        const transport = await this.buildPollTransport(credential.data.token);
+        const transport = await this.buildPollTransport(
+          credential.data.token,
+          credential.data.spaceId
+        );
         const engine = await this.buildEngine();
         const cursor = engine === null ? 0 : engine.lastCursor;
         const result = await transport.poll(cursor, this.pollTimeoutMs);
@@ -355,14 +360,12 @@ export class SyncService {
     }
   }
 
-  private async buildPollTransport(token: string): Promise<RelayTransport> {
+  private async buildPollTransport(token: string, spaceId: string): Promise<RelayTransport> {
     const base = this.deps.createTransport(token);
     // Always wrap (matching buildEngine): body-carrying patches decrypt when a
     // key exists; without one they are flagged undecryptable and skipped —
     // never applied as garbage, never echoed back.
-    return new EncryptingRelayTransport(base, {
-      get: () => this.deps.getSpaceKey(),
-    });
+    return new EncryptingRelayTransport(base, { get: () => this.deps.getSpaceKey() }, spaceId);
   }
 
   private async markPollFailure(error: unknown): Promise<void> {

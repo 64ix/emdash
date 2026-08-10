@@ -124,6 +124,9 @@ function makeKeys(k0 = mintK0()): { store: SpaceKeyStore; keyId: string; k0: Uin
   return { store, keyId: keyIdOf(k0), k0 };
 }
 
+/** The space this machine is paired to, for every test below unless noted. */
+const SPACE_ID = 'space-1';
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -132,7 +135,7 @@ describe('EncryptingRelayTransport', () => {
   it('encrypts upsert bodies into versioned envelopes before the inner transport', async () => {
     const inner = new FakeInnerTransport();
     const { store } = makeKeys();
-    const transport = new EncryptingRelayTransport(inner, store);
+    const transport = new EncryptingRelayTransport(inner, store, SPACE_ID);
 
     const plaintext = JSON.stringify({
       deviceId: 'a',
@@ -167,7 +170,11 @@ describe('EncryptingRelayTransport', () => {
 
   it('fails the push with a clear error when no space key is stored', async () => {
     const inner = new FakeInnerTransport();
-    const transport = new EncryptingRelayTransport(inner, new SpaceKeyStore(new FakeSecretStore()));
+    const transport = new EncryptingRelayTransport(
+      inner,
+      new SpaceKeyStore(new FakeSecretStore()),
+      SPACE_ID
+    );
 
     await expect(
       transport.push([{ table: 't', pk: 'a', client_version: 0, body: 'x', op: 'upsert' }])
@@ -178,7 +185,7 @@ describe('EncryptingRelayTransport', () => {
   it('decrypts pulled envelopes back to the original plaintext bodies', async () => {
     const inner = new FakeInnerTransport();
     const { store, keyId, k0 } = makeKeys();
-    const transport = new EncryptingRelayTransport(inner, store);
+    const transport = new EncryptingRelayTransport(inner, store, SPACE_ID);
 
     const plaintext = JSON.stringify({ deviceId: 'a', columns: { name: 'Repo' } });
     // A pushes (encrypted) through the decorator...
@@ -200,7 +207,11 @@ describe('EncryptingRelayTransport', () => {
       expect(envelope.data.alg).toBe('AES-256-GCM');
       expect(envelope.data.key_id).toBe(keyId);
     }
-    const decrypted = decryptBody(k0, { table: 'projects', pk: 'p1', version: 0, keyId }, stored!);
+    const decrypted = decryptBody(
+      k0,
+      { spaceId: SPACE_ID, table: 'projects', pk: 'p1', version: 0, keyId },
+      stored!
+    );
     expect(decrypted.success && decrypted.data).toBe(plaintext);
   });
 
@@ -212,14 +223,50 @@ describe('EncryptingRelayTransport', () => {
     // the same body under a different client_version (or a different server
     // version with the metadata bumped). Either rewrite must fail the AEAD
     // authentication on pull, not silently apply.
-    const original = encryptBody(k0, keyId, { table: 't', pk: 'a', version: 1, keyId }, 'content');
+    const original = encryptBody(
+      k0,
+      keyId,
+      { spaceId: SPACE_ID, table: 't', pk: 'a', version: 1, keyId },
+      'content'
+    );
     inner.rows.set('t:a', { version: 2, client_version: 2, body: original, deleted: false });
 
-    const transport = new EncryptingRelayTransport(inner, store);
+    const transport = new EncryptingRelayTransport(inner, store, SPACE_ID);
     const result = await transport.pull(0);
 
     expect(result.patches).toHaveLength(1);
     expect(result.patches[0]?.decryptError).toContain('authenticat');
+  });
+
+  it('flags a body encrypted for a different space (cross-space replay)', async () => {
+    const inner = new FakeInnerTransport();
+    const { store, keyId, k0 } = makeKeys();
+
+    // A body genuinely encrypted for space "space-2" (same key material —
+    // e.g. a relay hosting more than one space, or a key coincidentally
+    // reused) must not decrypt when pulled by a machine paired to a
+    // different space, even though table/pk/version/keyId all line up.
+    const body = encryptBody(
+      k0,
+      keyId,
+      { spaceId: 'space-2', table: 't', pk: 'a', version: 0, keyId },
+      'content'
+    );
+    inner.rows.set('t:a', { version: 1, client_version: 0, body, deleted: false });
+
+    const transport = new EncryptingRelayTransport(inner, store, SPACE_ID);
+    const result = await transport.pull(0);
+
+    expect(result.patches).toHaveLength(1);
+    expect(result.patches[0]?.decryptError).toContain('authenticat');
+
+    // The identical body decrypts fine for a transport actually paired to
+    // "space-2" — isolating that the space id (not some other corruption) is
+    // what made the first pull fail.
+    const sameSpaceTransport = new EncryptingRelayTransport(inner, store, 'space-2');
+    const sameSpaceResult = await sameSpaceTransport.pull(0);
+    expect(sameSpaceResult.patches[0]?.body).toBe('content');
+    expect(sameSpaceResult.patches[0]?.decryptError).toBeUndefined();
   });
 
   it('flags unknown-key_id patches and continues decrypting the rest', async () => {
@@ -228,17 +275,27 @@ describe('EncryptingRelayTransport', () => {
 
     // Seed: one patch encrypted under the local key, one under a foreign key
     // (another machine rekeyed), one tampered.
-    const local = encryptBody(k0, keyId, { table: 't', pk: 'a', version: 1, keyId }, 'good');
+    const local = encryptBody(
+      k0,
+      keyId,
+      { spaceId: SPACE_ID, table: 't', pk: 'a', version: 1, keyId },
+      'good'
+    );
     const foreignK0 = mintK0();
     const foreignKeyId = keyIdOf(foreignK0);
     const foreign = encryptBody(
       foreignK0,
       foreignKeyId,
-      { table: 't', pk: 'b', version: 1, keyId: foreignKeyId },
+      { spaceId: SPACE_ID, table: 't', pk: 'b', version: 1, keyId: foreignKeyId },
       'foreign'
     );
     const tamperedEnvelope = parseEnvelope(
-      encryptBody(k0, keyId, { table: 't', pk: 'c', version: 1, keyId }, 'tampered')
+      encryptBody(
+        k0,
+        keyId,
+        { spaceId: SPACE_ID, table: 't', pk: 'c', version: 1, keyId },
+        'tampered'
+      )
     );
     if (!tamperedEnvelope.success) throw new Error('seed envelope did not parse');
     const bits = Buffer.from(tamperedEnvelope.data.ct, 'base64url');
@@ -249,7 +306,7 @@ describe('EncryptingRelayTransport', () => {
     inner.rows.set('t:b', { version: 2, client_version: 1, body: foreign, deleted: false });
     inner.rows.set('t:c', { version: 3, client_version: 1, body: tampered, deleted: false });
 
-    const transport = new EncryptingRelayTransport(inner, store);
+    const transport = new EncryptingRelayTransport(inner, store, SPACE_ID);
     const result = await transport.pull(0);
 
     expect(result.patches).toHaveLength(3);
@@ -267,7 +324,11 @@ describe('EncryptingRelayTransport', () => {
     inner.rows.set('t:a', { version: 1, client_version: 0, body: '{"enc":1}', deleted: false });
     inner.rows.set('t:b', { version: 2, client_version: 0, body: null, deleted: true });
 
-    const transport = new EncryptingRelayTransport(inner, new SpaceKeyStore(new FakeSecretStore()));
+    const transport = new EncryptingRelayTransport(
+      inner,
+      new SpaceKeyStore(new FakeSecretStore()),
+      SPACE_ID
+    );
     const result = await transport.pull(0);
 
     const upsert = result.patches.find((p) => p.pk === 'a');
@@ -281,7 +342,7 @@ describe('EncryptingRelayTransport', () => {
   it('decrypts on poll like on pull', async () => {
     const inner = new FakeInnerTransport();
     const { store } = makeKeys();
-    const transport = new EncryptingRelayTransport(inner, store);
+    const transport = new EncryptingRelayTransport(inner, store, SPACE_ID);
     await transport.push([
       { table: 't', pk: 'a', client_version: 0, body: 'polled', op: 'upsert' },
     ]);
@@ -293,7 +354,7 @@ describe('EncryptingRelayTransport', () => {
   it('passes pairing methods through unencrypted', async () => {
     const inner = new FakeInnerTransport();
     const { store } = makeKeys();
-    const transport = new EncryptingRelayTransport(inner, store);
+    const transport = new EncryptingRelayTransport(inner, store, SPACE_ID);
 
     const created = await transport.createSpace('main');
     expect(created.secret).toBe('x');
