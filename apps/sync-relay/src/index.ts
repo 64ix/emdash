@@ -7,7 +7,7 @@
  * an in-process D1-compatible harness; `now` is injected for deterministic
  * pairing/audit timestamps.
  */
-import { parseToken, sha256Hex } from './crypto';
+import { constantTimeEqual, parseToken, sha256Bytes, sha256Hex } from './crypto';
 import type { SqlDb } from './db';
 import { ensureSchema } from './schema';
 import {
@@ -34,6 +34,12 @@ import type {
 
 export interface RelayEnv {
   SYNC_RELAY_DB: D1Database;
+  /** Pre-shared gate key (set with `wrangler secret put RELAY_KEY`). Every
+   * request must present it as `X-Relay-Key`; this is what stops a stranger
+   * who discovers the public URL from creating spaces or pushing data and
+   * burning the operator's free-tier quota. Required in production — the
+   * `fetch` entry point refuses to serve without it. */
+  RELAY_KEY?: string;
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -101,9 +107,28 @@ const KNOWN_PATHS = new Set([
   '/v1/sync/poll',
 ]);
 
-export async function handle(request: Request, db: SqlDb, now: number): Promise<Response> {
+export async function handle(
+  request: Request,
+  db: SqlDb,
+  now: number,
+  relayKey?: string
+): Promise<Response> {
   const { pathname } = new URL(request.url);
   try {
+    // Pre-shared gate: when the operator configured a RELAY_KEY, every request
+    // — including the unauthenticated space/join endpoints — must present a
+    // matching `X-Relay-Key`. Compared over SHA-256 digests in constant time
+    // (fixed length, no early-exit) so neither the key's length nor a prefix
+    // leaks. Checked before routing so an unconfigured caller learns nothing
+    // about which paths exist.
+    if (relayKey !== undefined && relayKey !== '') {
+      const presented = request.headers.get('x-relay-key') ?? '';
+      const [a, b] = await Promise.all([sha256Bytes(presented), sha256Bytes(relayKey)]);
+      if (!constantTimeEqual(a, b)) {
+        return json({ error: 'unauthorized' } satisfies ErrorResult, 401);
+      }
+    }
+
     if (!KNOWN_PATHS.has(pathname)) {
       return json({ error: 'not_found' } satisfies ErrorResult, 404);
     }
@@ -169,7 +194,16 @@ function withSchema(db: SqlDb): Promise<void> {
 
 export default {
   async fetch(request: Request, env: RelayEnv): Promise<Response> {
+    // Fail closed: a deployment with no RELAY_KEY is ungated and would let
+    // anyone who finds the URL burn the operator's quota. Refuse to serve
+    // rather than run open. Set it with `wrangler secret put RELAY_KEY`.
+    if (env.RELAY_KEY === undefined || env.RELAY_KEY === '') {
+      return json(
+        { error: 'relay_misconfigured: RELAY_KEY is not set' } satisfies ErrorResult,
+        500
+      );
+    }
     await withSchema(env.SYNC_RELAY_DB);
-    return handle(request, env.SYNC_RELAY_DB, Date.now());
+    return handle(request, env.SYNC_RELAY_DB, Date.now(), env.RELAY_KEY);
   },
 };

@@ -56,10 +56,19 @@ async function makeDb(): Promise<SqlDb> {
   return db;
 }
 
-function request(method: string, path: string, body: unknown, token?: string): Request {
+function request(
+  method: string,
+  path: string,
+  body: unknown,
+  token?: string,
+  relayKey?: string
+): Request {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (token !== undefined) {
     headers.authorization = `Bearer ${token}`;
+  }
+  if (relayKey !== undefined) {
+    headers['x-relay-key'] = relayKey;
   }
   return new Request(`https://relay.local${path}`, {
     method,
@@ -120,6 +129,50 @@ async function joinWith(
     secretOrCredential.length === 26 ? secretOrCredential : joinCredentialOf(secretOrCredential);
   return post(db, '/v1/join', { join_hash: credential, space_id: spaceId }, undefined, now);
 }
+
+describe('X-Relay-Key gate', () => {
+  const KEY = 'a-long-random-pre-shared-relay-key';
+
+  it('rejects a request with no X-Relay-Key when a key is configured', async () => {
+    const db = await makeDb();
+    const res = await handle(request('POST', '/v1/space', { name: 'x' }, undefined), db, T0, KEY);
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a request with the wrong X-Relay-Key', async () => {
+    const db = await makeDb();
+    const res = await handle(
+      request('POST', '/v1/space', { name: 'x' }, undefined, 'wrong-key'),
+      db,
+      T0,
+      KEY
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects even unknown paths without the key (no path existence leak)', async () => {
+    const db = await makeDb();
+    const res = await handle(request('GET', '/v1/nope', undefined, undefined), db, T0, KEY);
+    expect(res.status).toBe(401);
+  });
+
+  it('accepts a request carrying the correct X-Relay-Key', async () => {
+    const db = await makeDb();
+    const res = await handle(
+      request('POST', '/v1/space', { name: 'x' }, undefined, KEY),
+      db,
+      T0,
+      KEY
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('is ungated when no key is configured (handle called without a relayKey)', async () => {
+    const db = await makeDb();
+    const res = await handle(request('POST', '/v1/space', { name: 'x' }, undefined), db, T0);
+    expect(res.status).toBe(200);
+  });
+});
 
 describe('space creation', () => {
   it('creates a space and returns a device token plus a two-half pairing secret', async () => {

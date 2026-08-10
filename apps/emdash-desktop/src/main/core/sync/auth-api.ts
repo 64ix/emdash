@@ -81,7 +81,8 @@ const JSON_HEADERS = { 'content-type': 'application/json' };
 export class HttpRelayAuthApi implements RelayAuthApi {
   constructor(
     private readonly baseUrl = SYNC_RELAY_CONFIG.baseUrl,
-    private readonly timeoutMs = SYNC_RELAY_CONFIG.requestTimeoutMs
+    private readonly timeoutMs = SYNC_RELAY_CONFIG.requestTimeoutMs,
+    private readonly relayKey = SYNC_RELAY_CONFIG.relayKey
   ) {}
 
   async createSpace(name: string): Promise<Result<RelaySpaceCreated, RelayApiError>> {
@@ -147,6 +148,7 @@ export class HttpRelayAuthApi implements RelayAuthApi {
         method: options.method,
         headers: {
           ...JSON_HEADERS,
+          ...(this.relayKey !== undefined ? { 'X-Relay-Key': this.relayKey } : {}),
           ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),

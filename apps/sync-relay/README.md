@@ -145,19 +145,59 @@ pnpm exec wrangler d1 create emdash-sync-relay
 # 2. Put that id in wrangler.jsonc (d1_databases[0].database_id).
 #    Never commit the id if you consider it sensitive; it is not a secret.
 
-# 3. Deploy. The schema self-bootstraps on first request.
+# 3. Set the pre-shared gate key (REQUIRED — the worker refuses to serve
+#    without it). Generate a long random value and keep it; you enter the
+#    SAME value in the app on each machine.
+openssl rand -base64 32                 # generate a key
+pnpm exec wrangler secret put RELAY_KEY  # paste it when prompted
+
+# 4. Deploy. The schema self-bootstraps on first request.
 pnpm exec wrangler deploy
 
-# Local smoke test against a local D1:
+# Local smoke test against a local D1 (pass the key you set):
 pnpm exec wrangler dev
-curl -X POST http://localhost:8787/v1/space
+curl -X POST http://localhost:8787/v1/space -H "X-Relay-Key: <your key>"
 ```
 
-There are no secrets in the worker: tokens are high-entropy client-held values
-and only their SHA-256 digests live in D1, so no `wrangler secret` is needed.
+### Access control (the gate)
+
+The relay is a public URL (`*.workers.dev` names are discoverable — do not rely
+on the URL being unknown), so it is gated by a **pre-shared key**. Every request
+must carry `X-Relay-Key: <RELAY_KEY>`; the worker compares it against the
+`RELAY_KEY` secret with a constant-time SHA-256 comparison and returns `401`
+otherwise — including on the otherwise-unauthenticated `space`/`join` endpoints.
+The `fetch` entry point **fails closed** (`500 relay_misconfigured`) when
+`RELAY_KEY` is unset, so a forgotten secret can never leave the relay open.
+
+This gate protects the operator's **free-tier quota** (100k Worker req/day, 100k
+D1 writes/day, 5 GB) from strangers who find the URL — it is not a data secret
+(row bodies are already E2E-encrypted). The key ships nowhere: you enter it by
+hand on each machine. Optionally add Cloudflare's one free rate-limiting rule
+(per-IP) as a blunt abuse backstop.
+
+### Configuring the app
+
+Each machine points at the relay via two values (per-machine, never synced):
+
+- `EMDASH_SYNC_RELAY_URL` — the deployed worker origin (from `wrangler deploy`).
+- `EMDASH_SYNC_RELAY_KEY` — the same value you set as `RELAY_KEY`.
+
+Set them in the app's environment before launch, e.g. for dev:
+
+```bash
+EMDASH_SYNC_RELAY_URL=https://emdash-sync-relay.<subdomain>.workers.dev \
+EMDASH_SYNC_RELAY_KEY=<your key> \
+  pnpm --filter @emdash/emdash-desktop dev
+```
+
+When unset, the app refuses to sync (it targets a reserved unresolvable
+`.invalid` host) rather than reaching any real domain.
 
 ## Security notes
 
+- **Gated by a pre-shared `X-Relay-Key`** (see Access control above): every
+  request is checked in constant time before routing; the worker fails closed
+  when `RELAY_KEY` is unset.
 - Row bodies arrive E2E-encrypted; the relay stores them verbatim and never
   parses them (push bodies are not JSON-parsed, pull returns them untouched).
 - Tokens/secrets are random 32/16-byte values; digests at rest; constant-time
@@ -165,8 +205,9 @@ and only their SHA-256 digests live in D1, so no `wrangler secret` is needed.
 - Join failures all read `401 invalid join secret` (no oracle about expiry,
   single-use, or budget); exhausted or expired secrets are purged.
 - Revoked tokens are refused; revocations are kept for audit.
-- Not in scope: Durable Objects, WebSockets, rate limiting (the pairing budget
-  is app-level), and membership removal (revoke only).
+- Not in scope: Durable Objects, WebSockets, Worker-level rate limiting (the
+  pairing budget is app-level; add Cloudflare's free per-IP rule if you want a
+  network backstop), and membership removal (revoke only).
 
 ## Not implemented here
 

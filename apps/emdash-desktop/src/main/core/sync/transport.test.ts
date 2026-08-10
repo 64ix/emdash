@@ -37,6 +37,40 @@ describe('HttpRelayTransport', () => {
     expect(JSON.parse(init.body as string)).toEqual({ cursor: 5, limit: 100 });
   });
 
+  it('sends the X-Relay-Key gate header on every request when configured', async () => {
+    globalThis.fetch = fetchMock;
+    fetchMock.mockResolvedValue(jsonResponse({ cursor: 0, patches: [] }));
+
+    const transport = new HttpRelayTransport(
+      'https://relay.example',
+      async () => 'tok',
+      'pre-shared-key'
+    );
+    // Authenticated endpoint…
+    await transport.pull(0);
+    // …and an unauthenticated one (space/join): the gate header still rides.
+    fetchMock.mockResolvedValue(
+      jsonResponse({ space_id: 's', device_id: 'd', device_token: 't', secret: 'x' })
+    );
+    await transport.createSpace('main');
+
+    for (const call of fetchMock.mock.calls) {
+      const [, init] = call as [string, RequestInit];
+      expect((init.headers as Record<string, string>)['x-relay-key']).toBe('pre-shared-key');
+    }
+  });
+
+  it('omits the X-Relay-Key header when no key is configured', async () => {
+    globalThis.fetch = fetchMock;
+    fetchMock.mockResolvedValue(jsonResponse({ cursor: 0, patches: [] }));
+
+    const transport = new HttpRelayTransport('https://relay.example', async () => 'tok');
+    await transport.pull(0);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['x-relay-key']).toBeUndefined();
+  });
+
   it('skips the auth header on the space/join endpoints', async () => {
     globalThis.fetch = fetchMock;
     fetchMock.mockResolvedValue(

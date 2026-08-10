@@ -30,7 +30,12 @@ export const syncService = new SyncService({
   getCredentials: () => credentials.get(),
   getSpaceKey: () => spaceKeys.get(),
   getDeviceIdentity: getOrCreateDeviceIdentity,
-  createTransport: (token) => new HttpRelayTransport(SYNC_RELAY_CONFIG.baseUrl, async () => token),
+  createTransport: (token) =>
+    new HttpRelayTransport(
+      SYNC_RELAY_CONFIG.baseUrl,
+      async () => token,
+      SYNC_RELAY_CONFIG.relayKey
+    ),
   projectAttachHook: createProjectAutoAttachHook(),
   onStatusChange: (status) => events.emit(syncStatusChannel, status),
   connectivity: {

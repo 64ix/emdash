@@ -130,7 +130,11 @@ export interface RelayTransport {
 export class HttpRelayTransport implements RelayTransport {
   constructor(
     private readonly baseUrl: string,
-    private readonly getToken: () => Promise<string>
+    private readonly getToken: () => Promise<string>,
+    /** Pre-shared relay key; sent as `X-Relay-Key` on every request so the
+     * operator's relay can refuse strangers even on unauthenticated endpoints
+     * (space creation, join). Omitted when the operator runs an ungated relay. */
+    private readonly relayKey?: string
   ) {}
 
   async createSpace(name?: string): Promise<SyncSpaceCreated> {
@@ -173,6 +177,9 @@ export class HttpRelayTransport implements RelayTransport {
 
   private async post<T>(path: string, body: unknown, authenticated = true): Promise<T> {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (this.relayKey !== undefined) {
+      headers['x-relay-key'] = this.relayKey;
+    }
     if (authenticated) {
       headers.authorization = `Bearer ${await this.getToken()}`;
     }
