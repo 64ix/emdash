@@ -5,7 +5,7 @@ import { sqlite } from '@main/db/client';
 import { events } from '@main/lib/events';
 import { syncStatusChannel } from '@shared/events/syncEvents';
 import { getOrCreateDeviceIdentity } from './device-identity';
-import { SYNC_RELAY_CONFIG } from './relay-config';
+import { getRelayEndpoint } from './relay-endpoint-provider';
 import { SpaceKeyStore } from './space-key-store';
 import { SyncCredentialsStore } from './sync-credentials';
 import { SyncService } from './sync-service';
@@ -30,12 +30,7 @@ export const syncService = new SyncService({
   getCredentials: () => credentials.get(),
   getSpaceKey: () => spaceKeys.get(),
   getDeviceIdentity: getOrCreateDeviceIdentity,
-  createTransport: (token) =>
-    new HttpRelayTransport(
-      SYNC_RELAY_CONFIG.baseUrl,
-      async () => token,
-      SYNC_RELAY_CONFIG.relayKey
-    ),
+  createTransport: (token) => new HttpRelayTransport(getRelayEndpoint, async () => token),
   projectAttachHook: createProjectAutoAttachHook(),
   onStatusChange: (status) => events.emit(syncStatusChannel, status),
   connectivity: {

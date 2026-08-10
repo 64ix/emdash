@@ -1,4 +1,9 @@
-import type { PairingErrorCode, SyncDeviceInfo, SyncState } from '@shared/core/sync/pairing';
+import type {
+  PairingErrorCode,
+  RelaySettingsView,
+  SyncDeviceInfo,
+  SyncState,
+} from '@shared/core/sync/pairing';
 import type { SyncStatus } from '@shared/core/sync/status';
 /**
  * RPC controller for sync pairing (spec #130, ticket #135): the renderer-side
@@ -11,7 +16,11 @@ import type { SyncStatus } from '@shared/core/sync/status';
  */
 import { createRPCController } from '@shared/lib/ipc/rpc';
 import { pairingService } from './pairing-service-instance';
+import { UNCONFIGURED_RELAY_URL } from './relay-config';
+import { getRelayEndpoint, relaySettingsStore } from './relay-endpoint-provider';
 import { syncService } from './sync-service-instance';
+
+type RelaySettingsSaved = { success: true } | { success: false; message: string };
 
 type PairingFailure = { success: false; code: PairingErrorCode; message: string };
 
@@ -25,6 +34,42 @@ function failure(error: { code: PairingErrorCode; message: string }): PairingFai
 }
 
 export const syncController = createRPCController({
+  /** The machine-local relay connection settings (URL + whether a key is set). */
+  getRelaySettings: async (): Promise<RelaySettingsView> => {
+    const resolved = await getRelayEndpoint();
+    return {
+      url: resolved.baseUrl === UNCONFIGURED_RELAY_URL ? null : resolved.baseUrl,
+      hasKey: resolved.relayKey !== undefined,
+      configured: resolved.configured,
+      envManaged: resolved.envManaged,
+    };
+  },
+
+  /** Saves the relay URL + pre-shared key on this machine (safeStorage). */
+  setRelaySettings: async (input: { url: string; key: string }): Promise<RelaySettingsSaved> => {
+    const url = input.url.trim();
+    const key = input.key.trim();
+    if (!/^https:\/\/[^\s]+$/i.test(url)) {
+      return { success: false, message: 'Enter a valid https:// relay URL.' };
+    }
+    if (key === '') {
+      return { success: false, message: 'Enter the relay key.' };
+    }
+    const result = await relaySettingsStore.set({ url, key });
+    if (!result.success) {
+      return { success: false, message: result.error.message };
+    }
+    // Pick up the new endpoint on the next cycle without a restart.
+    syncService.kick();
+    return { success: true };
+  },
+
+  /** Clears the machine-local relay settings (does not un-pair). */
+  clearRelaySettings: async (): Promise<{ success: true }> => {
+    await relaySettingsStore.clear();
+    return { success: true };
+  },
+
   /** Whether this machine is paired, and with which space. */
   getState: async (): Promise<SyncState> => {
     const result = await pairingService.getState();

@@ -24,6 +24,23 @@ export const MAX_PAIRING_ATTEMPTS = 5;
  */
 export const JOIN_SECRET_PREFIX = 'emdj1_';
 
+/**
+ * The machine-local relay connection state surfaced to the Settings form.
+ * This fork ships no default relay: the user enters the URL + pre-shared key
+ * per machine (or overrides them with env vars). The key is never sent back to
+ * the renderer — only whether one is set.
+ */
+export type RelaySettingsView = {
+  /** The configured relay URL (env or stored), or null when unconfigured. */
+  url: string | null;
+  /** Whether a pre-shared key is set (the value itself never leaves the main process). */
+  hasKey: boolean;
+  /** Both URL and key present — sync can run. */
+  configured: boolean;
+  /** Managed by env vars, so the in-app form is read-only. */
+  envManaged: boolean;
+};
+
 /** A device as listed by the relay (`GET /v1/devices`). */
 export type SyncDeviceInfo = {
   deviceId: string;

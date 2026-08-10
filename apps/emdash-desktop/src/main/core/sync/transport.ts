@@ -12,6 +12,7 @@
  * depend on the relay package at runtime (the seam is the interface).
  */
 import { log } from '@main/lib/logger';
+import type { RelayEndpoint } from './relay-config';
 
 export type SyncOp = 'upsert' | 'delete';
 
@@ -129,12 +130,13 @@ export interface RelayTransport {
  */
 export class HttpRelayTransport implements RelayTransport {
   constructor(
-    private readonly baseUrl: string,
-    private readonly getToken: () => Promise<string>,
-    /** Pre-shared relay key; sent as `X-Relay-Key` on every request so the
-     * operator's relay can refuse strangers even on unauthenticated endpoints
-     * (space creation, join). Omitted when the operator runs an ungated relay. */
-    private readonly relayKey?: string
+    /** Resolves the base URL and pre-shared key per request (env override →
+     * machine-local settings), so config entered in the app takes effect
+     * without a restart. The key rides as `X-Relay-Key` on every request so
+     * the operator's relay can refuse strangers even on the unauthenticated
+     * endpoints (space creation, join). */
+    private readonly getEndpoint: () => Promise<RelayEndpoint>,
+    private readonly getToken: () => Promise<string>
   ) {}
 
   async createSpace(name?: string): Promise<SyncSpaceCreated> {
@@ -176,16 +178,17 @@ export class HttpRelayTransport implements RelayTransport {
   }
 
   private async post<T>(path: string, body: unknown, authenticated = true): Promise<T> {
+    const { baseUrl, relayKey } = await this.getEndpoint();
     const headers: Record<string, string> = { 'content-type': 'application/json' };
-    if (this.relayKey !== undefined) {
-      headers['x-relay-key'] = this.relayKey;
+    if (relayKey !== undefined) {
+      headers['x-relay-key'] = relayKey;
     }
     if (authenticated) {
       headers.authorization = `Bearer ${await this.getToken()}`;
     }
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      response = await fetch(`${baseUrl}${path}`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),

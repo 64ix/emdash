@@ -15,6 +15,7 @@ import IntegrationsCard from './IntegrationsCard';
 import InterfaceSettingsCard from './InterfaceSettingsCard';
 import KeyboardSettingsCard from './KeyboardSettingsCard';
 import NotificationSettingsCard from './NotificationSettingsCard';
+import { RelaySettingsCard } from './RelaySettingsCard';
 import RepositorySettingsCard from './RepositorySettingsCard';
 import ResourceMonitorSettingsCard from './ResourceMonitorSettingsCard';
 import SidebarMetadataSettingsCard from './SidebarMetadataSettingsCard';
@@ -90,6 +91,7 @@ function ConnectionsSettingsPage() {
 }
 
 function DevicesSettingsPage() {
+  const [relayConfigured, setRelayConfigured] = useState<boolean | null>(null);
   return (
     <div className="space-y-8">
       <PageHeader
@@ -97,7 +99,8 @@ function DevicesSettingsPage() {
         title="Devices"
         description="Pair this machine with other devices and manage your sync space."
       />
-      <DevicesSettingsCard />
+      <RelaySettingsCard onConfiguredChange={setRelayConfigured} />
+      <DevicesSettingsCard relayConfigured={relayConfigured} />
     </div>
   );
 }

@@ -22,11 +22,17 @@ describe('HttpRelayTransport', () => {
     });
   }
 
+  /** Endpoint provider (env/settings resolution is covered separately). */
+  const endpoint = (relayKey?: string) => async () => ({
+    baseUrl: 'https://relay.example',
+    relayKey,
+  });
+
   it('POSTs JSON bodies to the relay base URL with the bearer token', async () => {
     globalThis.fetch = fetchMock;
     fetchMock.mockResolvedValue(jsonResponse({ cursor: 7, patches: [] }));
 
-    const transport = new HttpRelayTransport('https://relay.example', async () => 'tok-123');
+    const transport = new HttpRelayTransport(endpoint(), async () => 'tok-123');
     const result = await transport.pull(5, 100);
 
     expect(result).toEqual({ cursor: 7, patches: [] });
@@ -41,11 +47,7 @@ describe('HttpRelayTransport', () => {
     globalThis.fetch = fetchMock;
     fetchMock.mockResolvedValue(jsonResponse({ cursor: 0, patches: [] }));
 
-    const transport = new HttpRelayTransport(
-      'https://relay.example',
-      async () => 'tok',
-      'pre-shared-key'
-    );
+    const transport = new HttpRelayTransport(endpoint('pre-shared-key'), async () => 'tok');
     // Authenticated endpoint…
     await transport.pull(0);
     // …and an unauthenticated one (space/join): the gate header still rides.
@@ -64,7 +66,7 @@ describe('HttpRelayTransport', () => {
     globalThis.fetch = fetchMock;
     fetchMock.mockResolvedValue(jsonResponse({ cursor: 0, patches: [] }));
 
-    const transport = new HttpRelayTransport('https://relay.example', async () => 'tok');
+    const transport = new HttpRelayTransport(endpoint(), async () => 'tok');
     await transport.pull(0);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -77,7 +79,7 @@ describe('HttpRelayTransport', () => {
       jsonResponse({ space_id: 's', device_id: 'd', device_token: 't', secret: 'x' })
     );
 
-    const transport = new HttpRelayTransport('https://relay.example', async () => 'tok');
+    const transport = new HttpRelayTransport(endpoint(), async () => 'tok');
     await transport.createSpace('main');
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -89,7 +91,7 @@ describe('HttpRelayTransport', () => {
     globalThis.fetch = fetchMock;
     fetchMock.mockResolvedValue(new Response('{"error":"unauthorized"}', { status: 401 }));
 
-    const transport = new HttpRelayTransport('https://relay.example', async () => 'tok');
+    const transport = new HttpRelayTransport(endpoint(), async () => 'tok');
     await expect(transport.pull(0)).rejects.toMatchObject({
       name: 'RelayHttpError',
       status: 401,
@@ -100,7 +102,7 @@ describe('HttpRelayTransport', () => {
     globalThis.fetch = fetchMock;
     fetchMock.mockRejectedValue(new TypeError('fetch failed'));
 
-    const transport = new HttpRelayTransport('https://relay.example', async () => 'tok');
+    const transport = new HttpRelayTransport(endpoint(), async () => 'tok');
     await expect(transport.push([])).rejects.toMatchObject({
       name: 'RelayHttpError',
       status: 0,

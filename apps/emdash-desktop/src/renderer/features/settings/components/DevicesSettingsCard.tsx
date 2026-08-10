@@ -18,7 +18,7 @@ type LoadState = 'loading' | 'ready' | 'error';
  * pairing secrets for additional devices, and revokes devices with
  * confirmation.
  */
-export function DevicesSettingsCard() {
+export function DevicesSettingsCard({ relayConfigured }: { relayConfigured?: boolean | null }) {
   const [state, setState] = useState<SyncState | null>(null);
   const [devices, setDevices] = useState<SyncDeviceInfo[] | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
@@ -157,7 +157,12 @@ export function DevicesSettingsCard() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button type="button" variant="ghost" onClick={() => showJoinSpace({})}>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={relayConfigured === false}
+              onClick={() => showJoinSpace({})}
+            >
               Join
             </Button>
             <Button type="button" variant="ghost" onClick={() => void mintSecret()}>
@@ -235,11 +240,25 @@ export function DevicesSettingsCard() {
           Create a sync space to generate a pairing secret for another machine, or join an existing
           space with a secret from another machine.
         </p>
+        {relayConfigured === false && (
+          <p className="max-w-sm text-xs text-foreground-passive">
+            Configure your sync relay above before pairing.
+          </p>
+        )}
         <div className="flex gap-2">
-          <Button type="button" variant="outline" onClick={() => showJoinSpace({})}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={relayConfigured === false}
+            onClick={() => showJoinSpace({})}
+          >
             Join a space
           </Button>
-          <Button type="button" onClick={() => void createSpace()}>
+          <Button
+            type="button"
+            disabled={relayConfigured === false}
+            onClick={() => void createSpace()}
+          >
             <PlusIcon className="size-4" />
             Create sync space
           </Button>

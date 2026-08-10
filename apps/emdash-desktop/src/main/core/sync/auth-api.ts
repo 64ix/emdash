@@ -16,7 +16,7 @@
  */
 import { err, ok, toSerializedError, type Result } from '@emdash/shared';
 import { log } from '@main/lib/logger';
-import { SYNC_RELAY_CONFIG } from './relay-config';
+import { RELAY_REQUEST_TIMEOUT_MS, type RelayEndpoint } from './relay-config';
 
 /** `POST /v1/space` response: the first device's own token plus a pairing secret. */
 export interface RelaySpaceCreated {
@@ -80,9 +80,11 @@ const JSON_HEADERS = { 'content-type': 'application/json' };
 
 export class HttpRelayAuthApi implements RelayAuthApi {
   constructor(
-    private readonly baseUrl = SYNC_RELAY_CONFIG.baseUrl,
-    private readonly timeoutMs = SYNC_RELAY_CONFIG.requestTimeoutMs,
-    private readonly relayKey = SYNC_RELAY_CONFIG.relayKey
+    /** Resolves the base URL + pre-shared key per request (env override →
+     * machine-local settings), so config entered in the app takes effect
+     * without a restart. */
+    private readonly getEndpoint: () => Promise<RelayEndpoint>,
+    private readonly timeoutMs = RELAY_REQUEST_TIMEOUT_MS
   ) {}
 
   async createSpace(name: string): Promise<Result<RelaySpaceCreated, RelayApiError>> {
@@ -142,13 +144,14 @@ export class HttpRelayAuthApi implements RelayAuthApi {
     path: string,
     options: { method: 'GET' | 'POST'; body?: unknown; token?: string }
   ): Promise<Result<TData, RelayApiError>> {
+    const { baseUrl, relayKey } = await this.getEndpoint();
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      response = await fetch(`${baseUrl}${path}`, {
         method: options.method,
         headers: {
           ...JSON_HEADERS,
-          ...(this.relayKey !== undefined ? { 'X-Relay-Key': this.relayKey } : {}),
+          ...(relayKey !== undefined ? { 'X-Relay-Key': relayKey } : {}),
           ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
