@@ -658,6 +658,31 @@ describe('PairingService', () => {
     expect(credential.success && credential.data?.spaceId).toBe(created.data.spaceId);
     expect(await storedKeyId(store)).toBe(keyIdBefore);
   });
+
+  it('deleteSpace clears local state when the space is already gone on the relay', async () => {
+    const api = new FakeRelayAuthApi();
+    const store = new FakeSecretStore();
+    const service = makeService(api, store);
+    const created = await service.createSpace('first');
+    if (!created.success) throw new Error('create failed');
+    expect(await storedKeyId(store)).not.toBeNull();
+
+    // Another device already deleted the space (or a delete response was lost):
+    // the relay now rejects this token. Retrying would 401 forever, so the
+    // action must still un-pair this machine rather than strand it.
+    api.forced.deleteSpace = { type: 'unauthorized', message: 'unauthorized' };
+    const deleted = await service.deleteSpace();
+    expect(deleted.success).toBe(true);
+
+    const credential = await new SyncCredentialsStore(store).get();
+    expect(credential.success && credential.data).toBeNull();
+    expect(await storedKeyId(store)).toBeNull();
+
+    const state = await service.getState();
+    expect(state.success).toBe(true);
+    if (!state.success) return;
+    expect(state.data).toEqual({ paired: false, spaceId: null, deviceName: null });
+  });
 });
 
 describe('joinDeepLink', () => {

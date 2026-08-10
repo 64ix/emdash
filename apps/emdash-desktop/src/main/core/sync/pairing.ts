@@ -246,9 +246,17 @@ export class PairingService {
    * relay ("delete my data"), then clears this machine's local credential
    * and space key so it un-pairs. Irreversible: once deleted, the space
    * cannot be resurrected and this machine cannot sync again until it
-   * creates or joins a new one. Local state is only cleared after the relay
-   * confirms the delete, so a network/relay failure leaves this machine
-   * paired (and free to retry) instead of stranding it mid-deletion.
+   * creates or joins a new one.
+   *
+   * Local state is cleared once the space is gone on the relay — whether this
+   * call deleted it or it was ALREADY gone. A genuine network/relay failure
+   * (`network_error`, `relay_error`) leaves this machine paired and free to
+   * retry, but an `unauthorized`/`device_not_found` response means the token's
+   * space no longer exists (another device already deleted it, or a lost
+   * response on a delete that in fact committed). Retrying that would 401
+   * forever, so it is treated as success and the stale local credential + key
+   * are cleared — matching how the background poll loop's `onAuthRevoked`
+   * already un-pairs on a 401.
    */
   async deleteSpace(): Promise<Result<void, PairingError>> {
     const tokenResult = await this.requireToken();
@@ -256,7 +264,11 @@ export class PairingService {
       return tokenResult;
     }
     const result = await this.api.deleteSpace(tokenResult.data.token);
-    if (!result.success) {
+    if (
+      !result.success &&
+      result.error.type !== 'unauthorized' &&
+      result.error.type !== 'device_not_found'
+    ) {
       return err(fromApiError(result.error));
     }
     const { spaceId } = tokenResult.data;
