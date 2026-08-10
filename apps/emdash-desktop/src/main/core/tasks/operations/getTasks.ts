@@ -1,5 +1,6 @@
 import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { assemblePullRequest, pullRequestRepositoryScope } from '@main/core/pull-requests/pr-utils';
+import { getTaskPrBranch } from '@main/core/workspaces/workspace-branch';
 import { db } from '@main/db/client';
 import { conversations, projectRemotes, pullRequests, tasks, workspaces } from '@main/db/schema';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
@@ -11,6 +12,7 @@ type WorkspaceSummaryRow = {
   id: string;
   linesAdded: number | null;
   linesDeleted: number | null;
+  kind: string | null;
   branchName: string | null;
 };
 
@@ -54,7 +56,8 @@ async function batchLoadTaskPrs(
   const projectIdByTask = new Map(taskRows.map((r) => [r.id, r.projectId] as const));
   const branchByTask = new Map<string, string>();
   for (const row of taskRows) {
-    const branch = row.workspaceId ? (wsByWsId.get(row.workspaceId)?.branchName ?? null) : null;
+    const workspace = row.workspaceId ? wsByWsId.get(row.workspaceId) : undefined;
+    const branch = workspace ? getTaskPrBranch(workspace) : null;
     if (branch) branchByTask.set(row.id, branch);
   }
   const branchNames = [...new Set(branchByTask.values())];
@@ -129,6 +132,7 @@ export async function getTasks(projectId?: string): Promise<Task[]> {
           linesAdded: workspaces.linesAdded,
           linesDeleted: workspaces.linesDeleted,
           // The task's PR branch (spec #104): read by the no-projectId PR batch.
+          kind: workspaces.kind,
           branchName: workspaces.branchName,
         })
         .from(workspaces)

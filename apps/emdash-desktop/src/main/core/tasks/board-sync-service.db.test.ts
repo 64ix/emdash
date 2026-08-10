@@ -73,9 +73,10 @@ async function insertTask(
 async function insertWorkspace(
   db: NonNullable<typeof mocks.db>,
   id: string,
-  branchName: string
+  branchName: string,
+  kind: 'worktree' | 'project-root' | null = 'worktree'
 ): Promise<void> {
-  await db.insert(workspaces).values({ id, type: 'local', branchName });
+  await db.insert(workspaces).values({ id, type: 'local', branchName, kind });
 }
 
 async function insertPr(
@@ -194,6 +195,31 @@ describe('BoardSyncService', () => {
       await service.syncProject(PROJECT_ID);
 
       expect(await stageOf(fixture.db, 'task-branch-fallback')).toBe('review');
+    });
+
+    // Regression: a task running on the project root (no worktree of its own)
+    // shares the repository's checkout branch with every other root task. The
+    // branch match is only meaningful for a branch the task *owns* — matching
+    // PRs against a shared checkout linked the auto-update task to the PR of
+    // whatever branch happened to be checked out (afk/prd-153-...), proving a
+    // stage from an unrelated PR with no way to unlink it.
+    it('never branch-matches PRs for a project-root workspace', async () => {
+      await insertWorkspace(fixture.db, 'ws-root', 'afk/prd-153-unrelated', 'project-root');
+      await insertTask(fixture.db, {
+        id: 'task-root',
+        linkedIssues: specLink('#258'),
+        workspaceId: 'ws-root',
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/205`,
+        headRefName: 'afk/prd-153-unrelated',
+        status: 'open',
+        description: null,
+      });
+
+      await service.syncProject(PROJECT_ID);
+
+      expect(await stageOf(fixture.db, 'task-root')).toBeNull();
     });
   });
 

@@ -1,6 +1,7 @@
 import { err, ok } from '@emdash/shared';
 import { match, P } from 'ts-pattern';
 import { providerRepositoryService } from '@main/core/repository/provider-repository-service';
+import { getTaskPrBranch } from '@main/core/workspaces/workspace-branch';
 import { log } from '@main/lib/logger';
 import { telemetryService } from '@main/lib/telemetry';
 import type {
@@ -165,20 +166,22 @@ export const pullRequestController = createRPCController({
       }
 
       const [wsRow] = await db
-        .select({ branchName: workspaces.branchName })
+        .select({ kind: workspaces.kind, branchName: workspaces.branchName })
         .from(workspaces)
         .where(eq(workspaces.id, taskRow.workspaceId))
         .limit(1);
 
-      if (!wsRow?.branchName) {
+      // tasks.workspaceId has no FK — it can point at a deleted workspace row.
+      const branchName = wsRow ? getTaskPrBranch(wsRow) : null;
+      if (!branchName) {
         return ok({ prs: [], branchName: null });
       }
 
       const prs = await prQueryService.getTaskPullRequests(
-        wsRow.branchName,
+        branchName,
         capability.data.repositoryUrl
       );
-      return ok({ prs, branchName: wsRow.branchName });
+      return ok({ prs, branchName });
     } catch (error) {
       log.error('Failed to get pull requests for task:', error);
       return err<PullRequestError>({

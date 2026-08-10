@@ -84,9 +84,69 @@ describe('findSpecMatchingPrs', () => {
     expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual(prs);
   });
 
+  // Regression: the dependabot PR in 64ix/ProtoRTS#30 merged with its release
+  // notes quoting `dorny/test-reporter#258` — the old predicate matched any
+  // `#258`, so a third-party issue reference inside the body proved `shipped`
+  // for the open Spec #258 of the PR's *own* repository. A repo-qualified
+  // reference names the repository it points at; only the PR's own repository
+  // (or the Spec's, when known) can be the target.
+  it('does not match a repo-qualified reference to a foreign repository', () => {
+    const merged = pr({
+      status: 'merged',
+      headRefName: 'dependabot/github_actions/github-actions-group',
+      description:
+        'Bumps the github-actions group with 3 updates.\nRelease notes: dorny/test-reporter#258.',
+    });
+    expect(
+      findSpecMatchingPrs([merged], { specIssueNumber: 258, specRepositoryUrl: SPEC_REPO })
+    ).toEqual([]);
+  });
+
+  it('does not match a foreign issue URL in a PR body', () => {
+    const merged = pr({
+      status: 'merged',
+      headRefName: 'dependabot/nuget/deps',
+      description: 'Backports https://github.com/upstream/app/issues/258 into acme/app.',
+    });
+    expect(
+      findSpecMatchingPrs([merged], { specIssueNumber: 258, specRepositoryUrl: SPEC_REPO })
+    ).toEqual([]);
+  });
+
+  it('still matches a full URL to the spec issue in the PR own repository', () => {
+    const prs = [
+      pr({
+        description: 'Closes https://github.com/acme/app/issues/258 — see the Spec for details.',
+      }),
+    ];
+    expect(
+      findSpecMatchingPrs(prs, { specIssueNumber: 258, specRepositoryUrl: SPEC_REPO })
+    ).toEqual(prs);
+  });
+
   it('matches a body that references the spec issue by its full URL', () => {
     const prs = [pr({ description: 'Spec: https://github.com/acme/app/issues/42' })];
     expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual(prs);
+  });
+
+  // The captured slug is normalized like the repository URLs it is compared
+  // against: a `.git`-suffixed reference pasted from a clone URL still names
+  // the same repository.
+  it('matches a .git-suffixed qualified reference to the PR own repository', () => {
+    const prs = [pr({ description: 'Part of acme/app.git#42.' })];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual(prs);
+  });
+
+  it('matches a .git-suffixed issue URL to the PR own repository', () => {
+    const prs = [pr({ description: 'Spec: https://github.com/acme/app.git/issues/42' })];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual(prs);
+  });
+
+  // GitHub does not auto-link a `#N` glued to a preceding word (`Fixes#42`),
+  // so the parser deliberately requires the `#` to start a token.
+  it('does not match a bare reference glued to a preceding word', () => {
+    const prs = [pr({ description: 'Fixes#42 without a space.' })];
+    expect(findSpecMatchingPrs(prs, { specIssueNumber: 42 })).toEqual([]);
   });
 
   it('does not match a longer issue number in a URL reference', () => {

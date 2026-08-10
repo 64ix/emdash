@@ -130,8 +130,12 @@ describe('getTasks', () => {
     return fixture.db.insert(projectRemotes).values({ projectId, remoteName: 'origin', remoteUrl });
   }
 
-  function insertWorkspace(id: string, branchName: string | null): Promise<unknown> {
-    return fixture.db.insert(workspaces).values({ id, type: 'local', branchName });
+  function insertWorkspace(
+    id: string,
+    branchName: string | null,
+    kind: 'worktree' | 'project-root' | null = 'worktree'
+  ): Promise<unknown> {
+    return fixture.db.insert(workspaces).values({ id, type: 'local', branchName, kind });
   }
 
   function insertTask(row: {
@@ -269,6 +273,33 @@ describe('getTasks', () => {
 
     expect(rows.find((r) => r.id === 'task-a')?.prs).toEqual([]);
     expect(rows.find((r) => r.id === 'task-b')?.prs).toEqual([]);
+  });
+
+  // Regression: a project-root task shares the repository's checkout branch
+  // with every other root task — the branch is not the task's own, so PRs on
+  // it must never surface as the task's PRs (the auto-update task was shown
+  // the PR of whatever branch happened to be checked out, with no way to
+  // unlink it).
+  it('never branch-matches PRs for a project-root workspace (no-projectId path)', async () => {
+    await insertProject('project-2');
+    await insertRemote('project-1', REPO_A);
+    await insertWorkspace('ws-root', 'afk/prd-153-unrelated', 'project-root');
+    await insertTask({
+      id: 'task-root',
+      projectId: 'project-1',
+      name: 'Task on project root',
+      workspaceId: 'ws-root',
+    });
+    await insertPr({
+      url: `${REPO_A}/pull/205`,
+      repositoryUrl: REPO_A,
+      headRefName: 'afk/prd-153-unrelated',
+      identifier: '#205',
+    });
+
+    const rows = await getTasks();
+
+    expect(rows.find((r) => r.id === 'task-root')?.prs).toEqual([]);
   });
 
   it('keeps the projectId path unchanged — prs stay empty and only that project’s tasks are returned', async () => {
