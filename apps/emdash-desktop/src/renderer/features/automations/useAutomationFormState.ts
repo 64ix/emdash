@@ -166,14 +166,16 @@ export function useAutomationFormState(
     workspaceConfig.isValid;
 
   function buildTaskConfig(): StoredAutomationTaskConfig | null {
-    // v3: repository-instance targets are stored WITHOUT the machine-local
-    // workspace id. A config synced to another machine must not carry this
-    // machine's workspace reference; the run resolves it against the mounted
-    // project's own repository workspace at execution time.
+    // v3: ONLY the repo-root target is stored without the machine-local
+    // workspace id — it means "the project's own repository workspace", which
+    // the run resolves against the mounted project at execution time. The
+    // `use-existing` preset also produces a `repository-instance` config, but
+    // its workspaceId points at a specific user-chosen workspace; stripping it
+    // there silently redirected the run to the project root, so it is kept.
     const wsConfig = workspaceConfig.resolvedConfig;
 
     const patchedConfig =
-      wsConfig.workspace.kind === 'repository-instance'
+      wsConfig.workspace.kind === 'repository-instance' && workspaceConfig.presetId === 'repo-root'
         ? { ...wsConfig, workspace: { kind: 'repository-instance' as const } }
         : wsConfig;
 

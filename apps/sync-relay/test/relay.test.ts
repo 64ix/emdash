@@ -227,6 +227,21 @@ describe('pairing', () => {
     expect(second.status).toBe(401);
   });
 
+  // Regression (TOCTOU): join() read the secret, checked used_at, THEN wrote
+  // used_at in a separate round trip, so two interleaved /v1/join calls could
+  // both pass the read-based check and each mint a token. consumeJoinSecret is
+  // now an atomic guarded UPDATE ... WHERE used_at IS NULL ... RETURNING; the
+  // in-memory harness cannot reproduce true timing interleaving, so drive the
+  // store guard directly: exactly one consume wins.
+  it('consumeJoinSecret is atomic single-use: only the first caller wins', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    const pending = await store.listPendingJoinSecrets(db, space.space_id);
+    const secretId = pending[0]!.secret_id;
+    expect(await store.consumeJoinSecret(db, secretId, T0)).toBe(true);
+    expect(await store.consumeJoinSecret(db, secretId, T0)).toBe(false);
+  });
+
   it('is TTL-bounded: joining after the 15-minute window is refused', async () => {
     const db = await makeDb();
     const space = await createSpace(db, undefined, T0);

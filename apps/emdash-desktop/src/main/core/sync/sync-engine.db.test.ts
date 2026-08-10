@@ -855,8 +855,12 @@ describe('SyncEngine', () => {
         )?.remote_url
       ).toBe('https://github.com/example/repo.git');
 
-      // A edits a remote, adds a third one, and runs several cycles: nothing
-      // more is ever pushed for project_remotes.
+      // A edits an existing remote and adds a third one, then runs several
+      // cycles. initial-only is per-row, not per-project: an EDIT to an
+      // already-carried remote is never re-pushed (no continuous churn / no
+      // delete-sweep war), but a NEW remote that first appears after the
+      // project's initial sync is still carried exactly once — project_remotes
+      // is populated on task provision, not necessarily at project creation.
       await fixtureA.db
         .update(projectRemotes)
         .set({ remoteUrl: 'https://github.com/example/repo-new.git' })
@@ -872,11 +876,22 @@ describe('SyncEngine', () => {
       }
 
       const relayRemotes = relay.allRows().filter((r) => r.table === 'project_remotes');
-      expect(relayRemotes).toHaveLength(2);
+      // origin + upstream (initial) + fork (added later, carried once).
+      expect(relayRemotes).toHaveLength(3);
       const originBody = JSON.parse(
         relayRemotes.find((r) => r.pk === `["${PROJECT_A}","origin"]`)!.row.body ?? '{}'
       ) as { columns: Record<string, unknown> };
+      // The edit to origin is NOT re-pushed: its carried body stays original.
       expect(originBody.columns.remote_url).toBe('https://github.com/example/repo.git');
+      // The later-added fork was carried, so B receives it.
+      expect(
+        rawGet(
+          fixtureB,
+          'SELECT remote_url FROM project_remotes WHERE project_id = ? AND remote_name = ?',
+          PROJECT_A,
+          'fork'
+        )?.remote_url
+      ).toBe('https://github.com/example/fork.git');
 
       // B's own remote edits are never pushed either.
       await fixtureB.db
@@ -884,7 +899,7 @@ describe('SyncEngine', () => {
         .set({ remoteUrl: 'https://github.com/example/b-local.git' })
         .where(eq(projectRemotes.remoteName, 'origin'));
       expectOk(await engineB.syncNow());
-      expect(relay.allRows().filter((r) => r.table === 'project_remotes')).toHaveLength(2);
+      expect(relay.allRows().filter((r) => r.table === 'project_remotes')).toHaveLength(3);
       expect(
         rawGet(
           fixtureB,
@@ -893,6 +908,49 @@ describe('SyncEngine', () => {
           'origin'
         )?.remote_url
       ).toBe('https://github.com/example/b-local.git');
+    });
+
+    it('carries a remote added after the project first synced with none', async () => {
+      // Regression: project_remotes is populated on task provision, so a
+      // project can get its first sync push before any remote exists. Gating
+      // the carry on the project's own first push left the auto-attach hint
+      // permanently empty; the carry is now gated per remote row.
+      fixtureA = await openDb();
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineA = makeEngine(fixtureA, relay, 'device-a');
+      const engineB = makeEngine(fixtureB, relay, 'device-b');
+
+      await seedProject(fixtureA, PROJECT_A);
+      // First sync with zero remotes (before any task is provisioned).
+      expectOk(await engineA.syncNow());
+      expect(relay.allRows().filter((r) => r.table === 'project_remotes')).toHaveLength(0);
+
+      // A remote appears later (task provision / remotes-model change).
+      await fixtureA.db.insert(projectRemotes).values({
+        projectId: PROJECT_A,
+        remoteName: 'origin',
+        remoteUrl: 'https://github.com/example/repo.git',
+      });
+      expectOk(await engineA.syncNow());
+      expect(relay.allRows().filter((r) => r.table === 'project_remotes')).toHaveLength(1);
+
+      // B receives the late remote as its auto-attach hint.
+      expectOk(await engineB.syncNow());
+      expect(
+        rawGet(
+          fixtureB,
+          'SELECT remote_url FROM project_remotes WHERE project_id = ? AND remote_name = ?',
+          PROJECT_A,
+          'origin'
+        )?.remote_url
+      ).toBe('https://github.com/example/repo.git');
+
+      // And it is carried exactly once — no churn on subsequent cycles.
+      for (let i = 0; i < 3; i += 1) {
+        expectOk(await engineA.syncNow());
+      }
+      expect(relay.allRows().filter((r) => r.table === 'project_remotes')).toHaveLength(1);
     });
   });
 

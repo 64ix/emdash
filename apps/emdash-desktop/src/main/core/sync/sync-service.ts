@@ -170,7 +170,12 @@ export class SyncService {
     // Launch sync: run after the window is up so the renderer receives the
     // first status snapshot (spec #130: sync at launch).
     void this.syncNow();
-    this.loopPromise = this.runLoop();
+    // Last-resort guard: runLoop is designed never to reject, but if it ever
+    // does the rejection would be unhandled and the loop silently dead. Log it
+    // loudly rather than lose background sync without a trace.
+    this.loopPromise = this.runLoop().catch((error) => {
+      log.error('[sync] long-poll loop crashed', error);
+    });
     if (this.deps.connectivity !== undefined) {
       this.unsubscribes.push(
         this.deps.connectivity.onOnline(() => {
@@ -321,7 +326,16 @@ export class SyncService {
           await this.sleep(this.pollIdleDelayMs);
         }
       } catch (error) {
-        await this.markPollFailure(error);
+        // The failure path must never itself throw out of the loop: buildEngine
+        // (async) and pendingCount (sqlite) inside markPollFailure can reject
+        // or throw, and runLoop is fire-and-forget (start() does not await or
+        // .catch it), so an escaping error would silently kill background sync
+        // until relaunch. Swallow secondary failures and always back off.
+        try {
+          await this.markPollFailure(error);
+        } catch (secondary) {
+          log.error('[sync] failure handler threw', secondary);
+        }
         await this.sleep(this.retryDelayMs);
         this.retryDelayMs = Math.min(this.retryDelayMs * 2, this.retryMaxMs);
       }

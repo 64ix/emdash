@@ -210,8 +210,6 @@ export class SyncEngine {
   async push(): Promise<Result<SyncSummary, SyncError>> {
     const pending: PendingUpsert[] = [];
     try {
-      const firstPushProjectPks = new Set<string>();
-
       for (const statements of this.statements) {
         const config = statements.config;
         const watermark = this.readWatermark(config);
@@ -233,34 +231,33 @@ export class SyncEngine {
             syncTs: rowSyncTs,
             clientVersion: state?.serverVersion ?? 0,
           });
-          if (config.table === 'projects' && state === null) {
-            firstPushProjectPks.add(pk);
-          }
         }
       }
 
-      // initial-only: project_remotes are carried once, with the project's
-      // creation/attach payload (the first push of that project ever).
-      if (firstPushProjectPks.size > 0) {
-        const remotesConfig = SYNC_TABLES_BY_NAME.get('project_remotes');
-        if (remotesConfig !== undefined) {
-          const placeholders = Array.from(firstPushProjectPks, () => '?').join(', ');
-          const rows = this.sqlite
-            .prepare(
-              `SELECT ${this.selectColumns(remotesConfig)} FROM project_remotes WHERE project_id IN (${placeholders})`
-            )
-            .all(...firstPushProjectPks) as Array<Record<string, unknown>>;
-          for (const row of rows) {
-            const pk = this.rowPk(remotesConfig, row);
-            const columns = this.buildColumns(remotesConfig, row);
-            pending.push({
-              config: remotesConfig,
-              pk,
-              body: JSON.stringify({ deviceId: this.deviceId, columns }),
-              syncTs: Number(row.sync_ts),
-              clientVersion: 0,
-            });
-          }
+      // initial-only: each project_remotes row is carried exactly once — the
+      // first time THIS engine sees it (its own row-state is still null),
+      // regardless of whether its parent project already synced. Gating on the
+      // parent project's first push missed remotes written after that push:
+      // project_remotes is populated on task provision / remotes-model change,
+      // not necessarily at project creation, and the parent's row-state never
+      // reverts to null. Once a remote is pushed and acked its row-state is
+      // recorded, so it is never re-selected (no continuous churn).
+      const remotesConfig = SYNC_TABLES_BY_NAME.get('project_remotes');
+      if (remotesConfig !== undefined) {
+        const rows = this.sqlite
+          .prepare(`SELECT ${this.selectColumns(remotesConfig)} FROM project_remotes`)
+          .all() as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          const pk = this.rowPk(remotesConfig, row);
+          if (getRowState(this.sqlite, remotesConfig.table, pk) !== null) continue;
+          const columns = this.buildColumns(remotesConfig, row);
+          pending.push({
+            config: remotesConfig,
+            pk,
+            body: JSON.stringify({ deviceId: this.deviceId, columns }),
+            syncTs: Number(row.sync_ts),
+            clientVersion: 0,
+          });
         }
       }
 

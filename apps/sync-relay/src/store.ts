@@ -171,11 +171,26 @@ export async function listPendingJoinSecrets(db: SqlDb, spaceId: string): Promis
   return result.results;
 }
 
-export function consumeJoinSecret(db: SqlDb, secretId: string, now: number): Promise<SqlResult> {
-  return db
-    .prepare('UPDATE join_secrets SET used_at = ?1 WHERE secret_id = ?2')
+/**
+ * Marks a join secret used, atomically. The `used_at IS NULL AND expires_at >
+ * now AND attempts_left > 0` guard is the single-use gate: two interleaved
+ * /v1/join round trips can both pass the earlier read-based staleness check,
+ * but only the first UPDATE matches (and RETURNING yields a row); the loser
+ * gets no row back and must not mint a token. Returns whether this call is the
+ * one that consumed the secret.
+ */
+export async function consumeJoinSecret(
+  db: SqlDb,
+  secretId: string,
+  now: number
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      'UPDATE join_secrets SET used_at = ?1 WHERE secret_id = ?2 AND used_at IS NULL AND expires_at > ?1 AND attempts_left > 0 RETURNING secret_id'
+    )
     .bind(now, secretId)
     .run();
+  return (result.results?.length ?? 0) > 0;
 }
 
 export async function decrementJoinSecretAttempts(db: SqlDb, secretId: string): Promise<number> {

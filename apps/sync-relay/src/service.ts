@@ -144,7 +144,13 @@ export async function join(db: SqlDb, input: JoinRequest, now: number): Promise<
     throw new ApiError(401, 'invalid join secret');
   }
 
-  await store.consumeJoinSecret(db, matched.secret_id, now);
+  // Single-use is enforced by the atomic guarded UPDATE, not the read above:
+  // if a concurrent /v1/join already consumed this secret, no row is returned
+  // and we must not mint a second device token from it.
+  const consumed = await store.consumeJoinSecret(db, matched.secret_id, now);
+  if (!consumed) {
+    throw new ApiError(401, 'invalid join secret');
+  }
 
   const deviceId = makeDeviceId();
   const token = await makeToken();
