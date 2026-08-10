@@ -87,5 +87,13 @@ CREATE TABLE IF NOT EXISTS version_counters (
 `;
 
 export async function ensureSchema(db: SqlDb): Promise<void> {
-  await db.exec(SCHEMA_SQL);
+  // D1's `exec()` rejects multi-line SQL ("incomplete input", workers-sdk
+  // #9133) and multi-statement strings, unlike the node:sqlite test harness —
+  // split on `;` and strip newlines so each statement runs alone on one line.
+  for (const statement of SCHEMA_SQL.split(';')) {
+    const sql = statement.replace(/\s+/g, ' ').trim();
+    if (sql.length > 0) {
+      await db.exec(sql);
+    }
+  }
 }
