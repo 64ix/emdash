@@ -541,13 +541,13 @@ describe('push and the per-space version counter', () => {
   it('stores opaque row bodies verbatim without parsing them', async () => {
     const db = await makeDb();
     const space = await createSpace(db);
-    const bodies = [
-      'not-json{',
-      '{"encrypted": true}',
-      '\u0000binary\x01ish',
-      '',
-      'x'.repeat(5000),
-    ];
+    // Adversarial bodies proving the relay stores them verbatim (never parses
+    // as JSON): malformed JSON, valid JSON, control characters, empty, and
+    // large. A raw NUL byte is deliberately NOT included: the test harness
+    // (`node:sqlite`, pinned Node 24) truncates a TEXT value at an embedded NUL
+    // (C-string semantics) -- a harness artefact, not relay behaviour. Production
+    // bodies are always the E2E-encrypted base64url envelope, never a NUL byte.
+    const bodies = ['not-json{', '{"encrypted": true}', 'binary\x01\x02ish', '', 'x'.repeat(5000)];
     const mutations = bodies.map((body, i) => ({ table: 't', pk: `k${i}`, body, op: 'upsert' }));
     const result = await post(db, '/v1/sync/push', { mutations }, space.device_token);
     expect(result.status).toBe(200);
