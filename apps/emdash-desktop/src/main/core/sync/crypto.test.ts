@@ -299,6 +299,27 @@ describe('two-half pairing secret format', () => {
     expect(parseSpaceSecret(flip(secret.length - 1))).toBeNull(); // inside the checksum
   });
 
+  it('rejects a secret with two adjacent characters transposed (checksum catches swaps)', () => {
+    const secret = composeSpaceSecret('AB12-34_CD56-78_EF90-1', mintJoinHalf(), mintK0());
+    expect(parseSpaceSecret(secret)).not.toBeNull();
+
+    // Swap the first adjacent pair of DIFFERENT data characters inside the k0
+    // segment (past the prefix, space id, and join half). A transposition
+    // leaves the character multiset identical, so only a position-sensitive
+    // checksum — not a length or alphabet check — can catch it.
+    let swapped: string | null = null;
+    for (let i = 66; i < secret.length - 9; i += 1) {
+      const a = secret[i]!;
+      const b = secret[i + 1]!;
+      if (a !== b && a !== '_' && b !== '_') {
+        swapped = secret.slice(0, i) + b + a + secret.slice(i + 2);
+        break;
+      }
+    }
+    expect(swapped).not.toBeNull();
+    expect(parseSpaceSecret(swapped as string)).toBeNull();
+  });
+
   it('tolerates paste whitespace', () => {
     const secret = composeSpaceSecret('AB12-34_CD56-78_EF90-1', mintJoinHalf(), mintK0());
     const parsed = parseSpaceSecret(`  ${secret}\n`);
