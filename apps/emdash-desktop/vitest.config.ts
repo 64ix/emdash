@@ -143,7 +143,7 @@ export default defineConfig({
             'src/renderer/tests/browser/**',
             'src/main/db/tests/migrations/**',
             'src/main/db/legacy-port/**/*.test.ts',
-            'src/main/core/**/*.db.test.ts',
+            'src/main/**/*.db.test.ts',
             // FORK_CI (see .github/workflows/fork-ci.yml): GitHub runners cannot
             // spawn a real PTY (node-pty posix_spawnp fails), so skip PTY
             // integration tests there. They still run locally.
@@ -159,7 +159,7 @@ export default defineConfig({
         test: {
           name: 'main-db',
           environment: 'node',
-          include: ['src/main/core/**/*.db.test.ts', 'src/main/db/legacy-port/**/*.test.ts'],
+          include: ['src/main/**/*.db.test.ts', 'src/main/db/legacy-port/**/*.test.ts'],
         },
       },
       {
