@@ -136,7 +136,7 @@ export async function handle(request: Request, db: SqlDb, now: number): Promise<
     }
     if (request.method === 'POST' && pathname === '/v1/sync/pull') {
       const body = (await readJson(request)) as PullRequest;
-      return json(await pull(db, auth, body));
+      return json(await pull(db, auth, body, now));
     }
     if (request.method === 'POST' && pathname === '/v1/sync/push') {
       const body = (await readJson(request)) as PushRequest;
@@ -144,7 +144,7 @@ export async function handle(request: Request, db: SqlDb, now: number): Promise<
     }
     if (request.method === 'POST' && pathname === '/v1/sync/poll') {
       const body = (await readJson(request)) as PollRequest;
-      return json(await poll(db, auth, body));
+      return json(await poll(db, auth, body, now));
     }
 
     return json({ error: 'not_found' } satisfies ErrorResult, 404);

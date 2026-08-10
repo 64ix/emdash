@@ -52,6 +52,13 @@ device), 500 (internal).
 - **Pull cursor**: `cursor` is a version; pull returns rows with `version >
   cursor` ordered ascending, and echoes the last returned version as the next
   cursor. Tombstones are rows with `deleted: true` / `op: 'delete'`.
+- **Tombstone GC**: a pull that returns rows records the caller's token cursor
+  (`pull_cursors`, only ever advanced) and then hard-deletes tombstones whose
+  version every non-revoked device has pulled past — a device that never
+  pulled counts as behind everything, and a revoked device never blocks
+  collection. A 90-day safety cap bounds how long a device that simply
+  stopped syncing can hold a tombstone; if that device returns later, its
+  local row remains and a fresh edit resurrects the row at a new version.
 - **Long-poll**: `POST /v1/sync/poll` holds the request (re-checking D1 every
   second) until patches for `cursor` exist or `timeout_ms` elapses (clamped to
   25 s). Clients reconnect with backoff.
@@ -94,6 +101,8 @@ Plaintext metadata only — bodies are opaque strings, never read:
 - `join_secrets(secret_id, space_id, sha256, created_at, expires_at, attempts_left, used_at)`
 - `sync_rows(space_id, table_name, pk, body, version, client_version, deleted, updated_at)`
   with an index on `(space_id, version)`
+- `pull_cursors(space_id, token_id, cursor, updated_at)` — tombstone GC
+  bookkeeping (see above)
 - `version_counters(space_id, version)`
 
 The schema bootstraps idempotently at worker startup (`CREATE TABLE IF NOT

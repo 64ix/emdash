@@ -666,6 +666,186 @@ describe('pull cursor semantics', () => {
   });
 });
 
+describe('tombstone GC', () => {
+  /** Pushes an upsert then a delete for the same row; returns the tombstone version. */
+  async function pushUpsertAndDelete(
+    db: SqlDb,
+    token: string
+  ): Promise<{ tombstoneVersion: number }> {
+    const upsert = await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'a', body: 'A', op: 'upsert' }] },
+      token
+    );
+    expect(upsert.status).toBe(200);
+    const deleted = await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'a', op: 'delete' }] },
+      token
+    );
+    expect(deleted.status).toBe(200);
+    return {
+      tombstoneVersion: (deleted.body as { results: Array<{ version: number }> }).results[0]
+        .version,
+    };
+  }
+
+  async function tombstoneRows(db: SqlDb, spaceId: string): Promise<number> {
+    const result = await db
+      .prepare('SELECT COUNT(*) AS count FROM sync_rows WHERE space_id = ?1 AND deleted = 1')
+      .bind(spaceId)
+      .first<{ count: number }>();
+    return result?.count ?? 0;
+  }
+
+  it('keeps a tombstone until every active device has pulled past it', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    const { tombstoneVersion } = await pushUpsertAndDelete(db, space.device_token);
+
+    // A second device joins and pulls the tombstone, but the first device
+    // has never pulled: it counts as behind everything, so the tombstone is
+    // retained even though the pulling device has seen it.
+    const joined = await joinWith(db, space.secret, space.space_id);
+    expect(joined.status).toBe(200);
+    const tokenB = (joined.body as JoinResult).device_token;
+    const pulledB = await post(db, '/v1/sync/pull', { cursor: 0 }, tokenB);
+    expect((pulledB.body as PullResult).cursor).toBe(tombstoneVersion);
+    expect(await tombstoneRows(db, space.space_id)).toBe(1);
+
+    // The first device finally pulls past the tombstone: now every active
+    // device has seen it and the same pull collects it.
+    const pulledA = await post(db, '/v1/sync/pull', { cursor: 0 }, space.device_token);
+    expect((pulledA.body as PullResult).cursor).toBe(tombstoneVersion);
+    expect(await tombstoneRows(db, space.space_id)).toBe(0);
+
+    // A late-joining device (client-minted secret) sees no trace of the row:
+    // the tombstone is gone and no upsert remains.
+    const credential = base32Encode(randomBytes(16));
+    const minted = await post(
+      db,
+      '/v1/devices/join-secret',
+      { join_hash: await sha256Hex(credential) },
+      space.device_token
+    );
+    expect(minted.status).toBe(200);
+    const later = await joinWith(db, credential, space.space_id);
+    expect(later.status).toBe(200);
+    const fresh = await post(
+      db,
+      '/v1/sync/pull',
+      { cursor: 0 },
+      (later.body as JoinResult).device_token
+    );
+    expect((fresh.body as PullResult).patches).toEqual([]);
+  });
+
+  it('a revoked device never blocks collection', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    const { tombstoneVersion } = await pushUpsertAndDelete(db, space.device_token);
+
+    // The first device is revoked before ever pulling: its missing cursor
+    // must not count as "behind" anymore.
+    const revoked = await post(
+      db,
+      '/v1/devices/revoke',
+      { device_id: space.device_id },
+      space.device_token
+    );
+    expect(revoked.status).toBe(200);
+
+    // The remaining device's first pull past the tombstone collects it.
+    const joined = await joinWith(db, space.secret, space.space_id);
+    const tokenB = (joined.body as JoinResult).device_token;
+    const pulled = await post(db, '/v1/sync/pull', { cursor: 0 }, tokenB);
+    expect((pulled.body as PullResult).cursor).toBe(tombstoneVersion);
+    expect(await tombstoneRows(db, space.space_id)).toBe(0);
+  });
+
+  it('the 90-day safety cap collects an old tombstone even with a device behind it', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db, 'first', T0);
+    await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'a', body: 'A', op: 'upsert' }] },
+      space.device_token,
+      T0
+    );
+
+    // B joins and pulls up to the upsert only (cursor 1); A then deletes the
+    // row (tombstone v2). B stays at cursor 1 forever after.
+    const joined = await joinWith(db, space.secret, space.space_id, T0);
+    const tokenB = (joined.body as JoinResult).device_token;
+    const initial = await post(db, '/v1/sync/pull', { cursor: 0 }, tokenB, T0);
+    expect((initial.body as PullResult).cursor).toBe(1);
+    const { tombstoneVersion } = await pushUpsertAndDelete(db, space.device_token);
+
+    // A pulls the tombstone right away: B's cursor (1) is behind it, so the
+    // cursor rule alone retains it (nothing is old enough for the cap yet).
+    const soon = await post(db, '/v1/sync/pull', { cursor: 0 }, space.device_token, T0);
+    expect((soon.body as PullResult).cursor).toBe(tombstoneVersion);
+    expect(await tombstoneRows(db, space.space_id)).toBe(1);
+
+    // 90 days + 1s later A pushes and pulls a fresh row: the tombstone is
+    // older than the cap and is collected even though B never caught up.
+    const later = T0 + 90 * 24 * 60 * 60 * 1_000 + 1_000;
+    await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'x', body: 'X', op: 'upsert' }] },
+      space.device_token,
+      later
+    );
+    const pulled = await post(db, '/v1/sync/pull', { cursor: 0 }, space.device_token, later);
+    expect((pulled.body as PullResult).patches.map((p) => p.op)).toEqual(['delete', 'upsert']);
+    expect(await tombstoneRows(db, space.space_id)).toBe(0);
+  });
+
+  it('a collected tombstone does not break resurrection at a fresh version', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    const { tombstoneVersion } = await pushUpsertAndDelete(db, space.device_token);
+    await post(db, '/v1/sync/pull', { cursor: 0 }, space.device_token);
+
+    // The tombstone is collected; the row is pushed again and gets a fresh
+    // version above the old tombstone's.
+    const again = await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'a', body: 'A2', op: 'upsert' }] },
+      space.device_token
+    );
+    const version = (again.body as { results: Array<{ version: number }> }).results[0].version;
+    expect(version).toBeGreaterThan(tombstoneVersion);
+
+    const pulled = await post(
+      db,
+      '/v1/sync/pull',
+      { cursor: tombstoneVersion },
+      space.device_token
+    );
+    expect(pulled.body).toEqual({
+      cursor: version,
+      patches: [
+        {
+          space: space.space_id,
+          table: 't',
+          pk: 'a',
+          version,
+          client_version: 0,
+          op: 'upsert',
+          deleted: false,
+          body: 'A2',
+        },
+      ],
+    });
+  });
+});
+
 describe('transactional stamping', () => {
   it('rolls back the counter increment when the batch fails', async () => {
     const db = await makeDb();

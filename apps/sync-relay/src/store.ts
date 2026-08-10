@@ -261,3 +261,79 @@ export async function pullRows(
     .all<SyncRow>();
   return result.results;
 }
+
+// ---------------------------------------------------------------------------
+// Pull cursors and tombstone GC
+// ---------------------------------------------------------------------------
+
+/**
+ * Records the version a device token has pulled up to. Only ever advances:
+ * an older cursor (a stale retry of a previous pull) never rewinds the
+ * stored value. Pull requests that return nothing leave the cursor alone.
+ */
+export function recordPullCursor(
+  db: SqlDb,
+  spaceId: string,
+  tokenId: string,
+  cursor: number,
+  now: number
+): Promise<SqlResult> {
+  return db
+    .prepare(
+      `INSERT INTO pull_cursors (space_id, token_id, cursor, updated_at) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (space_id, token_id) DO UPDATE SET
+         cursor = MAX(cursor, excluded.cursor),
+         updated_at = excluded.updated_at`
+    )
+    .bind(spaceId, tokenId, cursor, now)
+    .run();
+}
+
+/**
+ * The smallest pull cursor across the space's non-revoked device tokens. A
+ * token that has never pulled counts as `0` (it is behind everything), so a
+ * space where any active device has no cursor row yields `0` and the age cap
+ * alone decides. Revoked tokens are excluded: they will never pull again, so
+ * their stale cursors must not block GC. `null` only when the space has no
+ * non-revoked tokens at all.
+ */
+export async function minActivePullCursor(db: SqlDb, spaceId: string): Promise<number | null> {
+  const row = await db
+    .prepare(
+      `SELECT MIN(COALESCE(c.cursor, 0)) AS min_cursor
+       FROM tokens t
+       LEFT JOIN pull_cursors c ON c.space_id = t.space_id AND c.token_id = t.id
+       WHERE t.space_id = ?1 AND t.revoked_at IS NULL`
+    )
+    .bind(spaceId)
+    .first<{ min_cursor: number | null }>();
+  return row?.min_cursor ?? null;
+}
+
+/**
+ * Hard-deletes tombstone rows (`deleted = 1`) that no active device will ever
+ * pull again: their version is at or below the smallest active pull cursor
+ * (a device that never pulled counts as 0 and blocks collection), or they are
+ * older than the safety cap (a device that has not pulled in 90 days must not
+ * block collection forever; if it returns, its local row remains and a later
+ * edit simply resurrects the row at a fresh version).
+ */
+export async function gcTombstones(
+  db: SqlDb,
+  spaceId: string,
+  now: number,
+  capMs: number
+): Promise<SqlResult> {
+  return db
+    .prepare(
+      `DELETE FROM sync_rows
+       WHERE space_id = ?1
+         AND deleted = 1
+         AND (
+           version <= COALESCE((SELECT MIN(COALESCE(c.cursor, 0)) FROM tokens t LEFT JOIN pull_cursors c ON c.space_id = t.space_id AND c.token_id = t.id WHERE t.space_id = ?1 AND t.revoked_at IS NULL), 0)
+           OR updated_at <= ?2
+         )`
+    )
+    .bind(spaceId, now - capMs)
+    .run();
+}

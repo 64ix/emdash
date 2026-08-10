@@ -17,7 +17,12 @@
  *   per-space monotonic version stamped transactionally at write time;
  *   `client_version` is the client's last-known version, stored verbatim so
  *   decrypting clients can bind it into the body's AEAD AAD. Tombstones are
- *   rows with `deleted = 1`.
+ *   rows with `deleted = 1`; they are garbage-collected once every
+ *   non-revoked device's pull cursor has passed their version (90-day safety
+ *   cap, see `service.gcTombstones`).
+ * - `pull_cursors`: the last version each device token has pulled, used for
+ *   tombstone GC. Revoked tokens are excluded (they will never pull again and
+ *   must not block collection).
  * - `version_counters`: the per-space monotonic counter, incremented with
  *   `version = version + 1 RETURNING version` in the same transaction as the
  *   row write (see `store.stampAndWriteRow`). No client timestamps, no bare
@@ -66,6 +71,14 @@ CREATE TABLE IF NOT EXISTS sync_rows (
   PRIMARY KEY (space_id, table_name, pk)
 );
 CREATE INDEX IF NOT EXISTS idx_sync_rows_space_version ON sync_rows(space_id, version);
+
+CREATE TABLE IF NOT EXISTS pull_cursors (
+  space_id TEXT NOT NULL,
+  token_id TEXT NOT NULL,
+  cursor INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (space_id, token_id)
+);
 
 CREATE TABLE IF NOT EXISTS version_counters (
   space_id TEXT PRIMARY KEY,

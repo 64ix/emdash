@@ -44,6 +44,14 @@ export const PULL_LIMIT = 1000;
 export const POLL_MAX_TIMEOUT_MS = 25_000;
 /** Poll interval between D1 re-checks while holding a long-poll request. */
 const POLL_INTERVAL_MS = 1_000;
+/**
+ * Tombstone GC safety cap: a tombstone older than this is hard-deleted even
+ * if a non-revoked device's pull cursor has not passed it (a device that has
+ * not synced in 90 days must not block collection forever; if it returns,
+ * its local row remains and a later edit resurrects the row at a fresh
+ * version).
+ */
+export const TOMBSTONE_GC_CAP_MS = 90 * 24 * 60 * 60 * 1_000;
 
 export class ApiError extends Error {
   constructor(
@@ -242,7 +250,12 @@ function patchOf(row: store.SyncRow): PullResult['patches'][number] {
   };
 }
 
-export async function pull(db: SqlDb, auth: AuthContext, input: PullRequest): Promise<PullResult> {
+export async function pull(
+  db: SqlDb,
+  auth: AuthContext,
+  input: PullRequest,
+  now: number
+): Promise<PullResult> {
   const cursor = readCursor(input);
   const limit = input.limit === undefined ? PULL_LIMIT : input.limit;
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > PULL_LIMIT) {
@@ -251,6 +264,16 @@ export async function pull(db: SqlDb, auth: AuthContext, input: PullRequest): Pr
   const rows = await store.pullRows(db, auth.spaceId, cursor, limit);
   const patches = rows.map(patchOf);
   const nextCursor = patches.length > 0 ? patches[patches.length - 1].version : cursor;
+  if (patches.length > 0) {
+    // Advance the device's pull cursor so tombstone GC knows what every
+    // active device has seen. Only written when rows were returned (an
+    // empty pull changes nothing); `recordPullCursor` never rewinds.
+    await store.recordPullCursor(db, auth.spaceId, auth.tokenId, nextCursor, now);
+    // Opportunistic tombstone GC (see TOMBSTONE_GC_CAP_MS): runs on the
+    // same traffic that makes rows visible, so a space with no activity
+    // needs no collection.
+    await store.gcTombstones(db, auth.spaceId, now, TOMBSTONE_GC_CAP_MS);
+  }
   return { cursor: nextCursor, patches };
 }
 
@@ -322,7 +345,12 @@ export async function push(
   return { results };
 }
 
-export async function poll(db: SqlDb, auth: AuthContext, input: PollRequest): Promise<PullResult> {
+export async function poll(
+  db: SqlDb,
+  auth: AuthContext,
+  input: PollRequest,
+  now: number
+): Promise<PullResult> {
   const cursor = readCursor(input);
   const timeoutMs = input.timeout_ms === undefined ? 20_000 : input.timeout_ms;
   if (typeof timeoutMs !== 'number' || Number.isNaN(timeoutMs)) {
@@ -334,7 +362,7 @@ export async function poll(db: SqlDb, auth: AuthContext, input: PollRequest): Pr
   // Long-poll: hold the request, re-checking D1 on an interval, until either
   // patches arrive or the timeout elapses. Clients reconnect with backoff.
   for (;;) {
-    const result = await pull(db, auth, { cursor, limit: PULL_LIMIT });
+    const result = await pull(db, auth, { cursor, limit: PULL_LIMIT }, now);
     const elapsed = Date.now() - start;
     if (result.patches.length > 0 || elapsed >= timeout) {
       return result;
