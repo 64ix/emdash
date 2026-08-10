@@ -202,7 +202,17 @@ export class HttpRelayAuthApi implements RelayAuthApi {
           message,
         });
       case 404:
-        return err({ type: 'device_not_found', message });
+        // The relay 404s with `device not found in this space` only when a
+        // token revokes a device of a *different* space. A bare 404 (unknown
+        // route, wrong base URL, or a web page that is not the relay — e.g.
+        // an unreachable/unconfigured worker behind a catch-all site) must
+        // not masquerade as a removed device: surface it as a relay error so
+        // the UI points at the relay configuration instead of telling the
+        // user their device was deleted.
+        if (message === 'device not found in this space') {
+          return err({ type: 'device_not_found', message });
+        }
+        return err({ type: 'relay_error', status: response.status, message });
       default:
         return err({ type: 'relay_error', status: response.status, message });
     }

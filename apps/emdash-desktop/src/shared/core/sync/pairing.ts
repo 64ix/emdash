@@ -102,6 +102,9 @@ export function userFacingPairingMessage(code: PairingErrorCode, status?: number
     case 'persistence_failed':
       return 'Could not save the device credentials securely on this machine.';
     case 'relay_error':
+      if (status === 404) {
+        return 'The sync relay returned a 404 (not found). Check the relay URL in Settings — it may not point at a deployed relay, or the relay has no sync space for this machine yet.';
+      }
       return `The sync relay returned an error (HTTP ${status ?? 'unknown'}). Try again in a moment.`;
     case 'network_error':
       return 'Could not reach the sync relay. Check your connection and try again.';
