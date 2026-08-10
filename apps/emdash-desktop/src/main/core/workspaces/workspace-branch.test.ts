@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceConfig } from '@shared/core/workspaces/workspace-config';
-import { getProvisionedWorkspaceBranch } from './workspace-branch';
+import { getProvisionedWorkspaceBranch, getTaskPrBranch } from './workspace-branch';
 
 const createBranchConfig: WorkspaceConfig = {
   version: '2',
@@ -67,5 +67,36 @@ describe('workspace branch metadata', () => {
         config: null,
       })
     ).toBe('legacy/task-branch');
+  });
+});
+
+describe('getTaskPrBranch', () => {
+  it('returns the persisted branch for a worktree workspace', () => {
+    expect(
+      getTaskPrBranch({ kind: 'worktree', branchName: 'task/own-branch', config: null })
+    ).toBe('task/own-branch');
+  });
+
+  // Deliberate: the config-derived branch is a provisioning intent, not PR
+  // evidence — before the first bootstrap backfills branchName, a worktree
+  // task matches no PRs (see the doc comment on getTaskPrBranch).
+  it('does not derive a branch from config before provisioning backfills branchName', () => {
+    expect(
+      getTaskPrBranch({ kind: 'worktree', branchName: null, config: createBranchConfig })
+    ).toBeNull();
+  });
+
+  it('never grants a branch to project-root, path or byoi workspaces', () => {
+    for (const kind of ['project-root', 'path', 'byoi'] as const) {
+      expect(
+        getTaskPrBranch({ kind, branchName: 'afk/prd-153-unrelated', config: createBranchConfig })
+      ).toBeNull();
+    }
+  });
+
+  it('keeps matching legacy null-kind rows by their persisted branch', () => {
+    expect(getTaskPrBranch({ kind: null, branchName: 'legacy/task-branch', config: null })).toBe(
+      'legacy/task-branch'
+    );
   });
 });

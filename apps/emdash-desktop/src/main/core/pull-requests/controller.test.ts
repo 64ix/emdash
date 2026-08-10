@@ -401,6 +401,20 @@ describe('pullRequestController', () => {
     expect(mockPrQueryService.getTaskPullRequests).not.toHaveBeenCalled();
   });
 
+  // tasks.workspaceId has no FK: a task can point at a deleted workspace row.
+  // The lookup must degrade to "no PRs", not throw on the missing row.
+  it('returns no task pull requests when the workspace row is missing', async () => {
+    mockProviderRepositoryUrl('https://github.com/acme/repo');
+    queueDbSelectResult([{ workspaceId: 'workspace-1' }]);
+    queueDbSelectResult([]);
+
+    await expect(
+      pullRequestController.getPullRequestsForTask('project-1', 'task-1')
+    ).resolves.toEqual(ok({ prs: [], branchName: null }));
+
+    expect(mockPrQueryService.getTaskPullRequests).not.toHaveBeenCalled();
+  });
+
   it('passes the project GitHub account context to pull request creation and follow-up sync', async () => {
     mockProjectGithubContext();
     mockPrSyncEngine.createPullRequest.mockResolvedValue(

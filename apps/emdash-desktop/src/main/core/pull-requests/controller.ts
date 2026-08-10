@@ -171,7 +171,8 @@ export const pullRequestController = createRPCController({
         .where(eq(workspaces.id, taskRow.workspaceId))
         .limit(1);
 
-      const branchName = getTaskPrBranch(wsRow);
+      // tasks.workspaceId has no FK — it can point at a deleted workspace row.
+      const branchName = wsRow ? getTaskPrBranch(wsRow) : null;
       if (!branchName) {
         return ok({ prs: [], branchName: null });
       }

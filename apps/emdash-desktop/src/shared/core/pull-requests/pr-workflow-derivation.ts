@@ -60,6 +60,13 @@ const REPO_QUALIFIED_REF = /(?:https?:\/\/[^\s/)]+\/)?([\w.-]+\/[\w.-]+)#(\d+)(?
 /** `https://host/owner/repo/issues/N`. */
 const ISSUE_URL_REF = /(?:https?:\/\/[^\s/)]+)?\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)(?!\d)/g;
 
+/** The captured `owner/repo` slug, normalized the same way `nameWithOwnerOf`
+ * normalizes the URLs it is compared against — lowercased, `.git` stripped
+ * (`acme/app.git#258` pasted from a clone URL must still match `acme/app`). */
+function normalizeRepositorySlug(slug: string): string {
+  return slug.toLowerCase().replace(/\.git$/, '');
+}
+
 /**
  * Parses the GitHub issue references in a PR body the way GitHub itself means
  * them: bare `#N` (references the PR's own repository — `repository: null`),
@@ -68,14 +75,24 @@ const ISSUE_URL_REF = /(?:https?:\/\/[^\s/)]+)?\/([\w.-]+\/[\w.-]+)\/issues\/(\d
  * `bodyReferencesIssueNumber` lives here, so a `dorny/test-reporter#258`
  * quoted in release notes can never answer for the Spec #258 of the PR's own
  * repository.
+ *
+ * A bare `#N` only counts when the `#` starts a token: GitHub does not
+ * auto-link `word#N` (`Fixes#42`, `sha1#42`), so neither do we — prose glued
+ * to a `#` is far more often a fragment identifier or a slug than a reference.
  */
 function parseBodyIssueReferences(text: string): BodyIssueReference[] {
   const references: BodyIssueReference[] = [];
   for (const match of text.matchAll(REPO_QUALIFIED_REF)) {
-    references.push({ repository: match[1].toLowerCase(), number: Number.parseInt(match[2], 10) });
+    references.push({
+      repository: normalizeRepositorySlug(match[1]),
+      number: Number.parseInt(match[2], 10),
+    });
   }
   for (const match of text.matchAll(ISSUE_URL_REF)) {
-    references.push({ repository: match[1].toLowerCase(), number: Number.parseInt(match[2], 10) });
+    references.push({
+      repository: normalizeRepositorySlug(match[1]),
+      number: Number.parseInt(match[2], 10),
+    });
   }
   for (const match of text.matchAll(/(?<![\w.-])#(\d+)(?!\d)/g)) {
     references.push({ repository: null, number: Number.parseInt(match[1], 10) });
@@ -110,7 +127,10 @@ function bodyReferencesIssueNumber(
     // A qualified reference only points at the Spec when it names the Spec's
     // repository (when known) or the PR's own repository — `64ix/ProtoRTS#258`
     // in an upstream PR still references the fork's issue, a bare `#258` in a
-    // ProtoRTS PR does too, but a third-party issue never does.
+    // ProtoRTS PR does too, but a third-party issue never does. Today's only
+    // caller (`findSpecMatchingPrs`) pre-filters candidates to the Spec's
+    // repository whenever it is known, so `specRepository` and `prRepository`
+    // coincide there — the disjunction is defensive, for callers that don't.
     return (
       reference.repository === specRepository ||
       (prRepository != null && reference.repository === prRepository)
