@@ -37,6 +37,18 @@ const mocks = vi.hoisted(() => ({
   statMock: vi.fn(),
   releaseMock: vi.fn(),
   db: undefined as Awaited<ReturnType<typeof openFixture>>['db'] | undefined,
+  // Records event emits ({@main/lib/events} touches Electron ipcMain/BrowserWindow,
+  // which don't exist in the test env — mock it and capture the payloads).
+  emits: [] as unknown[],
+}));
+
+vi.mock('@main/lib/events', () => ({
+  events: {
+    emit: (_channel: unknown, data: unknown) => {
+      mocks.emits.push(data);
+    },
+    on: () => () => {},
+  },
 }));
 
 vi.mock('@main/db/client', () => ({
@@ -300,11 +312,18 @@ describe('attachProject (spec #130, ticket #136)', () => {
         updatedAt: 1,
       });
       remotesByPath.set(dir, [{ name: 'origin', url: 'git@github.com:org/repo.git' }]);
+      mocks.emits.length = 0;
 
       const result = expectOk(
         await attachProject({ type: 'local', projectId: 'synced-local', path: dir })
       );
 
+      // The re-parented task is announced so a mounted target project's store
+      // ingests it live (no restart), under its new project id.
+      const createdTask = mocks.emits
+        .map((data) => (data as { task?: { id: string; projectId: string } }).task)
+        .find((task) => task?.id === 'task-1');
+      expect(createdTask?.projectId).toBe('local-winner');
       expect(result.mergedInto).toBe('local-winner');
       expect(result.project.id).toBe('local-winner');
       // One row left; the local row wins.

@@ -3,6 +3,7 @@ import { err, ok, type Result } from '@emdash/shared';
 import { eq } from 'drizzle-orm';
 import { syncProjectRemotes } from '@main/core/pull-requests/project-remotes-service';
 import { runtimeManager } from '@main/core/runtime/runtime-manager';
+import { mapTaskRowToTask } from '@main/core/tasks/utils/utils';
 import { db } from '@main/db/client';
 import {
   automations,
@@ -13,7 +14,9 @@ import {
   sshConnections,
   tasks,
 } from '@main/db/schema';
+import { events } from '@main/lib/events';
 import { log } from '@main/lib/logger';
+import { taskCreatedChannel } from '@shared/core/tasks/taskEvents';
 import type {
   AttachProjectError,
   AttachProjectParams,
@@ -324,7 +327,7 @@ async function mergeInto(
   syncedProjectId: string,
   targetProjectId: string
 ): Promise<AttachProjectResult> {
-  db.transaction((tx) => {
+  const reparented = db.transaction((tx) => {
     const [targetSettings] = tx
       .select({ projectId: projectSettings.projectId })
       .from(projectSettings)
@@ -339,6 +342,9 @@ async function mergeInto(
         .where(eq(projectSettings.projectId, syncedProjectId))
         .run();
     }
+    // Capture the rows we re-parent so the renderer's live stores (which key
+    // tasks by projectId) can pick them up without an app restart.
+    const movedTasks = tx.select().from(tasks).where(eq(tasks.projectId, syncedProjectId)).all();
     tx.update(tasks)
       .set({ projectId: targetProjectId })
       .where(eq(tasks.projectId, syncedProjectId))
@@ -353,12 +359,23 @@ async function mergeInto(
       .run();
     tx.delete(projectRemotes).where(eq(projectRemotes.projectId, syncedProjectId)).run();
     tx.delete(projects).where(eq(projects.id, syncedProjectId)).run();
+    return movedTasks;
   });
 
   const target = await getProjectById(targetProjectId);
   if (!target) {
     return err({ type: 'project-not-found', projectId: targetProjectId });
   }
+
+  // Announce the re-parented tasks under their new project so a mounted target
+  // project's TaskManagerStore ingests them immediately (auto-attach merges
+  // into a project the user is often already viewing). Conversations/automations
+  // are children reloaded on task/view open. Emit after commit so listeners
+  // never observe the pre-merge state.
+  for (const row of reparented) {
+    events.emit(taskCreatedChannel, { task: mapTaskRowToTask({ ...row, projectId: targetProjectId }) });
+  }
+
   return ok({ project: target, mergedInto: targetProjectId });
 }
 
