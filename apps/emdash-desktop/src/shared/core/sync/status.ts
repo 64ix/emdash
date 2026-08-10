@@ -32,4 +32,15 @@ export type SyncStatus = {
   lastError: string | null;
   /** Rows waiting to be pushed (unpushed edits + tombstones); 0 when idle. */
   pendingCount: number;
+  /**
+   * Rows received from the relay but not yet decryptable on this machine
+   * (spec #130 amendment, decrypt-failure quarantine): a row encrypted under a
+   * space key this machine does not hold yet — e.g. the space was rekeyed and
+   * the new key has not reached this device. The engine parks them instead of
+   * applying garbage or wedging the pull, and re-attempts them automatically
+   * once the space key changes. Omitted (treated as 0) by callers that predate
+   * the field. Rows that fail permanently (tampered / corrupt bodies) are NOT
+   * counted here — they are dropped, never retried.
+   */
+  quarantinedCount?: number;
 };

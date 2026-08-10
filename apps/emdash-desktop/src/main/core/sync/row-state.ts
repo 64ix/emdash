@@ -34,6 +34,16 @@ export interface RowState {
    * pulled.
    */
   clientVersion: number;
+  /**
+   * The relay `version` of a pulled patch whose body could not be decrypted
+   * with a key-related (retryable) failure (migration 0030, decrypt-failure
+   * quarantine), or 0 when the row is not quarantined. Unlike a permanent
+   * decrypt failure, a quarantined row's `serverVersion` is deliberately NOT
+   * advanced, so the engine re-attempts it (by rewinding the pull cursor to
+   * the quarantine floor) once the space key changes. Cleared back to 0 the
+   * moment any patch for the row decrypts successfully.
+   */
+  quarantinedVersion: number;
 }
 
 export interface TombstoneEntry {
@@ -53,10 +63,16 @@ export function getRowState(
 ): RowState | null {
   const row = sqlite
     .prepare(
-      'SELECT server_version, dirty, row_sync_ts, client_version FROM sync_row_state WHERE table_name = ? AND pk = ?'
+      'SELECT server_version, dirty, row_sync_ts, client_version, quarantined_version FROM sync_row_state WHERE table_name = ? AND pk = ?'
     )
     .get(table, pk) as
-    | { server_version: number; dirty: number; row_sync_ts: number; client_version: number }
+    | {
+        server_version: number;
+        dirty: number;
+        row_sync_ts: number;
+        client_version: number;
+        quarantined_version: number;
+      }
     | undefined;
   if (row === undefined) return null;
   return {
@@ -64,6 +80,7 @@ export function getRowState(
     dirty: row.dirty === 1,
     rowSyncTs: row.row_sync_ts,
     clientVersion: row.client_version,
+    quarantinedVersion: row.quarantined_version,
   };
 }
 
@@ -95,6 +112,62 @@ export function upsertRowState(
          client_version = COALESCE(?, sync_row_state.client_version)`
     )
     .run(table, pk, serverVersion, dirty ? 1 : 0, rowSyncTs, clientVersion, clientVersion);
+}
+
+/**
+ * Marks a row as quarantined at `quarantinedVersion` (the relay version of the
+ * patch that failed to decrypt with a retryable, key-related error). Migration
+ * 0030, decrypt-failure quarantine.
+ *
+ * Deliberately never advances `server_version` or touches `client_version`: a
+ * quarantined patch was never applied, so its version must NOT be recorded as
+ * seen — otherwise the seen-check in `applyPatch` would skip it forever and the
+ * cursor-rewind retry could never re-attempt it. A brand-new row-state row is
+ * created with `client_version = NEVER_PULLED_CLIENT_VERSION` (this row has
+ * never been through a genuine pulled apply).
+ */
+export function quarantineRow(
+  sqlite: BetterSqlite3.Database,
+  table: string,
+  pk: string,
+  quarantinedVersion: number
+): void {
+  sqlite
+    .prepare(
+      `INSERT INTO sync_row_state (table_name, pk, server_version, dirty, row_sync_ts, client_version, quarantined_version)
+       VALUES (?, ?, 0, 0, 0, ${NEVER_PULLED_CLIENT_VERSION}, ?)
+       ON CONFLICT (table_name, pk) DO UPDATE SET quarantined_version = excluded.quarantined_version`
+    )
+    .run(table, pk, quarantinedVersion);
+}
+
+/** Clears a row's quarantine flag (a later patch for it decrypted cleanly). */
+export function clearQuarantine(sqlite: BetterSqlite3.Database, table: string, pk: string): void {
+  sqlite
+    .prepare('UPDATE sync_row_state SET quarantined_version = 0 WHERE table_name = ? AND pk = ?')
+    .run(table, pk);
+}
+
+/**
+ * The lowest relay version among all quarantined rows, or `null` if none are
+ * quarantined. The engine rewinds the pull cursor to just below this so every
+ * quarantined patch is re-fetched and re-attempted.
+ */
+export function quarantineFloor(sqlite: BetterSqlite3.Database): number | null {
+  const row = sqlite
+    .prepare(
+      'SELECT MIN(quarantined_version) AS floor FROM sync_row_state WHERE quarantined_version > 0'
+    )
+    .get() as { floor: number | null };
+  return row.floor;
+}
+
+/** How many rows are currently quarantined (surfaced in SyncStatus). */
+export function countQuarantined(sqlite: BetterSqlite3.Database): number {
+  const row = sqlite
+    .prepare('SELECT COUNT(*) AS count FROM sync_row_state WHERE quarantined_version > 0')
+    .get() as { count: number };
+  return row.count;
 }
 
 export function listTombstones(sqlite: BetterSqlite3.Database): TombstoneEntry[] {

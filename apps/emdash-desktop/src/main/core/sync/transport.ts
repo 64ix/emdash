@@ -38,6 +38,17 @@ export interface SyncPatch {
    * records the patch's version and skips it instead of wedging the pull.
    */
   decryptError?: string;
+  /**
+   * Whether a `decryptError` might resolve on a later attempt (spec #130
+   * amendment, decrypt-failure quarantine). `true` for key-related failures —
+   * the body is encrypted under a space key id this machine does not hold yet
+   * (a rekey whose new key has not arrived), or no space key is stored at all —
+   * which decrypt cleanly once the right key is present. `false` for permanent
+   * failures (tampered/corrupt envelope, unsupported algorithm): a key change
+   * cannot fix those, so the engine drops them rather than retrying forever.
+   * Only meaningful when `decryptError` is set.
+   */
+  decryptRetryable?: boolean;
 }
 
 export interface SyncPullResult {

@@ -1,0 +1,1 @@
+ALTER TABLE `sync_row_state` ADD `quarantined_version` integer DEFAULT 0 NOT NULL;

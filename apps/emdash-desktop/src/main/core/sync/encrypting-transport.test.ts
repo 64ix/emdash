@@ -316,7 +316,11 @@ describe('EncryptingRelayTransport', () => {
     expect(good?.body).toBe('good');
     expect(good?.decryptError).toBeUndefined();
     expect(unknown?.decryptError).toContain('key');
+    // Unknown key id is retryable (a rekey whose key can still arrive); a
+    // tampered body is a permanent failure and must not be retried.
+    expect(unknown?.decryptRetryable).toBe(true);
     expect(tamperedPatch?.decryptError).toContain('authenticat');
+    expect(tamperedPatch?.decryptRetryable).toBe(false);
   });
 
   it('flags every body-carrying patch when no space key is stored', async () => {
@@ -334,6 +338,8 @@ describe('EncryptingRelayTransport', () => {
     const upsert = result.patches.find((p) => p.pk === 'a');
     const tombstone = result.patches.find((p) => p.pk === 'b');
     expect(upsert?.decryptError).toContain('key');
+    // No key stored yet is retryable — a key can still arrive (join / rekey).
+    expect(upsert?.decryptRetryable).toBe(true);
     expect(upsert?.body).toBe('{"enc":1}');
     // Tombstones carry no body and are never flagged.
     expect(tombstone?.decryptError).toBeUndefined();

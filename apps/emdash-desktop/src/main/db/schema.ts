@@ -572,6 +572,11 @@ export const appSecrets = sqliteTable(
  * server version carries a client_version that regresses relative to this
  * recorded value, so the engine can drop it instead of applying stale
  * content — see the client_version check in engine.ts's `applyPatch`.
+ * `quarantined_version` is the relay version of a pulled patch whose body
+ * could not be decrypted with a retryable, key-related failure (decrypt-failure
+ * quarantine, spec #130 amendment), or 0 when the row is not quarantined: the
+ * engine parks such a patch WITHOUT advancing `server_version` and re-attempts
+ * it once the space key changes, instead of applying garbage or losing the row.
  */
 export const syncRowState = sqliteTable(
   'sync_row_state',
@@ -582,6 +587,7 @@ export const syncRowState = sqliteTable(
     dirty: integer('dirty').notNull().default(0),
     rowSyncTs: integer('row_sync_ts').notNull().default(0),
     clientVersion: integer('client_version').notNull().default(0),
+    quarantinedVersion: integer('quarantined_version').notNull().default(0),
   },
   (table) => ({
     pkKey: primaryKey({ columns: [table.tableName, table.pk] }),

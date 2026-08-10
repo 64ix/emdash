@@ -73,11 +73,17 @@ class FakeRelayTransport implements RelayTransport {
   }
 
   /** Directly seed a row as if another (older) client had pushed it. */
-  seedRow(table: string, pk: string, body: string | null, deleted = false): number {
+  seedRow(
+    table: string,
+    pk: string,
+    body: string | null,
+    deleted = false,
+    clientVersion = 0
+  ): number {
     this.version += 1;
     const version = this.version;
     const tableRows = this.rows.get(table) ?? new Map<string, RelayRow>();
-    tableRows.set(pk, { version, client_version: 0, body, deleted });
+    tableRows.set(pk, { version, client_version: clientVersion, body, deleted });
     this.rows.set(table, tableRows);
     return version;
   }
@@ -1879,6 +1885,7 @@ describe('SyncEngine', () => {
         sqlite: fixture.sqlite,
         transport: new EncryptingRelayTransport(relay, keyReader, 'space-1'),
         deviceId,
+        spaceKeyId: keyId,
       });
     }
 
@@ -1984,7 +1991,10 @@ describe('SyncEngine', () => {
       const pull = await engineB.syncNow();
       expectOk(pull);
       if (!pull.success) return;
-      expect(pull.data.skippedUndecryptable).toBe(2);
+      // The rekeyed body (retryable, unknown key id) is quarantined; the
+      // tampered body (permanent) is dropped as undecryptable.
+      expect(pull.data.quarantined).toBe(1);
+      expect(pull.data.skippedUndecryptable).toBe(1);
       // The decryptable row was applied; the undecryptable ones were skipped
       // without aborting the batch, and the cursor still advanced past all.
       expect(rawGet(fixtureB, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)).toBeDefined();
@@ -1996,10 +2006,22 @@ describe('SyncEngine', () => {
         )
       ).toBe(relay.maxVersion);
 
-      // The skipped rows are recorded as seen: no re-push, no re-fetch wedge.
-      const state = rawGet(fixtureB, 'SELECT * FROM sync_row_state WHERE pk = ?', TASK_1);
-      expect(state?.server_version).toBe(2);
-      expect(state?.dirty).toBe(0);
+      // The rekeyed row (relay version 2) is QUARANTINED, not marked seen:
+      // server_version stays 0 so a cursor-rewind retry can re-fetch it once
+      // the key arrives, and its relay version is parked in quarantined_version.
+      const quarantinedState = rawGet(
+        fixtureB,
+        'SELECT * FROM sync_row_state WHERE pk = ?',
+        TASK_1
+      );
+      expect(quarantinedState?.server_version).toBe(0);
+      expect(quarantinedState?.quarantined_version).toBe(2);
+      expect(quarantinedState?.dirty).toBe(0);
+      // The tampered row (relay version 3) is recorded as seen: no re-fetch, no
+      // quarantine — a key change cannot rescue a tampered body.
+      const tamperedState = rawGet(fixtureB, 'SELECT * FROM sync_row_state WHERE pk = ?', CONV_1);
+      expect(tamperedState?.server_version).toBe(3);
+      expect(tamperedState?.quarantined_version).toBe(0);
     });
 
     it('keeps the last good content when a newer patch fails to decrypt, and applies later good patches', async () => {
@@ -2031,13 +2053,16 @@ describe('SyncEngine', () => {
       const pull = await engineB.syncNow();
       expectOk(pull);
       if (!pull.success) return;
-      expect(pull.data.skippedUndecryptable).toBe(1);
+      // The rekeyed body is a retryable (unknown key id) failure: quarantined,
+      // not dropped, so it can be re-attempted once the key propagates.
+      expect(pull.data.quarantined).toBe(1);
+      expect(pull.data.skippedUndecryptable).toBe(0);
       expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
         'Repo'
       );
 
       // A (still holding K0) pushes a decryptable edit at a newer version;
-      // B applies it once it arrives — the skipped version does not wedge
+      // B applies it once it arrives — the quarantined version does not wedge
       // the row.
       await fixtureA.db
         .update(projects)
@@ -2134,6 +2159,180 @@ describe('SyncEngine', () => {
       expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
         'Renamed again'
       );
+    });
+
+    it('applies a concurrent edit sharing a client_version baseline (not a false replay)', async () => {
+      // Regression guard for the anti-replay comparator: client_version is a
+      // last-observed server version, NOT a per-writer counter, so two machines
+      // editing the same already-synced row both legitimately carry the same
+      // client_version. The later one (higher server version) is a genuine
+      // concurrent edit LWW must apply — a `<=` comparator would drop it as a
+      // replay and silently lose data.
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineB = encryptedEngine(fixtureB, relay, 'device-b');
+
+      // Round 1: the row's first sync (client_version 0). B applies it and
+      // records client_version 0 as a real (non-sentinel) baseline.
+      const base = encryptBody(
+        k0,
+        keyId,
+        { spaceId: 'space-1', table: 'projects', pk: PROJECT_A, version: 0, keyId },
+        JSON.stringify({ deviceId: 'a', columns: { id: PROJECT_A, name: 'Base' } })
+      );
+      relay.seedRow('projects', PROJECT_A, base, false, 0);
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Base'
+      );
+
+      // Machine B1 edited from that baseline and pushed client_version 1 (server
+      // version 2). B pulls and applies it — client_version baseline is now 1.
+      const editFromB1 = encryptBody(
+        k0,
+        keyId,
+        { spaceId: 'space-1', table: 'projects', pk: PROJECT_A, version: 1, keyId },
+        JSON.stringify({ deviceId: 'b1', columns: { id: PROJECT_A, name: 'Edit from B1' } })
+      );
+      relay.seedRow('projects', PROJECT_A, editFromB1, false, 1);
+      expectOk(await engineB.syncNow());
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Edit from B1'
+      );
+
+      // Machine B2 ALSO edited from the same baseline (unaware of B1) and pushed
+      // client_version 1 too, landing at the next server version (3). This is
+      // the tie: equal client_version, strictly newer server version.
+      const editFromB2 = encryptBody(
+        k0,
+        keyId,
+        { spaceId: 'space-1', table: 'projects', pk: PROJECT_A, version: 1, keyId },
+        JSON.stringify({ deviceId: 'b2', columns: { id: PROJECT_A, name: 'Edit from B2' } })
+      );
+      relay.seedRow('projects', PROJECT_A, editFromB2, false, 1);
+
+      const pull = await engineB.syncNow();
+      expectOk(pull);
+      if (!pull.success) return;
+      // The tie is NOT treated as a replay: the concurrent edit applies and the
+      // higher server version wins.
+      expect(pull.data.skippedReplayed).toBe(0);
+      expect(pull.data.applied).toBe(1);
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Edit from B2'
+      );
+    });
+
+    it('quarantines a wrong-key row, then retries and applies it after the key changes', async () => {
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+
+      // The row is encrypted under the space's REAL key. This machine holds a
+      // DIFFERENT key (as if the space was rekeyed and the new key has not
+      // reached this device yet).
+      const kReal = mintK0();
+      const keyIdReal = keyIdOf(kReal);
+      const kWrong = mintK0();
+      const keyIdWrong = keyIdOf(kWrong);
+
+      const body = encryptBody(
+        kReal,
+        keyIdReal,
+        { spaceId: 'space-1', table: 'projects', pk: PROJECT_A, version: 0, keyId: keyIdReal },
+        JSON.stringify({ deviceId: 'a', columns: { id: PROJECT_A, name: 'Secret' } })
+      );
+      const version = relay.seedRow('projects', PROJECT_A, body, false, 0);
+
+      const engineWrong = new SyncEngine({
+        sqlite: fixtureB.sqlite,
+        transport: new EncryptingRelayTransport(
+          relay,
+          {
+            get: async () => ({ success: true as const, data: { keyId: keyIdWrong, k0: kWrong } }),
+          },
+          'space-1'
+        ),
+        deviceId: 'device-b',
+        spaceKeyId: keyIdWrong,
+      });
+
+      const first = await engineWrong.syncNow();
+      expectOk(first);
+      if (!first.success) return;
+      // Retryable (unknown key id): quarantined, not dropped; not applied, and
+      // its version is NOT recorded as seen (server_version stays 0).
+      expect(first.data.quarantined).toBe(1);
+      expect(first.data.skippedUndecryptable).toBe(0);
+      expect(rawGet(fixtureB, 'SELECT id FROM projects WHERE id = ?', PROJECT_A)).toBeUndefined();
+      const parked = rawGet(fixtureB, 'SELECT * FROM sync_row_state WHERE pk = ?', PROJECT_A);
+      expect(parked?.server_version).toBe(0);
+      expect(parked?.quarantined_version).toBe(version);
+      expect(engineWrong.quarantinedCount()).toBe(1);
+
+      // The correct key arrives (key id changes). A new engine over the SAME db
+      // rewinds to the quarantine floor, re-fetches the row, and decrypts it.
+      const engineRight = new SyncEngine({
+        sqlite: fixtureB.sqlite,
+        transport: new EncryptingRelayTransport(
+          relay,
+          { get: async () => ({ success: true as const, data: { keyId: keyIdReal, k0: kReal } }) },
+          'space-1'
+        ),
+        deviceId: 'device-b',
+        spaceKeyId: keyIdReal,
+      });
+
+      const second = await engineRight.syncNow();
+      expectOk(second);
+      if (!second.success) return;
+      expect(rawGet(fixtureB, 'SELECT name FROM projects WHERE id = ?', PROJECT_A)?.name).toBe(
+        'Secret'
+      );
+      // Quarantine lifted; the row is now genuinely applied and seen.
+      expect(engineRight.quarantinedCount()).toBe(0);
+      const applied = rawGet(fixtureB, 'SELECT * FROM sync_row_state WHERE pk = ?', PROJECT_A);
+      expect(applied?.quarantined_version).toBe(0);
+      expect(applied?.server_version).toBe(version);
+
+      // The rewind-retry does not repeat while the key is unchanged: no more
+      // work on the next cycle.
+      const third = await engineRight.syncNow();
+      expectOk(third);
+      if (!third.success) return;
+      expect(third.data.applied).toBe(0);
+      expect(third.data.quarantined).toBe(0);
+    });
+
+    it('drops a permanently undecryptable (tampered) row without quarantining or retrying it', async () => {
+      fixtureB = await openDb();
+      const relay = new FakeRelayTransport();
+      const engineB = encryptedEngine(fixtureB, relay, 'device-b');
+
+      // A tampered envelope decrypts to aad_mismatch — a permanent failure a
+      // key change can never rescue.
+      const envelope = JSON.parse(
+        encryptBody(
+          k0,
+          keyId,
+          { spaceId: 'space-1', table: 'projects', pk: PROJECT_A, version: 0, keyId },
+          'x'
+        )
+      ) as { ct: string };
+      const bits = Buffer.from(envelope.ct, 'base64url');
+      bits[0] = bits[0]! ^ 1;
+      const tampered = JSON.stringify({ ...envelope, ct: bits.toString('base64url') });
+      const version = relay.seedRow('projects', PROJECT_A, tampered, false, 0);
+
+      const pull = await engineB.syncNow();
+      expectOk(pull);
+      if (!pull.success) return;
+      expect(pull.data.skippedUndecryptable).toBe(1);
+      expect(pull.data.quarantined).toBe(0);
+      expect(engineB.quarantinedCount()).toBe(0);
+      // Recorded as seen (server_version advanced), never quarantined.
+      const state = rawGet(fixtureB, 'SELECT * FROM sync_row_state WHERE pk = ?', PROJECT_A);
+      expect(state?.server_version).toBe(version);
+      expect(state?.quarantined_version).toBe(0);
     });
   });
 });

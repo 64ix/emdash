@@ -28,11 +28,15 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { log } from '@main/lib/logger';
 import { isInitialOnly, SYNC_TABLES, SYNC_TABLES_BY_NAME, type SyncTableConfig } from './allowlist';
 import {
+  clearQuarantine,
+  countQuarantined,
   deleteTombstones,
   encodePk,
   getRowState,
   listTombstones,
   NEVER_PULLED_CLIENT_VERSION,
+  quarantineFloor,
+  quarantineRow,
   upsertRowState,
 } from './row-state';
 import type { RelayTransport, SyncMutation, SyncPatch, SyncPushResult } from './transport';
@@ -79,11 +83,22 @@ export interface SyncSummary {
    */
   skippedOrphan: number;
   /**
-   * Patches skipped because their encrypted body could not be decrypted
-   * (unknown key id after a rekey, tampering, or relay row/version swaps).
-   * The patch's version is recorded so it is not re-fetched or re-pushed.
+   * Patches dropped because their encrypted body could not be decrypted with a
+   * PERMANENT failure (tampered/corrupt envelope, unsupported algorithm). The
+   * patch's version is recorded as seen so it is neither re-fetched nor
+   * re-pushed — a key change cannot rescue it.
    */
   skippedUndecryptable: number;
+  /**
+   * Patches parked because their body could not be decrypted with a RETRYABLE,
+   * key-related failure (the row is encrypted under a space key this machine
+   * does not hold yet — a rekey whose new key has not arrived; decrypt-failure
+   * quarantine, spec #130 amendment). Their version is NOT recorded as seen;
+   * the engine re-attempts them by rewinding the pull cursor once the space key
+   * changes. This counts the quarantine events seen in the cycle; the standing
+   * total is `quarantinedCount()`.
+   */
+  quarantined: number;
   /**
    * Patches skipped because their client_version regressed relative to the
    * one already recorded for this row (spec #130 anti-replay hardening): a
@@ -100,6 +115,15 @@ export interface SyncEngineOptions {
   transport: RelayTransport;
   /** Stable device identity; recorded in every upsert body. */
   deviceId: string;
+  /**
+   * The key id of this machine's currently stored space key, or `null` if none
+   * is stored (decrypt-failure quarantine, spec #130 amendment). The engine
+   * itself stays crypto-free — this is an opaque identifier, never key
+   * material — and uses only whether it CHANGED to decide when to re-attempt
+   * quarantined (undecryptable-because-wrong-key) rows: a rewind-and-retry
+   * pass runs at most once per key change, never on every cycle.
+   */
+  spaceKeyId?: string | null;
   /** Injectable clock (defaults to Date.now). */
   now?: () => number;
   /** Max patches per pull request. Defaults to the relay's limit (1000). */
@@ -124,6 +148,7 @@ const EMPTY_SUMMARY: SyncSummary = {
   skippedSeen: 0,
   skippedOrphan: 0,
   skippedUndecryptable: 0,
+  quarantined: 0,
   skippedReplayed: 0,
 };
 
@@ -160,6 +185,7 @@ export class SyncEngine {
   private readonly now: () => number;
   private readonly pullLimit: number;
   private readonly projectAttachHook: SyncEngineOptions['projectAttachHook'];
+  private readonly spaceKeyId: string | null;
   private readonly statements: PreparedTableStatements[] = [];
   private readonly fkExistsStatements: Array<{
     config: SyncTableConfig;
@@ -174,6 +200,7 @@ export class SyncEngine {
     this.now = options.now ?? (() => Date.now());
     this.pullLimit = options.pullLimit ?? 1000;
     this.projectAttachHook = options.projectAttachHook;
+    this.spaceKeyId = options.spaceKeyId ?? null;
     this.prepareStatements();
   }
 
@@ -196,6 +223,7 @@ export class SyncEngine {
       skippedSeen: pullResult.data.skippedSeen,
       skippedOrphan: pullResult.data.skippedOrphan,
       skippedUndecryptable: pullResult.data.skippedUndecryptable,
+      quarantined: pullResult.data.quarantined,
       skippedReplayed: pullResult.data.skippedReplayed,
     });
   }
@@ -236,6 +264,16 @@ export class SyncEngine {
     // benign here — they would be dropped on the next push anyway.
     count += this.collectTombstones().length;
     return count;
+  }
+
+  /**
+   * How many rows are currently quarantined: received from the relay but not
+   * yet decryptable on this machine (encrypted under a space key not held here
+   * yet). Surfaced in SyncStatus; the engine re-attempts them automatically
+   * once the space key changes.
+   */
+  quarantinedCount(): number {
+    return countQuarantined(this.sqlite);
   }
 
   /** Push every row whose clock advanced past the per-table watermark. */
@@ -392,6 +430,27 @@ export class SyncEngine {
     }
     let cursor = this.readCursor();
 
+    // Decrypt-failure quarantine retry (spec #130 amendment): rows parked
+    // because they were encrypted under a space key this machine did not hold
+    // are re-attempted by rewinding the pull cursor to just below the oldest
+    // quarantined version, so those patches are re-fetched and decrypted with
+    // the key we have now. Gated on the key id having CHANGED since the last
+    // retry: the only event that can turn an `unknown_key_id` failure into a
+    // success is a new/rotated space key arriving, so this runs at most once
+    // per key change — never a per-cycle re-pull from the floor. Already-applied
+    // rows in the rewound range are cheaply skipped by the seen-check; the
+    // persisted cursor climbs back to the true high-water mark as the retry
+    // pages through.
+    let retriedQuarantine = false;
+    if (this.spaceKeyId !== null) {
+      const floor = quarantineFloor(this.sqlite);
+      if (floor !== null && this.spaceKeyId !== this.readQuarantineRetryKeyId()) {
+        cursor = Math.min(cursor, floor - 1);
+        retriedQuarantine = true;
+        log.debug('[sync] retrying quarantined rows after space-key change', { floor });
+      }
+    }
+
     try {
       // Project rows inserted by this pull (fresh imports) — the auto-attach
       // hook fires for them once the whole pull is applied, so the carried
@@ -433,6 +492,11 @@ export class SyncEngine {
           }
         }
       }
+      // Record the key id this retry pass ran under, so the next cycle does not
+      // rewind again until the space key changes once more.
+      if (retriedQuarantine && this.spaceKeyId !== null) {
+        this.writeQuarantineRetryKeyId(this.spaceKeyId);
+      }
       log.debug('[sync] pull complete', {
         pulled: summary.pulled,
         applied: summary.applied,
@@ -440,6 +504,7 @@ export class SyncEngine {
         skippedSeen: summary.skippedSeen,
         skippedOrphan: summary.skippedOrphan,
         skippedUndecryptable: summary.skippedUndecryptable,
+        quarantined: summary.quarantined,
         skippedReplayed: summary.skippedReplayed,
       });
       return ok(summary);
@@ -491,35 +556,62 @@ export class SyncEngine {
       return;
     }
     if (patch.decryptError !== undefined) {
-      // The body could not be decrypted (rekey, tampering, relay swap):
-      // record the version as seen so the row is neither re-fetched nor
-      // re-pushed (echoing an undecryptable body would wedge every other
-      // machine), then keep pulling the rest of the batch. client_version is
-      // never touched: it is only trustworthy once AEAD authentication (which
-      // binds it) has actually succeeded.
+      if (patch.decryptRetryable === true) {
+        // Retryable (key-related): the body is validly encrypted but under a
+        // space key this machine does not hold yet (a rekey whose new key has
+        // not arrived). Quarantine WITHOUT advancing server_version, so the
+        // version is not recorded as seen and the cursor-rewind retry can
+        // re-fetch and re-attempt it once the key changes — instead of losing
+        // the row forever. Never applies garbage, never echoes it back.
+        quarantineRow(this.sqlite, config.table, patch.pk, patch.version);
+        summary.quarantined += 1;
+        return;
+      }
+      // Permanent (tampered/corrupt envelope, unsupported alg): a key change
+      // cannot rescue it. Record the version as seen so the row is neither
+      // re-fetched nor re-pushed (echoing an undecryptable body would wedge
+      // every other machine), lift any prior quarantine, then keep pulling.
+      // client_version is never touched: it is only trustworthy once AEAD
+      // authentication (which binds it) has actually succeeded.
       upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs, null);
+      if (state !== null && state.quarantinedVersion > 0) {
+        clearQuarantine(this.sqlite, config.table, patch.pk);
+      }
       summary.skippedUndecryptable += 1;
       return;
+    }
+    // Past the decrypt gate: this patch decrypted (or is a bodyless delete), so
+    // the row is no longer undecryptable — lift any quarantine parked on it.
+    if (state !== null && state.quarantinedVersion > 0) {
+      clearQuarantine(this.sqlite, config.table, patch.pk);
     }
     // Anti-replay hardening (spec #130 amendment): a relay that replays an old
     // (but validly-encrypted) body under a newer server version passes the
     // serverVersion check above. client_version is the pusher's own
     // last-known server version at push time, so — for a given row — it only
     // regresses if a patch is being replayed; a patch whose client_version is
-    // <= the last one recorded for this row is dropped, but its (higher)
-    // server version is still recorded so the cursor advances. Deletes always
-    // carry client_version 0 (see transport.ts) and are handled by the branch
-    // below instead — the exact negation of its own condition keeps this from
-    // ever misclassifying a delete as an upsert to guard. NEVER_PULLED_CLIENT_VERSION
-    // excludes rows that only exist from this machine's own push-acks: two
-    // machines independently pushing the very same never-before-synced row
-    // both legitimately carry the real client_version 0, so there is no
-    // baseline yet to replay-check against (row-state.ts).
+    // STRICTLY LESS than the last one recorded for this row is dropped, but its
+    // (higher) server version is still recorded so the cursor advances. The
+    // comparison must be `<`, never `<=`: client_version is a last-observed
+    // server version, not a per-writer counter, so two machines that both
+    // edited the row from the SAME already-synced baseline legitimately push
+    // the same client_version — the later one (higher server version) is a
+    // genuine concurrent edit that LWW-by-server-version must apply, not a
+    // replay. Treating that tie as a replay silently loses the concurrent
+    // edit. A true replay of the identical last body (equal client_version)
+    // slips through as a harmless idempotent re-apply of identical content.
+    // Deletes always carry client_version 0 (see transport.ts) and are handled
+    // by the branch below instead — the exact negation of its own condition
+    // keeps this from ever misclassifying a delete as an upsert to guard.
+    // NEVER_PULLED_CLIENT_VERSION excludes rows that only exist from this
+    // machine's own push-acks: two machines independently pushing the very same
+    // never-before-synced row both legitimately carry the real client_version
+    // 0, so there is no baseline yet to replay-check against (row-state.ts).
     if (
       state !== null &&
       state.clientVersion !== NEVER_PULLED_CLIENT_VERSION &&
       !(patch.op === 'delete' || patch.deleted) &&
-      patch.client_version <= state.clientVersion
+      patch.client_version < state.clientVersion
     ) {
       upsertRowState(this.sqlite, config.table, patch.pk, patch.version, false, rowSyncTs, null);
       summary.skippedReplayed += 1;
@@ -861,6 +953,33 @@ export class SyncEngine {
 
   private writeCursor(value: number, now: number): void {
     this.writeBookkeepingNumber('sync:cursor', value, now);
+  }
+
+  /**
+   * The space key id under which the last quarantine rewind-retry ran (or ''
+   * if none). The pull rewinds to the quarantine floor only when the current
+   * key id differs from this, bounding retries to once per key change.
+   */
+  private readQuarantineRetryKeyId(): string {
+    const row = this.sqlite
+      .prepare('SELECT value FROM kv WHERE key = ?')
+      .get('sync:quarantineRetryKeyId') as { value: string } | undefined;
+    if (row === undefined) return '';
+    try {
+      const parsed = JSON.parse(row.value) as unknown;
+      return typeof parsed === 'string' ? parsed : '';
+    } catch {
+      return '';
+    }
+  }
+
+  private writeQuarantineRetryKeyId(keyId: string): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+      )
+      .run('sync:quarantineRetryKeyId', JSON.stringify(keyId), this.now());
   }
 
   private readBookkeepingNumber(key: string): number {

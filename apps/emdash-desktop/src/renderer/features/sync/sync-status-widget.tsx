@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Cloud,
   CloudOff,
+  KeyRound,
   LoaderCircle,
   RefreshCw,
   X,
@@ -113,6 +114,19 @@ function SyncStatusTrigger({ status }: { status: SyncStatus }) {
             <CloudOff className="mt-0.5 size-3 shrink-0" />
             <span>
               {status.pendingCount} change{status.pendingCount === 1 ? '' : 's'} waiting to sync.
+            </span>
+          </div>
+        )}
+        {(status.quarantinedCount ?? 0) > 0 && (
+          <div
+            role="status"
+            className="flex items-start gap-1.5 rounded-md bg-background-warning px-2 py-1.5 text-[11px] text-foreground-warning"
+          >
+            <KeyRound className="mt-0.5 size-3 shrink-0" />
+            <span>
+              {status.quarantinedCount} row{status.quarantinedCount === 1 ? '' : 's'} can&apos;t be
+              decrypted yet — waiting for the space key. They&apos;ll sync automatically once it
+              arrives.
             </span>
           </div>
         )}

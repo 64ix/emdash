@@ -11,8 +11,10 @@
  *
  * Decryption failures (unknown key_id after a rekey, tampered envelopes,
  * AAD mismatches from relay row/version swaps) never throw: the affected
- * patch is flagged with `decryptError` and the pull continues. The engine
- * records the patch's version and counts it in `skippedUndecryptable`.
+ * patch is flagged with `decryptError` and the pull continues. The flag
+ * carries `decryptRetryable` so the engine can tell a transient key-related
+ * miss (quarantine and re-attempt once the key arrives) from a permanent
+ * tamper/corruption (drop it, counted in `skippedUndecryptable`).
  *
  * The wrapper needs the space key (K0 + key_id) from `SpaceKeyStore`; when
  * no key is stored, pushes fail with a clear error and pulls flag every
@@ -126,7 +128,13 @@ export class EncryptingRelayTransport implements RelayTransport {
       return patch;
     }
     if (key === null) {
-      return { ...patch, decryptError: 'no sync space encryption key on this machine' };
+      // No key stored yet: retryable — a key can still arrive (join / rekey
+      // propagation), after which the body decrypts cleanly.
+      return {
+        ...patch,
+        decryptError: 'no sync space encryption key on this machine',
+        decryptRetryable: true,
+      };
     }
     const aad = {
       spaceId: this.spaceId,
@@ -142,7 +150,11 @@ export class EncryptingRelayTransport implements RelayTransport {
         pk: patch.pk,
         error: decrypted.error.type,
       });
-      return { ...patch, decryptError: cryptoErrorMessage(decrypted.error) };
+      return {
+        ...patch,
+        decryptError: cryptoErrorMessage(decrypted.error),
+        decryptRetryable: isRetryableCryptoError(decrypted.error),
+      };
     }
     return { ...patch, body: decrypted.data };
   }
@@ -154,6 +166,18 @@ export class EncryptingRelayTransport implements RelayTransport {
     }
     return key.data;
   }
+}
+
+/**
+ * Whether a decryption failure might resolve once the right space key is
+ * present. Only `unknown_key_id` is retryable: the body is validly encrypted,
+ * just under a key id this machine does not hold yet (a rekey whose new key
+ * has not propagated here). Everything else is permanent — a tampered or
+ * corrupt envelope, or an algorithm this build does not understand, will never
+ * decrypt no matter which key arrives, so retrying would only churn.
+ */
+function isRetryableCryptoError(error: SyncCryptoError): boolean {
+  return error.type === 'unknown_key_id';
 }
 
 /** A terse, non-secret description of a decryption failure for diagnostics. */

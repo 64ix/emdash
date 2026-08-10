@@ -136,6 +136,7 @@ const IDLE_STATUS: SyncStatus = {
   lastSyncAt: null,
   lastError: null,
   pendingCount: 0,
+  quarantinedCount: 0,
 };
 
 export class SyncService {
@@ -261,6 +262,7 @@ export class SyncService {
         lastSyncAt: this.now(),
         lastError: null,
         pendingCount: engine.pendingCount(),
+        quarantinedCount: engine.quarantinedCount(),
       });
       return;
     }
@@ -274,6 +276,7 @@ export class SyncService {
       state: offline && pendingCount > 0 ? 'offline-with-pending' : 'error',
       lastError: userFacingSyncMessage(error),
       pendingCount,
+      quarantinedCount: engine.quarantinedCount(),
     });
     log.warn('[sync] cycle failed', { offline, pendingCount, error: error.message });
   }
@@ -296,10 +299,15 @@ export class SyncService {
       { get: () => this.deps.getSpaceKey() },
       credential.data.spaceId
     );
+    // The current space key id (opaque, not key material) lets the engine
+    // re-attempt decrypt-failure-quarantined rows exactly once per key change.
+    const keyResult = await this.deps.getSpaceKey();
+    const spaceKeyId = keyResult.success && keyResult.data !== null ? keyResult.data.keyId : null;
     return new SyncEngine({
       sqlite: this.deps.sqlite,
       transport,
       deviceId: this.deviceIdentity.deviceId,
+      spaceKeyId,
       projectAttachHook: this.deps.projectAttachHook ?? createProjectAutoAttachHook(),
       now: this.now,
     });
@@ -389,6 +397,7 @@ export class SyncService {
       state: offline && pendingCount > 0 ? 'offline-with-pending' : 'error',
       lastError: userFacingSyncMessage(syncError),
       pendingCount,
+      quarantinedCount: engine === null ? 0 : engine.quarantinedCount(),
     });
     log.warn('[sync] poll failed', { offline, pendingCount, error: syncError.message });
   }
@@ -404,7 +413,8 @@ export class SyncService {
       next.paired === this.status.paired &&
       next.lastSyncAt === this.status.lastSyncAt &&
       next.lastError === this.status.lastError &&
-      next.pendingCount === this.status.pendingCount
+      next.pendingCount === this.status.pendingCount &&
+      (next.quarantinedCount ?? 0) === (this.status.quarantinedCount ?? 0)
     ) {
       return;
     }
