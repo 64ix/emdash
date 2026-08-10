@@ -2,8 +2,9 @@
  * Relay authentication/space API (spec #130, ticket #135).
  *
  * A narrow interface over the relay's space, pairing, and device endpoints
- * (`POST /v1/space`, `POST /v1/join`, `POST /v1/devices/join-secret`,
- * `GET /v1/devices`, `POST /v1/devices/revoke`). The sync endpoints
+ * (`POST /v1/space`, `POST /v1/space/delete`, `POST /v1/join`,
+ * `POST /v1/devices/join-secret`, `GET /v1/devices`,
+ * `POST /v1/devices/revoke`). The sync endpoints
  * (`/v1/sync/pull|push|poll`) are owned by the parallel ticket #133
  * (`src/main/core/sync/transport.ts`); this module deliberately does not cover
  * them so the two tickets stay independent. `PairingService` depends on this
@@ -74,6 +75,8 @@ export interface RelayAuthApi {
   ): Promise<Result<RelaySecretResult, RelayApiError>>;
   listDevices(token: string): Promise<Result<RelayDeviceInfo[], RelayApiError>>;
   revokeDevice(token: string, deviceId: string): Promise<Result<void, RelayApiError>>;
+  /** `POST /v1/space/delete` ("delete my data"): deletes the whole space. */
+  deleteSpace(token: string): Promise<Result<void, RelayApiError>>;
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
@@ -128,6 +131,14 @@ export class HttpRelayAuthApi implements RelayAuthApi {
       '/v1/devices/revoke',
       { device_id: deviceId },
       token
+    );
+    return result.success ? ok() : result;
+  }
+
+  async deleteSpace(token: string): Promise<Result<void, RelayApiError>> {
+    const result = await this.request<{ space_id: string; deleted: boolean; deleted_at: number }>(
+      '/v1/space/delete',
+      { method: 'POST', token }
     );
     return result.success ? ok() : result;
   }

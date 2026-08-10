@@ -68,16 +68,23 @@ class FakeRelayAuthApi implements RelayAuthApi {
   /** Errors forced on the next call of each kind (undefined = behave normally). */
   forced: Partial<
     Record<
-      'createSpace' | 'joinSpace' | 'mintSecret' | 'listDevices' | 'revokeDevice',
+      'createSpace' | 'joinSpace' | 'mintSecret' | 'listDevices' | 'revokeDevice' | 'deleteSpace',
       RelayApiError
     >
   > = {};
 
   /** Counts of calls, for asserting the client used the stored bearer token. */
   calls: Record<
-    'createSpace' | 'joinSpace' | 'mintSecret' | 'listDevices' | 'revokeDevice',
+    'createSpace' | 'joinSpace' | 'mintSecret' | 'listDevices' | 'revokeDevice' | 'deleteSpace',
     number
-  > = { createSpace: 0, joinSpace: 0, mintSecret: 0, listDevices: 0, revokeDevice: 0 };
+  > = {
+    createSpace: 0,
+    joinSpace: 0,
+    mintSecret: 0,
+    listDevices: 0,
+    revokeDevice: 0,
+    deleteSpace: 0,
+  };
 
   /** Devices by id: token, space, name, revoked. */
   readonly devices = new Map<
@@ -251,6 +258,22 @@ class FakeRelayAuthApi implements RelayAuthApi {
       return err({ type: 'device_not_found', message: 'device not found in this space' });
     }
     device.revoked = true;
+    return ok();
+  }
+
+  /** Mirrors the relay's `deleteSpace`: wipes every device + pending secret of the space. */
+  async deleteSpace(token: string): Promise<Result<void, RelayApiError>> {
+    this.calls.deleteSpace += 1;
+    const forced = this.forced.deleteSpace;
+    if (forced) return err(forced);
+    const auth = this.authenticate(token);
+    if (auth === null) {
+      return err({ type: 'unauthorized', message: 'unauthorized' });
+    }
+    for (const [deviceId, device] of this.devices) {
+      if (device.spaceId === auth.spaceId) this.devices.delete(deviceId);
+    }
+    this.pendingSecrets.delete(auth.spaceId);
     return ok();
   }
 }
@@ -473,6 +496,12 @@ describe('PairingService', () => {
     if (devices.success) return;
     expect(devices.error.code).toBe('not_paired');
     expect(api.calls.listDevices).toBe(0);
+
+    const deleted = await service.deleteSpace();
+    expect(deleted.success).toBe(false);
+    if (deleted.success) return;
+    expect(deleted.error.code).toBe('not_paired');
+    expect(api.calls.deleteSpace).toBe(0);
   });
 
   it('lists devices including the self flag', async () => {
@@ -561,6 +590,49 @@ describe('PairingService', () => {
     expect(network.error.code).toBe('network_error');
     expect(network.error.message).toBe(userFacingPairingMessage('network_error'));
     expect(network.error.message).not.toContain('fetch failed');
+  });
+
+  it('deleteSpace deletes the relay space, then clears the local credential and space key', async () => {
+    const api = new FakeRelayAuthApi();
+    const store = new FakeSecretStore();
+    const service = makeService(api, store);
+    const created = await service.createSpace('first');
+    if (!created.success) throw new Error('create failed');
+    expect(await storedKeyId(store)).not.toBeNull();
+
+    const deleted = await service.deleteSpace();
+    expect(deleted.success).toBe(true);
+    expect(api.calls.deleteSpace).toBe(1);
+
+    // Local credential and space key are both gone: the machine is un-paired.
+    const credential = await new SyncCredentialsStore(store).get();
+    expect(credential.success && credential.data).toBeNull();
+    expect(await storedKeyId(store)).toBeNull();
+
+    const state = await service.getState();
+    expect(state.success).toBe(true);
+    if (!state.success) return;
+    expect(state.data).toEqual({ paired: false, spaceId: null, deviceName: null });
+  });
+
+  it('deleteSpace leaves the local credential and space key intact when the relay call fails', async () => {
+    const api = new FakeRelayAuthApi();
+    const store = new FakeSecretStore();
+    const service = makeService(api, store);
+    const created = await service.createSpace('first');
+    if (!created.success) throw new Error('create failed');
+    const keyIdBefore = await storedKeyId(store);
+
+    api.forced.deleteSpace = { type: 'network_error', message: 'fetch failed' };
+    const deleted = await service.deleteSpace();
+    expect(deleted.success).toBe(false);
+    if (deleted.success) return;
+    expect(deleted.error.code).toBe('network_error');
+
+    // Nothing was cleared locally: the machine can retry the delete.
+    const credential = await new SyncCredentialsStore(store).get();
+    expect(credential.success && credential.data?.spaceId).toBe(created.data.spaceId);
+    expect(await storedKeyId(store)).toBe(keyIdBefore);
   });
 });
 

@@ -24,6 +24,7 @@ import type { SqlDb } from './db';
 import * as store from './store';
 import type {
   CreateSpaceRequest,
+  DeleteSpaceResult,
   DevicesResult,
   JoinRequest,
   JoinResult,
@@ -193,6 +194,24 @@ export async function mintJoinSecret(
     attempts_left: MAX_JOIN_ATTEMPTS,
   });
   return { join_hash: input.join_hash };
+}
+
+/**
+ * Permanently deletes a space and everything scoped to it — sync rows, pull
+ * cursors, every device token, pending join secrets, the version counter,
+ * and the space row itself — in a single `db.batch()`, the same
+ * transactional guarantee `createSpace` uses for its inserts, so a caller
+ * never observes a partially-deleted space. This is "delete my data": there
+ * is no soft-delete, no undo, and (by design) nothing is retained for audit
+ * — the space id cannot be resurrected afterwards.
+ */
+export async function deleteSpace(
+  db: SqlDb,
+  auth: AuthContext,
+  now: number
+): Promise<DeleteSpaceResult> {
+  await store.deleteSpaceRows(db, auth.spaceId);
+  return { space_id: auth.spaceId, deleted: true, deleted_at: now };
 }
 
 // ---------------------------------------------------------------------------

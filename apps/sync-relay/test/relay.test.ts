@@ -1026,6 +1026,103 @@ describe('token authentication', () => {
   });
 });
 
+describe('space deletion', () => {
+  const TABLES = [
+    'spaces',
+    'tokens',
+    'join_secrets',
+    'sync_rows',
+    'pull_cursors',
+    'version_counters',
+  ] as const;
+
+  async function countRows(db: SqlDb, table: string, spaceId: string): Promise<number> {
+    const result = await db
+      .prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE space_id = ?1`)
+      .bind(spaceId)
+      .first<{ count: number }>();
+    return result?.count ?? 0;
+  }
+
+  async function rowCounts(db: SqlDb, spaceId: string): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    for (const table of TABLES) {
+      counts[table] = await countRows(db, table, spaceId);
+    }
+    return counts;
+  }
+
+  /** Populates every table `deleteSpace` must touch for a space. */
+  async function populateSpace(
+    db: SqlDb,
+    name: string
+  ): Promise<SpaceCreated & { tokenB: string }> {
+    const space = await createSpace(db, name);
+    // A live second tokens row beyond the one created at space creation.
+    const joined = await joinWith(db, space.secret, space.space_id);
+    const tokenB = (joined.body as JoinResult).device_token;
+    // A sync_rows row + a fresh version_counters row.
+    await post(
+      db,
+      '/v1/sync/push',
+      { mutations: [{ table: 't', pk: 'a', body: 'A', op: 'upsert' }] },
+      space.device_token
+    );
+    // A pull_cursors row (recorded because the pull returned patches).
+    await post(db, '/v1/sync/pull', { cursor: 0 }, space.device_token);
+    return { ...space, tokenB };
+  }
+
+  it('wipes every row scoped to the space and leaves other spaces untouched', async () => {
+    const db = await makeDb();
+    const a = await populateSpace(db, 'a');
+    const b = await populateSpace(db, 'b');
+
+    // Sanity: both spaces have rows in every table before deletion.
+    for (const space of [a, b]) {
+      const counts = await rowCounts(db, space.space_id);
+      for (const table of TABLES) {
+        expect(counts[table], `${table} for ${space.space_id}`).toBeGreaterThan(0);
+      }
+    }
+
+    const result = await post(db, '/v1/space/delete', undefined, a.device_token);
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ space_id: a.space_id, deleted: true, deleted_at: T0 });
+
+    expect(await rowCounts(db, a.space_id)).toEqual({
+      spaces: 0,
+      tokens: 0,
+      join_secrets: 0,
+      sync_rows: 0,
+      pull_cursors: 0,
+      version_counters: 0,
+    });
+
+    // Space B is untouched.
+    const bCounts = await rowCounts(db, b.space_id);
+    for (const table of TABLES) {
+      expect(bCounts[table], `${table} for ${b.space_id}`).toBeGreaterThan(0);
+    }
+
+    // Every token of the deleted space, including the one that just made the
+    // call, is gone — the relay has nothing left to authenticate against.
+    expect((await get(db, '/v1/devices', a.device_token)).status).toBe(401);
+    expect((await get(db, '/v1/devices', a.tokenB)).status).toBe(401);
+  });
+
+  it('requires a valid device token', async () => {
+    const db = await makeDb();
+    const space = await createSpace(db);
+    expect((await post(db, '/v1/space/delete', undefined)).status).toBe(401);
+
+    // Nothing was deleted: the space's own token still works.
+    const devices = await get(db, '/v1/devices', space.device_token);
+    expect(devices.status).toBe(200);
+    expect((devices.body as { devices: DeviceInfo[] }).devices).toHaveLength(1);
+  });
+});
+
 describe('long-poll notification channel', () => {
   it('returns immediately with an empty patch set when nothing changed', async () => {
     const db = await makeDb();

@@ -28,6 +28,7 @@ type PairingCreated = { success: true; spaceId: string; secret: string; deepLink
 type PairingJoined = { success: true; spaceId: string };
 type PairingMinted = { success: true; secret: string; deepLink: string };
 type PairingRevoked = { success: true };
+type PairingSpaceDeleted = { success: true };
 
 function failure(error: { code: PairingErrorCode; message: string }): PairingFailure {
   return { success: false, code: error.code, message: error.message };
@@ -129,6 +130,19 @@ export const syncController = createRPCController({
   revokeDevice: async (deviceId: string): Promise<PairingRevoked | PairingFailure> => {
     const result = await pairingService.revokeDevice(deviceId);
     if (!result.success) return failure(result.error);
+    return { success: true };
+  },
+
+  /**
+   * Permanently deletes the paired space ("delete my data") and un-pairs
+   * this machine.
+   */
+  deleteSpace: async (): Promise<PairingSpaceDeleted | PairingFailure> => {
+    const result = await pairingService.deleteSpace();
+    if (!result.success) return failure(result.error);
+    // The credential is gone; kick so the status widget reflects "unpaired"
+    // right away instead of waiting for the in-flight poll to notice.
+    syncService.kick();
     return { success: true };
   },
 });

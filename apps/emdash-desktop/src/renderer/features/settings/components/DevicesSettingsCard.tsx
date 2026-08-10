@@ -15,14 +15,15 @@ type LoadState = 'loading' | 'ready' | 'error';
  * following the `SshConnectionsSettingsCard` pattern: when this machine is not
  * paired it offers to create a space (first device) or join one with a
  * pairing secret; when paired it lists the space's devices, mints fresh
- * pairing secrets for additional devices, and revokes devices with
- * confirmation.
+ * pairing secrets for additional devices, revokes devices with confirmation,
+ * and can permanently delete the whole sync space ("delete my data").
  */
 export function DevicesSettingsCard({ relayConfigured }: { relayConfigured?: boolean | null }) {
   const [state, setState] = useState<SyncState | null>(null);
   const [devices, setDevices] = useState<SyncDeviceInfo[] | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [deletingSpace, setDeletingSpace] = useState(false);
 
   const showPairingSecret = useShowModal('pairingSecretModal');
   const showJoinSpace = useShowModal('joinSyncSpaceModal');
@@ -100,6 +101,34 @@ export function DevicesSettingsCard({ relayConfigured }: { relayConfigured?: boo
     },
     [showConfirm, revokeDevice]
   );
+
+  const deleteSpace = useCallback(async () => {
+    setDeletingSpace(true);
+    try {
+      const result = await rpc.sync.deleteSpace();
+      if (!result.success) {
+        toast({ title: result.message, variant: 'destructive' });
+        return;
+      }
+      toast({ title: 'Sync space deleted' });
+      await refresh();
+    } finally {
+      setDeletingSpace(false);
+    }
+  }, [refresh]);
+
+  const requestDeleteSpace = useCallback(() => {
+    showConfirm({
+      title: 'Delete sync space?',
+      description:
+        'This permanently deletes the sync space and all synced data for every paired device, not just this one. Every device will be un-paired. This cannot be undone.',
+      confirmLabel: 'Delete',
+      variant: 'destructive',
+      onSuccess: () => {
+        void deleteSpace();
+      },
+    });
+  }, [showConfirm, deleteSpace]);
 
   if (loadState === 'loading') {
     return (
@@ -221,6 +250,26 @@ export function DevicesSettingsCard({ relayConfigured }: { relayConfigured?: boo
             ))}
           </div>
         )}
+
+        <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+          <p className="max-w-sm text-xs text-foreground-passive">
+            Permanently delete this sync space and all its data from every paired device.
+          </p>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={deletingSpace}
+            onClick={requestDeleteSpace}
+          >
+            {deletingSpace ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <Trash2 className="size-4" />
+            )}
+            Delete sync space
+          </Button>
+        </div>
       </div>
     );
   }

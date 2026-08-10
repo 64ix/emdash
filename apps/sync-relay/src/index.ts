@@ -13,6 +13,7 @@ import { ensureSchema } from './schema';
 import {
   ApiError,
   createSpace,
+  deleteSpace,
   join,
   listDevices,
   mintJoinSecret,
@@ -98,6 +99,7 @@ async function authenticate(db: SqlDb, request: Request, now: number): Promise<A
 
 const KNOWN_PATHS = new Set([
   '/v1/space',
+  '/v1/space/delete',
   '/v1/join',
   '/v1/devices',
   '/v1/devices/join-secret',
@@ -148,6 +150,9 @@ export async function handle(
       return json({ error: 'unauthorized' } satisfies ErrorResult, 401);
     }
 
+    if (request.method === 'POST' && pathname === '/v1/space/delete') {
+      return json(await deleteSpace(db, auth, now));
+    }
     if (request.method === 'POST' && pathname === '/v1/devices/join-secret') {
       const body = (await readJson(request)) as { join_hash?: unknown };
       return json(await mintJoinSecret(db, auth, body, now));

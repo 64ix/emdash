@@ -3,8 +3,9 @@
  *
  * Attaches this machine to a relay sync space: creates a space (first device),
  * joins one with a pairing secret (second device), mints fresh pairing secrets
- * for additional devices, and lists/revokes the devices of the space. The
- * device token + space id are stored machine-locally through
+ * for additional devices, lists/revokes the devices of the space, and
+ * permanently deletes the space ("delete my data"). The device token + space
+ * id are stored machine-locally through
  * `SyncCredentialsStore` (safeStorage); the space data key K0 is stored under
  * `SpaceKeyStore` (safeStorage, SYNC_ENCRYPTION_KEY_SECRET_KEY); the machine
  * identity comes from the `device` KV namespace (device-identity.ts).
@@ -237,6 +238,37 @@ export class PairingService {
     if (!result.success) {
       return err(fromApiError(result.error));
     }
+    return ok();
+  }
+
+  /**
+   * Permanently deletes the paired space and everything scoped to it on the
+   * relay ("delete my data"), then clears this machine's local credential
+   * and space key so it un-pairs. Irreversible: once deleted, the space
+   * cannot be resurrected and this machine cannot sync again until it
+   * creates or joins a new one. Local state is only cleared after the relay
+   * confirms the delete, so a network/relay failure leaves this machine
+   * paired (and free to retry) instead of stranding it mid-deletion.
+   */
+  async deleteSpace(): Promise<Result<void, PairingError>> {
+    const tokenResult = await this.requireToken();
+    if (!tokenResult.success) {
+      return tokenResult;
+    }
+    const result = await this.api.deleteSpace(tokenResult.data.token);
+    if (!result.success) {
+      return err(fromApiError(result.error));
+    }
+    const { spaceId } = tokenResult.data;
+    const credentialCleared = await this.credentials.clear();
+    if (!credentialCleared.success) {
+      return err(fromCredentialError(credentialCleared.error));
+    }
+    const keyCleared = await this.keys.clear();
+    if (!keyCleared.success) {
+      return err(pairingError('persistence_failed'));
+    }
+    log.info('sync space deleted', { spaceId });
     return ok();
   }
 

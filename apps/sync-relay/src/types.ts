@@ -65,6 +65,13 @@ export interface RevokeResult {
   revoked: boolean;
 }
 
+/** `POST /v1/space/delete` response ("delete my data"): no request body. */
+export interface DeleteSpaceResult {
+  space_id: string;
+  deleted: true;
+  deleted_at: number;
+}
+
 export interface PullRequest {
   /** Return only rows with version > cursor. Defaults to 0. */
   cursor?: number;

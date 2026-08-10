@@ -352,3 +352,25 @@ export async function gcTombstones(
     .bind(spaceId, now - capMs)
     .run();
 }
+
+// ---------------------------------------------------------------------------
+// Space deletion ("delete my data")
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard-deletes every row scoped to a space — sync rows, pull cursors, device
+ * tokens, pending join secrets, the version counter, and the space row
+ * itself — inside a single `db.batch()` (the same transactional guarantee
+ * `stampAndWriteRow` uses), so a caller never observes a partially-deleted
+ * space. Irreversible: there is no soft-delete and nothing is retained.
+ */
+export function deleteSpaceRows(db: SqlDb, spaceId: string): Promise<SqlResult[]> {
+  return db.batch([
+    db.prepare('DELETE FROM sync_rows WHERE space_id = ?1').bind(spaceId),
+    db.prepare('DELETE FROM pull_cursors WHERE space_id = ?1').bind(spaceId),
+    db.prepare('DELETE FROM tokens WHERE space_id = ?1').bind(spaceId),
+    db.prepare('DELETE FROM join_secrets WHERE space_id = ?1').bind(spaceId),
+    db.prepare('DELETE FROM version_counters WHERE space_id = ?1').bind(spaceId),
+    db.prepare('DELETE FROM spaces WHERE space_id = ?1').bind(spaceId),
+  ]);
+}

@@ -21,6 +21,7 @@ unauthenticated by design).
 | Endpoint | Auth | Request | Response |
 | --- | --- | --- | --- |
 | `POST /v1/space` | — | `{name?}` | `{space_id, device_id, device_token, secret}` |
+| `POST /v1/space/delete` | ✓ | — | `{space_id, deleted: true, deleted_at}` |
 | `POST /v1/join` | — | `{join_hash, space_id, name?}` | `{device_id, device_token, space_id}` |
 | `POST /v1/devices/join-secret` | ✓ | `{join_hash}` | `{join_hash}` |
 | `GET /v1/devices` | ✓ | — | `{devices: [{device_id, name, created_at, last_seen_at, revoked, revoked_at, self}]}` |
@@ -91,6 +92,17 @@ device), 500 (internal).
 - Secrets are **single-use**, **TTL-bounded (15 minutes)**, and
   **attempt-limited (5 attempts)** — the budget is enforced in the Worker (per
   secret), not via Cloudflare rate-limit rules.
+
+### Deletion ("delete my data")
+
+`POST /v1/space/delete` permanently deletes the authenticated token's space
+and everything scoped to it — sync rows, pull cursors, every device token
+(every paired device is un-paired at once, not merely revoked), pending join
+secrets, and the version counter — in one `db.batch()`, the same
+transactional guarantee `POST /v1/space` uses for its inserts. There is no
+soft-delete, no undo, and nothing is retained for audit; the space id cannot
+be resurrected afterwards (a later `POST /v1/space` mints a fresh, unrelated
+one).
 
 ## Storage
 
