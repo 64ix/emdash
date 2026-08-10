@@ -158,6 +158,13 @@ export class PairingService {
     if (parts === null) {
       return err(pairingError('invalid_secret_format'));
     }
+    // Guard against a mis-pasted secret silently switching this machine to a
+    // different space (which would overwrite its token + K0 and drop sync with
+    // its current devices). Re-joining the SAME space is fine.
+    const existing = await this.credentials.get();
+    if (existing.success && existing.data !== null && existing.data.spaceId !== parts.spaceId) {
+      return err(pairingError('already_paired'));
+    }
     const identity = await this.identity();
     const name = deviceName?.trim() || identity.deviceName;
     const result = await this.api.joinSpace(joinCredentialOf(parts.joinHalf), parts.spaceId, name);

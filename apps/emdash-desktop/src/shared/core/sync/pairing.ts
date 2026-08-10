@@ -76,6 +76,7 @@ export type PairingErrorCode =
   | 'unauthorized'
   | 'device_not_found'
   | 'not_paired'
+  | 'already_paired'
   | 'persistence_failed'
   | 'relay_error'
   | 'network_error';
@@ -93,6 +94,8 @@ export function userFacingPairingMessage(code: PairingErrorCode, status?: number
       return 'That device was not found in this sync space. It may have been removed already.';
     case 'not_paired':
       return 'This machine is not paired with a sync space yet.';
+    case 'already_paired':
+      return 'This machine is already paired with a different sync space. Remove it from that space (Devices) before joining another.';
     case 'persistence_failed':
       return 'Could not save the device credentials securely on this machine.';
     case 'relay_error':

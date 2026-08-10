@@ -362,6 +362,24 @@ describe('PairingService', () => {
     expect(secondJoin.error.message).toBe(userFacingPairingMessage('invalid_join_secret'));
   });
 
+  it('refuses to join a different space while already paired (no silent overwrite)', async () => {
+    const api = new FakeRelayAuthApi();
+    const spaceA = await makeService(api, new FakeSecretStore()).createSpace('a');
+    const spaceB = await makeService(api, new FakeSecretStore()).createSpace('b');
+    if (!spaceA.success || !spaceB.success) throw new Error('create failed');
+
+    const machine = makeService(api, new FakeSecretStore());
+    expect((await machine.joinSpace(spaceA.data.secret, 'm')).success).toBe(true);
+    const joinsBefore = api.calls.joinSpace;
+
+    const cross = await machine.joinSpace(spaceB.data.secret, 'm');
+    expect(cross.success).toBe(false);
+    if (cross.success) return;
+    expect(cross.error.code).toBe('already_paired');
+    // The guard runs before touching the relay — no join attempt is made.
+    expect(api.calls.joinSpace).toBe(joinsBefore);
+  });
+
   it('rejects an expired secret with the same clear message (TTL)', async () => {
     const now = 1_800_000_000_000;
     const api = new FakeRelayAuthApi(now);

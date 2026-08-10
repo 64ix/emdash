@@ -35,6 +35,7 @@ import type { DeviceIdentity } from './device-identity';
 import { EncryptingRelayTransport } from './encrypting-transport';
 import { SyncEngine, type SyncEngineOptions, type SyncError } from './engine';
 import type { SpaceKey, SpaceKeyStoreError } from './space-key-store';
+import { RelayHttpError } from './transport';
 import type { SyncCredential, SyncCredentialError } from './sync-credentials';
 import type { RelayTransport } from './transport';
 
@@ -56,6 +57,13 @@ export type SyncServiceDeps = {
   getCredentials: () => Promise<Result<SyncCredential | null, SyncCredentialError>>;
   /** Machine-local space data key K0, or none. */
   getSpaceKey: () => Promise<Result<SpaceKey | null, SpaceKeyStoreError>>;
+  /**
+   * Drops the machine-local credential + space key. Called when the relay
+   * rejects this device's token (401/403) — the device was removed/revoked, so
+   * the machine un-pairs cleanly and returns to onboarding instead of looping
+   * on an unrecoverable auth error forever.
+   */
+  onAuthRevoked?: () => Promise<void>;
   /** Stable device identity recorded in every pushed body. */
   getDeviceIdentity: () => Promise<DeviceIdentity>;
   /** Builds the base transport for a device token (production: HttpRelayTransport). */
@@ -101,6 +109,11 @@ function messageOf(error: unknown): string {
 
 function isRelayUnreachable(error: unknown): boolean {
   return messageOf(error).includes(RELAY_UNREACHABLE_MARKER);
+}
+
+/** A permanent auth rejection: this device's token was revoked/removed. */
+function isAuthRevoked(error: unknown): boolean {
+  return error instanceof RelayHttpError && (error.status === 401 || error.status === 403);
 }
 
 /** User-facing message for a failed sync; details stay in the logs. */
@@ -353,6 +366,15 @@ export class SyncService {
   }
 
   private async markPollFailure(error: unknown): Promise<void> {
+    // A revoked/removed device keeps getting 401 forever; clear the local
+    // credential + key so the loop un-pairs and returns to onboarding instead
+    // of spinning on an unrecoverable error.
+    if (isAuthRevoked(error)) {
+      await this.deps.onAuthRevoked?.();
+      this.updateStatus({ ...IDLE_STATUS });
+      log.warn('[sync] device token rejected by relay (revoked); cleared local credential');
+      return;
+    }
     const engine = await this.buildEngine();
     const pendingCount = engine === null ? 0 : engine.pendingCount();
     const offline = isRelayUnreachable(error);

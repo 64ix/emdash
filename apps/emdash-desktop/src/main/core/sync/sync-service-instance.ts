@@ -29,6 +29,10 @@ export const syncService = new SyncService({
   sqlite,
   getCredentials: () => credentials.get(),
   getSpaceKey: () => spaceKeys.get(),
+  onAuthRevoked: async () => {
+    await credentials.clear();
+    await spaceKeys.clear();
+  },
   getDeviceIdentity: getOrCreateDeviceIdentity,
   createTransport: (token) => new HttpRelayTransport(getRelayEndpoint, async () => token),
   projectAttachHook: createProjectAutoAttachHook(),

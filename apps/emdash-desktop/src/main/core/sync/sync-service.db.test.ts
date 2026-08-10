@@ -62,7 +62,7 @@ vi.mock('@main/core/projects/project-manager', () => ({
 // In-process fake relay (wire semantics of apps/sync-relay)
 // ---------------------------------------------------------------------------
 
-type FailureMode = 'ok' | 'offline' | 'server-error';
+type FailureMode = 'ok' | 'offline' | 'server-error' | 'revoked';
 
 interface RelayRow {
   version: number;
@@ -150,6 +150,9 @@ class FakeRelay implements RelayTransport {
     }
     if (this.pollMode === 'server-error') {
       throw new RelayHttpError(500, 'server exploded');
+    }
+    if (this.pollMode === 'revoked') {
+      throw new RelayHttpError(401, '{"error":"unauthorized"}');
     }
     return this.patchesSince(cursor, 1000);
   }
@@ -551,6 +554,26 @@ describe('SyncService', () => {
       expect(relay.storedRows().some((r) => r.table === 'projects' && r.pk === PROJECT_A)).toBe(
         true
       );
+    });
+
+    it('un-pairs and returns to idle when the relay rejects the device token (revoked)', async () => {
+      await seedLocalProject();
+      vi.useFakeTimers();
+      const onAuthRevoked = vi.fn(async () => {});
+      service = makeService({ onAuthRevoked });
+      // The continuous poll is where a removed device's 401 surfaces.
+      relay.pollMode = 'revoked';
+      service.start();
+      // Let the launch sync settle, then run several poll cycles through backoff.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(200);
+
+      // The credential is cleared (not looped on 'error' forever) and the
+      // widget settles to idle so onboarding can re-appear.
+      expect(onAuthRevoked).toHaveBeenCalled();
+      expect(lastStatus().state).toBe('idle');
     });
 
     it('kicks a sync when the OS reports the connection back', async () => {
