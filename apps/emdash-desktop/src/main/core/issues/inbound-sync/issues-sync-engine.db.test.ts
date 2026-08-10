@@ -325,6 +325,64 @@ describe('IssuesSyncEngine', () => {
     expect(mocks.emit).not.toHaveBeenCalledWith(taskWorkflowStageUpdatedChannel, expect.anything());
   });
 
+  // Regression: a project-root task shares the repository's checkout branch
+  // with every other root task — a merged PR on that branch is not proof the
+  // task shipped (the auto-update task's Spec #258 stayed open while a merged
+  // PR on the checked-out afk/prd-153-... branch proved `shipped`). Only a
+  // worktree's own branch counts.
+  it('does not treat a merged PR on a project-root branch as proof of shipping', async () => {
+    const [workspace] = await fixture.db
+      .insert(workspaces)
+      .values({
+        id: 'workspace-1',
+        type: 'local',
+        kind: 'project-root',
+        branchName: 'shared-branch',
+      })
+      .returning();
+    await insertTask({
+      workflowStage: 'spec',
+      workspaceId: workspace!.id,
+      linkedIssues: {
+        version: '1',
+        spec: {
+          provider: 'github',
+          identifier: '#22',
+          title: '[Spec] Feature',
+          url: `${REPOSITORY_URL}/issues/22`,
+          status: 'closed',
+        },
+      },
+    });
+    await fixture.db.insert(pullRequests).values({
+      url: `${REPOSITORY_URL}/pull/2`,
+      repositoryUrl: REPOSITORY_URL,
+      baseRefName: 'main',
+      baseRefOid: 'base-oid',
+      headRepositoryUrl: REPOSITORY_URL,
+      headRefName: 'shared-branch',
+      headRefOid: 'head-oid',
+      identifier: '#2',
+      title: 'Unrelated merged PR',
+      status: 'merged',
+    });
+    const issue = makeIssue({ number: 22, url: `${REPOSITORY_URL}/issues/22`, state: 'closed' });
+    const client = new FakeGitHubIssuesClient(new Map([[22, issue]]));
+
+    const result = await makeEngine(client).sync(PROJECT_ID, REPOSITORY_URL);
+
+    expect(result).toEqual(
+      ok({
+        stageChanges: 1,
+        roleAttachments: 0,
+        suggestionsChanged: false,
+        ghostCardsChanged: false,
+      })
+    );
+    const [row] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-1'));
+    expect(row?.workflowStage).toBe('triage');
+  });
+
   it('never auto-moves a task out of triage even when its Spec reopens', async () => {
     await insertTask({
       workflowStage: 'triage',

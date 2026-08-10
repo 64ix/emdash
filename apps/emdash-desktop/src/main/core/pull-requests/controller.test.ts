@@ -385,6 +385,22 @@ describe('pullRequestController', () => {
     expect(mockPrQueryService.getTaskPullRequests).not.toHaveBeenCalled();
   });
 
+  // Regression: a project-root task shares the repository's checkout branch —
+  // it is not the task's own branch, so its PRs must never surface as the
+  // task's PRs (the auto-update task was linked to the PR of whatever branch
+  // happened to be checked out, with no way to unlink it).
+  it('returns no task pull requests for a project-root workspace', async () => {
+    mockProviderRepositoryUrl('https://github.com/acme/repo');
+    queueDbSelectResult([{ workspaceId: 'workspace-1' }]);
+    queueDbSelectResult([{ kind: 'project-root', branchName: 'afk/prd-153-unrelated' }]);
+
+    await expect(
+      pullRequestController.getPullRequestsForTask('project-1', 'task-1')
+    ).resolves.toEqual(ok({ prs: [], branchName: null }));
+
+    expect(mockPrQueryService.getTaskPullRequests).not.toHaveBeenCalled();
+  });
+
   it('passes the project GitHub account context to pull request creation and follow-up sync', async () => {
     mockProjectGithubContext();
     mockPrSyncEngine.createPullRequest.mockResolvedValue(

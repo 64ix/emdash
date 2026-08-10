@@ -3,6 +3,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { parseGitHubIssueUrl } from '@main/core/issues/inbound-sync/github-issue-url';
 import { pullRequestRepositoryScope } from '@main/core/pull-requests/pr-utils';
 import { taskSessionManager } from '@main/core/tasks/task-session-manager';
+import { getTaskPrBranch } from '@main/core/workspaces/workspace-branch';
 import { db } from '@main/db/client';
 import { projectRemotes, pullRequests, tasks, workspaces } from '@main/db/schema';
 import { events } from '@main/lib/events';
@@ -380,12 +381,13 @@ export class BoardSyncService implements IInitializable, IDisposable {
     if (workspaceIds.length === 0) return map;
 
     const rows = await db
-      .select({ id: workspaces.id, branchName: workspaces.branchName })
+      .select({ id: workspaces.id, kind: workspaces.kind, branchName: workspaces.branchName })
       .from(workspaces)
       .where(inArray(workspaces.id, workspaceIds));
 
     for (const row of rows) {
-      if (row.branchName) map.set(row.id, row.branchName);
+      const branchName = getTaskPrBranch(row);
+      if (branchName) map.set(row.id, branchName);
     }
     return map;
   }

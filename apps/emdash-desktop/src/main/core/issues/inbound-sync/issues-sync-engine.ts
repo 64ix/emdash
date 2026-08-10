@@ -3,6 +3,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { GitHubApiAuthError } from '@main/core/github/services/github-api-auth-errors';
 import type { GitHubApiAuthContext } from '@main/core/github/services/github-api-auth-service';
 import { writeLinkedIssueRole, writeTaskWorkflowStage } from '@main/core/tasks/task-fact-writes';
+import { getTaskPrBranch } from '@main/core/workspaces/workspace-branch';
 import { db } from '@main/db/client';
 import { pullRequests, tasks, workspaces } from '@main/db/schema';
 import { events } from '@main/lib/events';
@@ -113,10 +114,10 @@ export class IssuesSyncEngine {
     const branchByWorkspaceId = new Map<string, string | null>();
     if (workspaceIds.length > 0) {
       const wsRows = await db
-        .select({ id: workspaces.id, branchName: workspaces.branchName })
+        .select({ id: workspaces.id, kind: workspaces.kind, branchName: workspaces.branchName })
         .from(workspaces)
         .where(inArray(workspaces.id, workspaceIds));
-      for (const w of wsRows) branchByWorkspaceId.set(w.id, w.branchName);
+      for (const w of wsRows) branchByWorkspaceId.set(w.id, getTaskPrBranch(w));
     }
 
     const tasksById = new Map<string, (typeof rows)[number]>();

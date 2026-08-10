@@ -1,3 +1,4 @@
+import { parseRepositoryRef } from '@shared/repository-ref';
 import type { WorkflowStage } from '../tasks/tasks';
 import type { PullRequestStatus } from './pull-requests';
 
@@ -41,10 +42,54 @@ export function parseIssueNumberFromIdentifier(
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** The normalized `owner/repo` of a repository URL (lowercased), or null. */
+function nameWithOwnerOf(repositoryUrl: string): string | null {
+  return parseRepositoryRef(repositoryUrl)?.nameWithOwner.toLowerCase() ?? null;
+}
+
+/**
+ * A GitHub issue reference parsed out of a PR body: the repository it points
+ * at (`nameWithOwner`, lowercased) when the body qualified it, else `null`
+ * for a bare `#N` — which references the PR's *own* repository.
+ */
+type BodyIssueReference = { repository: string | null; number: number };
+
+/** `https://host/owner/repo`, `owner/repo#N` — the repo-qualified sigils
+ * GitHub itself auto-links. */
+const REPO_QUALIFIED_REF = /(?:https?:\/\/[^\s/)]+\/)?([\w.-]+\/[\w.-]+)#(\d+)(?!\d)/g;
+/** `https://host/owner/repo/issues/N`. */
+const ISSUE_URL_REF = /(?:https?:\/\/[^\s/)]+)?\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)(?!\d)/g;
+
+/**
+ * Parses the GitHub issue references in a PR body the way GitHub itself means
+ * them: bare `#N` (references the PR's own repository — `repository: null`),
+ * repo-qualified `owner/repo#N`, and `/issues/N` URLs. Prose-qualified
+ * references name the repository they point at; the Spec-number boundary of
+ * `bodyReferencesIssueNumber` lives here, so a `dorny/test-reporter#258`
+ * quoted in release notes can never answer for the Spec #258 of the PR's own
+ * repository.
+ */
+function parseBodyIssueReferences(text: string): BodyIssueReference[] {
+  const references: BodyIssueReference[] = [];
+  for (const match of text.matchAll(REPO_QUALIFIED_REF)) {
+    references.push({ repository: match[1].toLowerCase(), number: Number.parseInt(match[2], 10) });
+  }
+  for (const match of text.matchAll(ISSUE_URL_REF)) {
+    references.push({ repository: match[1].toLowerCase(), number: Number.parseInt(match[2], 10) });
+  }
+  for (const match of text.matchAll(/(?<![\w.-])#(\d+)(?!\d)/g)) {
+    references.push({ repository: null, number: Number.parseInt(match[1], 10) });
+  }
+  return references;
+}
+
 /**
  * True when a PR body references `issueNumber` the way GitHub itself means it:
- * the `#N` sigil (bare `#66`, or repo-qualified `owner/repo#66`) or an issue URL
- * ending in `/issues/N`.
+ * a bare `#N`, or a repo-qualified reference (`owner/repo#N`, `/issues/N`
+ * URL) pointing at the Spec's repository — when known — or at the PR's own
+ * repository. A qualified reference to a *third* repository (`dorny/
+ * test-reporter#258` inside a merged PR's dependabot release notes) names
+ * that repository's issue, never the Spec's, so it never matches.
  *
  * The sigil is load-bearing. Matching the bare digits with only a
  * "not adjacent to another digit" boundary made every hex commit SHA, gist id
@@ -53,8 +98,24 @@ export function parseIssueNumberFromIdentifier(
  * sat between a backtick and a `d`. Prose is full of numbers that are not issue
  * references, so the reference has to be marked as one.
  */
-function bodyReferencesIssueNumber(text: string, issueNumber: number): boolean {
-  return new RegExp(`(?:#|/issues/)${issueNumber}(?!\\d)`).test(text);
+function bodyReferencesIssueNumber(
+  text: string,
+  issueNumber: number,
+  options: { prRepository: string | null; specRepository: string | null }
+): boolean {
+  const { prRepository, specRepository } = options;
+  return parseBodyIssueReferences(text).some((reference) => {
+    if (reference.number !== issueNumber) return false;
+    if (reference.repository === null) return true;
+    // A qualified reference only points at the Spec when it names the Spec's
+    // repository (when known) or the PR's own repository — `64ix/ProtoRTS#258`
+    // in an upstream PR still references the fork's issue, a bare `#258` in a
+    // ProtoRTS PR does too, but a third-party issue never does.
+    return (
+      reference.repository === specRepository ||
+      (prRepository != null && reference.repository === prRepository)
+    );
+  });
 }
 
 /**
@@ -102,7 +163,10 @@ export function findSpecMatchingPrs<T extends PrWorkflowFact>(
     const bySpec = candidates.filter(
       (pr) =>
         (pr.description != null &&
-          bodyReferencesIssueNumber(pr.description, task.specIssueNumber!)) ||
+          bodyReferencesIssueNumber(pr.description, task.specIssueNumber!, {
+            prRepository: nameWithOwnerOf(pr.repositoryUrl),
+            specRepository: task.specRepositoryUrl ? nameWithOwnerOf(task.specRepositoryUrl) : null,
+          })) ||
         branchReferencesIssueNumber(pr.headRefName, task.specIssueNumber!)
     );
     if (bySpec.length > 0) return bySpec;
