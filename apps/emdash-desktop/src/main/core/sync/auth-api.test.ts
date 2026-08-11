@@ -140,6 +140,7 @@ describe('HttpRelayAuthApi', () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error.type).toBe('relay_error');
+    if (result.error.type !== 'relay_error') return;
     expect(result.error.status).toBe(404);
   });
 
@@ -154,6 +155,7 @@ describe('HttpRelayAuthApi', () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error.type).toBe('relay_error');
+    if (result.error.type !== 'relay_error') return;
     expect(result.error.status).toBe(404);
   });
 
@@ -188,6 +190,7 @@ describe('HttpRelayAuthApi', () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error.type).toBe('relay_error');
+    if (result.error.type !== 'relay_error') return;
     expect(result.error.status).toBe(503);
   });
 

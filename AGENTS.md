@@ -336,6 +336,11 @@ pnpm run test
 - CI runs `.github/workflows/code-consistency-check.yml` with `nx affected` for
   `format:check`, `typecheck`, and `lint` on touched projects and dependents.
 - Tests are still expected locally before merge even where CI coverage is narrower.
+- After every push to a remote branch, check the CI runs for that branch
+  (`gh run list --branch <branch>`, or `gh api repos/64ix/emdash/commits/<sha>/check-runs`)
+  and fix any problems the push introduced before moving on. The local merge gate is
+  not a substitute: CI uses `tsgo` (not the crashing `tsc`), runs on fresh installs,
+  and catches what local state hides.
 
 ## Security & Compliance
 
