@@ -81,7 +81,7 @@ describe('task lifecycle workspace cleanup', () => {
 
   it('removes worktrees by provisioned branch, not current-branch cache', async () => {
     const config: WorkspaceConfig = {
-      version: '2',
+      version: '3',
       git: {
         kind: 'create-branch',
         branchName: 'task/provisioned',

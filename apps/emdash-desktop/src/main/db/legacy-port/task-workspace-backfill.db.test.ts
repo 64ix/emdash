@@ -117,7 +117,7 @@ describe('ensureImportedTaskWorkspaces', () => {
       path: null,
       key: computeWorkspaceKey('project-ssh', '/srv/remote#feature/imported', 'ssh-1'),
       config: {
-        version: '2',
+        version: '3',
         git: { kind: 'use-branch', branchName: 'feature/imported' },
         workspace: { kind: 'new-worktree' },
       },

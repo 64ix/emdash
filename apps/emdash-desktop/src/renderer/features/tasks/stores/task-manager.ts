@@ -53,6 +53,10 @@ function formatCreateTaskError(error: CreateTaskError, opts?: { isSshProject?: b
   return match(error)
     .with({ type: 'project-not-found' }, () => 'Project not found.')
     .with(
+      { type: 'workspace-not-resolved' },
+      () => 'The project has no repository workspace on this machine. Attach it to continue.'
+    )
+    .with(
       { type: 'initial-commit-required' },
       () => 'Create an initial commit to enable branch-based tasks.'
     )

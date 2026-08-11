@@ -25,7 +25,7 @@ export function buildWorkspaceConfigFromPreset(
       const createBranch = overrides.createBranch ?? true;
       if (createBranch) {
         return {
-          version: '2',
+          version: '3',
           git: {
             kind: 'create-branch',
             branchName: overrides.branchName ?? '',
@@ -36,7 +36,7 @@ export function buildWorkspaceConfigFromPreset(
         };
       }
       return {
-        version: '2',
+        version: '3',
         git: { kind: 'use-branch', branchName: fromBranch.branch },
         workspace: { kind: 'new-worktree' },
       };
@@ -47,13 +47,13 @@ export function buildWorkspaceConfigFromPreset(
       if (!workspaceId) {
         // Pre-mount fallback: no repositoryWorkspaceId yet.
         return {
-          version: '2',
+          version: '3',
           git: { kind: 'none' },
           workspace: { kind: 'new-worktree' },
         };
       }
       return {
-        version: '2',
+        version: '3',
         git: { kind: 'none' },
         workspace: { kind: 'repository-instance', workspaceId },
       };
@@ -67,7 +67,7 @@ export function buildWorkspaceConfigFromPreset(
         );
       }
       return {
-        version: '2',
+        version: '3',
         git: { kind: 'none' },
         workspace: { kind: 'repository-instance', workspaceId },
       };
@@ -78,7 +78,7 @@ export function buildWorkspaceConfigFromPreset(
       if (!pr) throw new Error('checkout-pr preset requires a PR in context');
       const prNumber = getPrNumber(pr) ?? 0;
       return {
-        version: '2',
+        version: '3',
         git: {
           kind: 'pr-branch',
           prNumber,
@@ -95,7 +95,7 @@ export function buildWorkspaceConfigFromPreset(
       if (!pr) throw new Error('pr-new-branch preset requires a PR in context');
       const prNumber = getPrNumber(pr) ?? 0;
       return {
-        version: '2',
+        version: '3',
         git: {
           kind: 'pr-branch',
           prNumber,
@@ -111,7 +111,7 @@ export function buildWorkspaceConfigFromPreset(
 
     case 'sandbox': {
       return {
-        version: '2',
+        version: '3',
         git: { kind: 'none' },
         workspace: { kind: 'byoi' },
       };

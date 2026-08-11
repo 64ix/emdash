@@ -238,7 +238,8 @@ class SearchService {
           `INSERT OR REPLACE INTO search_index(item_type, item_id, project_id, task_id, title, keywords)
            VALUES ('project', ?, NULL, NULL, ?, ?)`
         )
-        .run(project.id, project.name, project.path);
+        // Unattached projects have no local path; search on name only.
+        .run(project.id, project.name, project.path ?? '');
     } catch (e) {
       log.warn('SearchService: upsertProject failed', {
         projectId: project.id,

@@ -17,6 +17,7 @@ const automation: Automation = {
   conversationConfig: { prompt: 'Check things', provider: 'claude', autoApprove: false },
   projectId: 'project-1',
   enabled: true,
+  source: 'local',
   createdAt: 0,
   updatedAt: 0,
 };

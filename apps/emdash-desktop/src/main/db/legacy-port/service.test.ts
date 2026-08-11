@@ -38,7 +38,8 @@ function createAppDb(): Database.Database {
       ssh_connection_id TEXT,
       repository_workspace_id TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE tasks (
@@ -63,7 +64,8 @@ function createAppDb(): Database.Database {
       workspace_intent TEXT,
       type TEXT NOT NULL DEFAULT 'task',
       automation_run_id TEXT,
-      assigned_pr_url TEXT
+      assigned_pr_url TEXT,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE workspaces (
@@ -96,8 +98,10 @@ function createAppDb(): Database.Database {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_interacted_at TEXT,
       is_initial_conversation INTEGER,
+      source TEXT NOT NULL DEFAULT 'local',
       agent_status TEXT,
-      agent_status_seen INTEGER DEFAULT 1
+      agent_status_seen INTEGER DEFAULT 1,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
   `);
   return db;
@@ -274,7 +278,7 @@ describe('runLegacyPort', () => {
       branch_name: 'feature/legacy-1',
     });
     expect(JSON.parse(importedWorkspace.config)).toEqual({
-      version: '2',
+      version: '3',
       git: { kind: 'use-branch', branchName: 'feature/legacy-1' },
       workspace: { kind: 'new-worktree' },
     });

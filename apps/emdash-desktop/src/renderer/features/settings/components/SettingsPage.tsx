@@ -9,11 +9,13 @@ import { SettingsSearchProvider } from '../search/settings-search-context';
 import { SETTINGS_TABS, type SettingsPageTab } from '../settings-tabs';
 import { AccountTab } from './AccountTab';
 import { BrowserSettingsCard } from './BrowserSettingsCard';
+import { DevicesSettingsCard } from './DevicesSettingsCard';
 import HiddenToolsSettingsCard from './HiddenToolsSettingsCard';
 import IntegrationsCard from './IntegrationsCard';
 import InterfaceSettingsCard from './InterfaceSettingsCard';
 import KeyboardSettingsCard from './KeyboardSettingsCard';
 import NotificationSettingsCard from './NotificationSettingsCard';
+import { RelaySettingsCard } from './RelaySettingsCard';
 import RepositorySettingsCard from './RepositorySettingsCard';
 import ResourceMonitorSettingsCard from './ResourceMonitorSettingsCard';
 import SidebarMetadataSettingsCard from './SidebarMetadataSettingsCard';
@@ -84,6 +86,21 @@ function ConnectionsSettingsPage() {
         description="Manage reusable SSH connections for remote projects."
       />
       <SshConnectionsSettingsCard />
+    </div>
+  );
+}
+
+function DevicesSettingsPage() {
+  const [relayConfigured, setRelayConfigured] = useState<boolean | null>(null);
+  return (
+    <div className="space-y-8">
+      <PageHeader
+        sticky
+        title="Devices"
+        description="Pair this machine with other devices and manage your sync space."
+      />
+      <RelaySettingsCard onConfiguredChange={setRelayConfigured} />
+      <DevicesSettingsCard relayConfigured={relayConfigured} />
     </div>
   );
 }
@@ -161,6 +178,7 @@ const TAB_CONTENT: Record<Exclude<SettingsPageTab, 'docs'>, React.ComponentType>
   'clis-models': AgentsSettingsPage,
   integrations: IntegrationsSettingsPage,
   connections: ConnectionsSettingsPage,
+  devices: DevicesSettingsPage,
   browser: BrowserSettingsPage,
   repository: RepositorySettingsPage,
   storage: StorageTabPage,

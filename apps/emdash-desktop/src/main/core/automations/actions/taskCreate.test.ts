@@ -96,7 +96,7 @@ const automation: Automation = {
       name: 'Stored task',
     },
     workspaceConfig: {
-      version: '2' as const,
+      version: '3' as const,
       git: {
         kind: 'create-branch' as const,
         branchName: 'stored-task-branch',
@@ -108,6 +108,7 @@ const automation: Automation = {
   },
   projectId: 'project-1',
   enabled: true,
+  source: 'local',
   createdAt: 0,
   updatedAt: 0,
 };
@@ -216,6 +217,25 @@ describe('executeTaskCreate', () => {
       step: 'create_task',
       code: 'branch_not_found',
       message: 'my-branch',
+    });
+    expect(commitCreateTask).not.toHaveBeenCalled();
+  });
+
+  it('fails before creating a task when the repository workspace cannot be resolved', async () => {
+    // A v3 repository-instance target without a workspace id on an Unattached
+    // project surfaces as workspace-not-resolved from prepareCreateTask: the
+    // run fails cleanly and no task row is committed.
+    vi.mocked(prepareCreateTask).mockResolvedValue({
+      success: false,
+      error: { type: 'workspace-not-resolved' },
+    });
+
+    const result = await executeTaskCreate(automation, run, noopStep);
+
+    expect(result).toEqual({ success: false, error: 'workspace-not-resolved' });
+    expect(markRunFailed).toHaveBeenCalledWith(run.id, {
+      step: 'create_task',
+      code: 'project_unattached',
     });
     expect(commitCreateTask).not.toHaveBeenCalled();
   });

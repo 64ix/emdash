@@ -280,12 +280,24 @@ export class ConversationStore {
       clearWorking: action,
       markSeen: action,
       isInitialConversation: computed,
+      isResumable: computed,
       indicatorStatus: computed,
     });
   }
 
   get isInitialConversation(): boolean {
     return this.data.isInitialConversation === true;
+  }
+
+  /**
+   * Whether this conversation has a session on this machine to resume
+   * (spec #130, ticket #137). `sessionId` is machine-specific and never
+   * synced, so a conversation imported from another machine has no local
+   * session until one is created — the conversation list shows it as
+   * "not resumable on this device" until then.
+   */
+  get isResumable(): boolean {
+    return this.data.source !== 'imported' || Boolean(this.data.sessionId);
   }
 
   get indicatorStatus(): AgentStatus | null {

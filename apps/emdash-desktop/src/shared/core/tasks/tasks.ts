@@ -131,6 +131,14 @@ export type CreateTaskParams = {
 
 export type CreateTaskError =
   | { type: 'project-not-found' }
+  | {
+      /**
+       * A v3 `repository-instance` workspace target carried no machine-local
+       * workspace id and the project has no repository workspace on this
+       * machine (Unattached). Fails before any task row is created.
+       */
+      type: 'workspace-not-resolved';
+    }
   | { type: 'initial-commit-required'; branch: string }
   | { type: 'branch-create-failed'; branch: string; error: CreateBranchError }
   | { type: 'pr-fetch-failed'; error: FetchPrForReviewError; remote: string }

@@ -4,6 +4,7 @@ export const SETTINGS_TABS = [
   { id: 'clis-models', label: 'Agents' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'connections', label: 'Connections' },
+  { id: 'devices', label: 'Devices' },
   { id: 'repository', label: 'Repository' },
   { id: 'storage', label: 'Storage' },
   { id: 'interface', label: 'Interface' },

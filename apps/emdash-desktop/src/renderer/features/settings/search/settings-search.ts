@@ -154,6 +154,15 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['remote', 'host'],
   },
 
+  // Devices
+  {
+    id: 'sync-devices',
+    label: 'Devices',
+    tab: 'devices',
+    description: 'Pair this machine with other devices and manage your sync space.',
+    keywords: ['sync', 'pair', 'pairing', 'space', 'multi-machine'],
+  },
+
   // Repository
   {
     id: 'branch-prefix',

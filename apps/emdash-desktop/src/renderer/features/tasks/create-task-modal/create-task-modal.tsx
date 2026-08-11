@@ -78,7 +78,7 @@ export const CreateTaskModal = observer(function CreateTaskModal({
   const pullRequestRepositoryUrl = repositoryStore?.pullRequestRepositoryUrl ?? undefined;
   const repositoryUrl = repositoryStore?.canonicalRepositoryUrl ?? pullRequestRepositoryUrl;
 
-  const projectPath = projectData?.path;
+  const projectPath = projectData?.path ?? undefined;
 
   const { hasAnyIssueIntegration } = useConnectedIssueProviders({ repositoryUrl, projectPath });
   const hasPrSupport = !!pullRequestRepositoryUrl;

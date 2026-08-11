@@ -74,7 +74,24 @@ export async function prepareCreateTask(
   const wsTarget = workspaceConfig.workspace;
 
   if (wsTarget.kind === 'repository-instance') {
-    workspaceId = wsTarget.workspaceId;
+    if (wsTarget.workspaceId) {
+      workspaceId = wsTarget.workspaceId;
+    } else {
+      // v3 stored target (e.g. a synced automation's task config): the
+      // machine-local workspace id is not stored, so resolve it at run time
+      // against this machine's own repository workspace for the project.
+      // An Unattached project (no repository workspace on this machine) fails
+      // here — before any task row is created.
+      const [projectRow] = await db
+        .select({ repositoryWorkspaceId: projects.repositoryWorkspaceId })
+        .from(projects)
+        .where(eq(projects.id, params.projectId))
+        .limit(1);
+      if (!projectRow?.repositoryWorkspaceId) {
+        return err({ type: 'workspace-not-resolved' });
+      }
+      workspaceId = projectRow.repositoryWorkspaceId;
+    }
   } else {
     workspaceId = crypto.randomUUID();
 

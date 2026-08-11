@@ -45,6 +45,7 @@ function makeTaskRow(values: Partial<TaskRow>): TaskRow {
     type: values.type ?? 'task',
     automationRunId: values.automationRunId ?? null,
     assignedPrUrl: values.assignedPrUrl ?? null,
+    syncTs: values.syncTs ?? 0,
   };
 }
 
@@ -75,11 +76,16 @@ function setupTransactionMock() {
 }
 
 /** Sets up db.select to return a local project row. */
-function setupSelectMock(workspaceProvider = 'local', sshConnectionId: string | null = null) {
+function setupSelectMock(
+  workspaceProvider = 'local',
+  sshConnectionId: string | null = null,
+  repositoryWorkspaceId: string | null = 'ws-repo-1'
+) {
   mocks.select.mockReturnValue({
     from: () => ({
       where: () => ({
-        limit: () => Promise.resolve([{ workspaceProvider, sshConnectionId }]),
+        limit: () =>
+          Promise.resolve([{ workspaceProvider, sshConnectionId, repositoryWorkspaceId }]),
       }),
     }),
   });
@@ -100,7 +106,7 @@ describe('createTask', () => {
       projectId: 'project-1',
       taskConfig: { version: '1', name: 'Test Task' },
       workspaceConfig: {
-        version: '2',
+        version: '3',
         git: { kind: 'none' },
         workspace: { kind: 'repository-instance', workspaceId: 'ws-repo-1' },
       },
@@ -115,7 +121,7 @@ describe('createTask', () => {
       projectId: 'project-1',
       taskConfig: { version: '1', name: 'Test Task' },
       workspaceConfig: {
-        version: '2',
+        version: '3',
         git: { kind: 'none' },
         workspace: { kind: 'repository-instance', workspaceId: 'ws-repo-1' },
       },
@@ -131,7 +137,7 @@ describe('createTask', () => {
       projectId: 'project-1',
       taskConfig: { version: '1', name: 'Test Task' },
       workspaceConfig: {
-        version: '2',
+        version: '3',
         git: {
           kind: 'create-branch',
           branchName: 'feature/x',
@@ -155,7 +161,7 @@ describe('createTask', () => {
       projectId: 'project-1',
       taskConfig: { version: '1', name: 'Test Task' },
       workspaceConfig: {
-        version: '2',
+        version: '3',
         git: { kind: 'none' },
         workspace: { kind: 'repository-instance', workspaceId: 'ws-repo-1' },
       },
@@ -174,7 +180,7 @@ describe('createTask', () => {
         projectId: 'project-1',
         taskConfig: { version: '1', name: 'Test Task' },
         workspaceConfig: {
-          version: '2',
+          version: '3',
           git: { kind: 'none' },
           workspace: { kind: 'repository-instance', workspaceId: 'ws-repo-1' },
         },
@@ -192,7 +198,7 @@ describe('createTask', () => {
         projectId: 'project-1',
         taskConfig: { version: '1', name: 'Test Task' },
         workspaceConfig: {
-          version: '2',
+          version: '3',
           git: { kind: 'none' },
           workspace: { kind: 'repository-instance', workspaceId: 'ws-repo-1' },
         },
@@ -201,13 +207,51 @@ describe('createTask', () => {
       // captured[0] = task. No workspace insert at index 1.
       expect(captured).toHaveLength(1);
     });
+
+    it('resolves a missing workspaceId against the project repository workspace (v3)', async () => {
+      const { captured } = setupTransactionMock();
+      await createTask({
+        id: 'task-1',
+        projectId: 'project-1',
+        taskConfig: { version: '1', name: 'Test Task' },
+        workspaceConfig: {
+          version: '3',
+          git: { kind: 'none' },
+          workspace: { kind: 'repository-instance' },
+        },
+      });
+
+      expect(captured).toHaveLength(1);
+      expect((captured[0] as Record<string, unknown>).workspaceId).toBe('ws-repo-1');
+    });
+
+    it('fails with workspace-not-resolved when the project has no repository workspace', async () => {
+      setupSelectMock('local', null, null);
+      const { captured } = setupTransactionMock();
+
+      const result = await createTask({
+        id: 'task-1',
+        projectId: 'project-1',
+        taskConfig: { version: '1', name: 'Test Task' },
+        workspaceConfig: {
+          version: '3',
+          git: { kind: 'none' },
+          workspace: { kind: 'repository-instance' },
+        },
+      });
+
+      expect(result).toEqual({ success: false, error: { type: 'workspace-not-resolved' } });
+      // No task (or workspace) row was committed.
+      expect(captured).toHaveLength(0);
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    });
   });
 
   describe('new-worktree workspace target', () => {
     it('inserts a workspace row with kind=worktree and the config serialized', async () => {
       const { captured } = setupTransactionMock();
       const workspaceConfig = {
-        version: '2' as const,
+        version: '3' as const,
         git: {
           kind: 'create-branch' as const,
           branchName: 'feature/test',
@@ -241,7 +285,7 @@ describe('createTask', () => {
         projectId: 'project-1',
         taskConfig: { version: '1', name: 'Test Task' },
         workspaceConfig: {
-          version: '2',
+          version: '3',
           git: {
             kind: 'create-branch',
             branchName: 'feature/ssh',
@@ -267,7 +311,7 @@ describe('createTask', () => {
         projectId: 'project-1',
         taskConfig: { version: '1', name: 'Test Task' },
         workspaceConfig: {
-          version: '2',
+          version: '3',
           git: { kind: 'none' },
           workspace: { kind: 'byoi' },
         },

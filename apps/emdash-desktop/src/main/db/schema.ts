@@ -52,7 +52,10 @@ export const projects = sqliteTable(
   {
     id: text('id').primaryKey(),
     name: text('name').notNull(),
-    path: text('path').notNull(),
+    // Nullable for multi-machine sync: projects created on another machine have
+    // no local path until the workspace is provisioned here (spec #130). The
+    // unique index on path still holds — SQLite treats NULLs as distinct.
+    path: text('path'),
     workspaceProvider: text('workspace_provider').notNull().default('local'), // 'local' | 'ssh'
     baseRef: text('base_ref'),
     sshConnectionId: text('ssh_connection_id').references(() => sshConnections.id, {
@@ -66,6 +69,10 @@ export const projects = sqliteTable(
     updatedAt: text('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Sync clock (ms epoch), maintained by AFTER INSERT/UPDATE triggers
+    // (trg_projects_sync_ts_ins/upd) for multi-machine push detection
+    // (WHERE sync_ts > lastPushed). Not wired into behaviour yet (spec #130).
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     pathIdx: uniqueIndex('idx_projects_path').on(table.path),
@@ -81,6 +88,8 @@ export const projectRemotes = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     remoteName: text('remote_name').notNull(),
     remoteUrl: text('remote_url').notNull(),
+    // Sync clock (ms epoch) maintained by trg_project_remotes_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.projectId, table.remoteName] }),
@@ -100,6 +109,8 @@ export const projectSettings = sqliteTable('project_settings', {
   updatedAt: text('updated_at')
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
+  // Sync clock (ms epoch) maintained by trg_project_settings_sync_ts_ins/upd.
+  syncTs: integer('sync_ts').notNull().default(0),
 });
 
 export const appSettings = sqliteTable(
@@ -110,6 +121,9 @@ export const appSettings = sqliteTable(
     updatedAt: integer('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Sync clock (ms epoch) maintained by trg_app_settings_sync_ts_ins/upd
+    // (migration 0026) for multi-machine push detection.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     keyIdx: uniqueIndex('idx_app_settings_key').on(table.key),
@@ -156,6 +170,8 @@ export const tasks = sqliteTable(
     assignedPrUrl: text('assigned_pr_url').references(() => pullRequests.url, {
       onDelete: 'set null',
     }),
+    // Sync clock (ms epoch) maintained by trg_tasks_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     projectIdIdx: index('idx_tasks_project_id').on(table.projectId),
@@ -325,9 +341,18 @@ export const automations = sqliteTable(
     conversationConfig: versionedJsonColumn(automationConversationConfig)('conversation_config'),
     taskConfig: versionedJsonColumn(storedAutomationTaskConfig)('task_config'),
     enabled: integer('enabled').notNull().default(1),
+    /**
+     * Machine-local origin of the automation row: 'local' for automations
+     * created on this machine, 'imported' for rows that arrived via multi-
+     * machine sync (set by the sync engine at import; never transported in
+     * the sync payload, like `enabled`).
+     */
+    source: text('source').notNull().default('local'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),
+    // Sync clock (ms epoch) maintained by trg_automations_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     projectIdIdx: index('idx_automations_project_id').on(table.projectId),
@@ -399,10 +424,19 @@ export const conversations = sqliteTable(
     isInitialConversation: integer('is_initial_conversation', {
       mode: 'boolean',
     }),
+    /**
+     * Machine-local origin of the conversation row: 'local' for conversations
+     * created on this machine, 'imported' for rows that arrived via multi-
+     * machine sync (set by the sync engine at import; never transported in
+     * the sync payload, like `sessionId`).
+     */
+    source: text('source').notNull().default('local'),
     sessionId: text('session_id'),
     agentStatus: text('agent_status'),
     agentStatusSeen: integer('agent_status_seen').default(1),
     type: text('type'),
+    // Sync clock (ms epoch) maintained by trg_conversations_sync_ts_ins/upd.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     taskIdIdx: index('idx_conversations_task_id').on(table.taskId),
@@ -482,6 +516,9 @@ export const kv = sqliteTable(
     updatedAt: integer('updated_at')
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Sync clock (ms epoch) maintained by trg_kv_sync_ts_ins/upd (migration
+    // 0026) for multi-machine push detection of the prompt-library namespace.
+    syncTs: integer('sync_ts').notNull().default(0),
   },
   (table) => ({
     keyIdx: uniqueIndex('idx_kv_key').on(table.key),
@@ -519,6 +556,58 @@ export const appSecrets = sqliteTable(
   },
   (table) => ({
     keyIdx: uniqueIndex('idx_app_secrets_key').on(table.key),
+  })
+);
+
+/**
+ * Sync engine side table (spec #130, ticket #133): client-side LWW guard and
+ * dirty-row tracking, maintained by the sync engine itself — no app code
+ * reads or writes it. `pk` is the JSON-encoded primary key (a single key for
+ * most tables, an array for composite keys). `row_sync_ts` is the row's
+ * `sync_ts` clock value at the moment of the last push-ack or remote apply;
+ * when the live row's clock differs, the row has unpushed local edits.
+ * `client_version` is the `client_version` of the last PULLED patch actually
+ * processed for this row (anti-replay hardening, spec #130 amendment): a
+ * relay that replays an old (but validly-encrypted) body under a newer
+ * server version carries a client_version that regresses relative to this
+ * recorded value, so the engine can drop it instead of applying stale
+ * content — see the client_version check in engine.ts's `applyPatch`.
+ * `quarantined_version` is the relay version of a pulled patch whose body
+ * could not be decrypted with a retryable, key-related failure (decrypt-failure
+ * quarantine, spec #130 amendment), or 0 when the row is not quarantined: the
+ * engine parks such a patch WITHOUT advancing `server_version` and re-attempts
+ * it once the space key changes, instead of applying garbage or losing the row.
+ */
+export const syncRowState = sqliteTable(
+  'sync_row_state',
+  {
+    tableName: text('table_name').notNull(),
+    pk: text('pk').notNull(),
+    serverVersion: integer('server_version').notNull(),
+    dirty: integer('dirty').notNull().default(0),
+    rowSyncTs: integer('row_sync_ts').notNull().default(0),
+    clientVersion: integer('client_version').notNull().default(0),
+    quarantinedVersion: integer('quarantined_version').notNull().default(0),
+  },
+  (table) => ({
+    pkKey: primaryKey({ columns: [table.tableName, table.pk] }),
+  })
+);
+
+/**
+ * Pending deletions (spec #130, ticket #133): populated by AFTER DELETE
+ * triggers on the allowlisted tables and drained by the sync engine's push
+ * phase (rows are removed once the relay acknowledges the tombstone).
+ */
+export const syncTombstones = sqliteTable(
+  'sync_tombstones',
+  {
+    tableName: text('table_name').notNull(),
+    pk: text('pk').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    pkKey: primaryKey({ columns: [table.tableName, table.pk] }),
   })
 );
 

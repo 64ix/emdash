@@ -3,6 +3,7 @@ import { ok } from '@emdash/shared';
 import { openFixture } from '@tooling/utils/db';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { projectManager } from '@main/core/projects/project-manager';
 import type { ProjectProvider } from '@main/core/projects/project-provider';
 import { projects, tasks, workspaces } from '@main/db/schema';
 import type { Task } from '@shared/core/tasks/tasks';
@@ -176,6 +177,59 @@ describe('WorkspaceBootstrapService', () => {
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error.type).toBe('missing-workspace');
     });
+
+    // spec #130 story 25 / ticket #136: a synced task arrives with no local
+    // workspace (its machine-local workspace_id is not carried). With the
+    // project attached, provisioning mints a local worktree on demand from the
+    // task's own branch and re-points the task at it.
+    it('mints a local worktree on demand for a synced task with no workspace', async () => {
+      const project = {
+        projectId: 'proj-1',
+        type: 'local',
+        repoPath: '/repo',
+        defaultWorkspaceType: { kind: 'local' },
+        settings: { get: vi.fn() },
+        gitRepository: {
+          getConfiguredRemotes: vi.fn().mockResolvedValue({
+            baseRemote: 'origin',
+            pushRemote: 'origin',
+          }),
+        },
+        gitRepositoryFetchService: {},
+        runWorkspaceSetup: vi.fn().mockResolvedValue(ok({ path: '/worktrees/imported' })),
+        worktreeService: {
+          getWorktreePoolPath: vi.fn().mockResolvedValue('/worktrees'),
+          existsAtAbsolutePath: vi.fn().mockResolvedValue(false),
+          serveBranchWorktree: vi.fn().mockResolvedValue(ok('/worktrees/imported')),
+        },
+      } as unknown as ProjectProvider;
+      const getProject = vi.spyOn(projectManager, 'getProject').mockReturnValue(project);
+
+      await fixture.db.insert(tasks).values({
+        id: 'task-imported',
+        projectId: 'proj-1',
+        name: 'Imported task',
+        status: 'in_progress',
+        workspaceId: null,
+        taskBranch: 'task/imported-branch',
+      });
+
+      const result = await svc.ensureWorkspaceSetupForTask('task-imported');
+
+      expect(result.success).toBe(true);
+
+      const [taskRow] = await fixture.db.select().from(tasks).where(eq(tasks.id, 'task-imported'));
+      expect(taskRow.workspaceId).not.toBeNull();
+
+      const [ws] = await fixture.db
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, taskRow.workspaceId!));
+      expect(ws.kind).toBe('worktree');
+      expect(ws.location).toBe('local');
+
+      getProject.mockRestore();
+    });
   });
 
   describe('ensureWorkspaceSetup', () => {
@@ -208,7 +262,7 @@ describe('WorkspaceBootstrapService', () => {
           path: '/worktrees/broken-task-branch',
           branchName: 'task/branch',
           config: {
-            version: '2',
+            version: '3',
             git: {
               kind: 'create-branch',
               branchName: 'task/branch',

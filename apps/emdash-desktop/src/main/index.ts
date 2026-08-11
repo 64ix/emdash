@@ -40,6 +40,12 @@ import { reconcileResourceSampler } from './core/resource-monitor/resource-sampl
 import { searchService } from './core/search/search-service';
 import { workspaceFileIndexService } from './core/search/workspace-file-index-service';
 import { appSettingsService } from './core/settings/settings-service';
+import {
+  registerDeepLinkHandler,
+  argvJoinDeepLink,
+  handleJoinDeepLink,
+} from './core/sync/deep-link';
+import { syncService } from './core/sync/sync-service-instance';
 import { boardSyncService } from './core/tasks/board-sync-service';
 import { updateService } from './core/updates/update-service';
 import { viewStateService } from './core/view-state/view-state-service';
@@ -77,7 +83,11 @@ initializeFileLogger();
 registerProcessErrorLogging(log);
 registerRendererLogHandler(ipcMain);
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  const url = argvJoinDeepLink(argv);
+  if (url !== null) {
+    handleJoinDeepLink(url);
+  }
   const win = BrowserWindow.getAllWindows()[0];
   if (win?.isMinimized()) win.restore();
   win?.focus();
@@ -189,6 +199,7 @@ void app.whenReady().then(async () => {
 
   registerRPCRouter(rpcRouter, app.isPackaged ? ipcMain : withRpcLogging(ipcMain));
 
+  registerDeepLinkHandler();
   void reconcileResourceSampler();
 
   localDependencyManager.probeAll().catch((e: unknown) => {
@@ -211,6 +222,13 @@ void app.whenReady().then(async () => {
   setupAppProtocol(join(app.getAppPath(), 'out', 'renderer'));
   setupApplicationMenu();
   createMainWindow();
+
+  // Sync at launch (spec #130, ticket #137): start the sync service after the
+  // window is up so the renderer receives the first `sync:status` snapshot.
+  // On macOS the app keeps running with no window and the service stays
+  // active; on Windows/Linux the app quits with the window and launch sync is
+  // covered by this start on the next run.
+  syncService.start();
 
   githubAccountReconciliationService
     .reconcileAtStartup()

@@ -5,6 +5,15 @@ export const MAX_CONVERSATION_TITLE_LENGTH = 100;
 
 export type ConversationType = 'pty' | 'acp';
 
+/**
+ * Machine-local origin of a conversation row: 'local' when created on this
+ * machine, 'imported' when it arrived via multi-machine sync (set by the sync
+ * engine at import; never transported in the sync payload, like `sessionId`).
+ * An imported conversation has no session on this machine until one is
+ * created, so the list marks it "not resumable on this device".
+ */
+export type ConversationSource = 'local' | 'imported';
+
 export type InitialQueuePrompt = {
   text: string;
   hiddenContext?: string;
@@ -17,6 +26,8 @@ export type Conversation = {
   providerId: AgentProviderId;
   title: string;
   lastInteractedAt: string | null;
+  /** Machine-local origin; 'imported' marks rows that arrived via sync. */
+  source?: ConversationSource;
   resume?: boolean;
   autoApprove?: boolean;
   /**

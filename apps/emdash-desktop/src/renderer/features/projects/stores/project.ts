@@ -2,12 +2,12 @@ import { makeAutoObservable, observable } from 'mobx';
 import { TaskManagerStore } from '@renderer/features/tasks/stores/task-manager';
 import { snapshotRegistry } from '@renderer/lib/stores/snapshot-registry';
 import type { LocalProject, SshProject } from '@shared/projects';
+import { isUnattachedProjectData } from '@shared/projects';
 import type { ProjectViewSnapshot } from '@shared/view-state';
 import { GitRepositoryStore } from './git-repository-store';
 import { PrSyncStore } from './pr-sync-store';
 import { ProjectSettingsStore } from './project-settings-store';
 import { ProjectViewStore } from './project-view';
-
 export type UnregisteredProjectPhase =
   | 'creating-repo' // gh api — new mode only
   | 'cloning' // git clone
@@ -84,7 +84,7 @@ export class ProjectStore {
   createdAt: string;
   phase: UnregisteredProjectPhase | UnmountedProjectPhase | null;
   error: string | undefined = undefined;
-  errorCode: 'path-not-found' | 'ssh-disconnected' | undefined = undefined;
+  errorCode: 'path-not-found' | 'ssh-disconnected' | 'unattached' | undefined = undefined;
   mode: ProjectMode | null;
   mountedProject: MountedProject | null = null;
 
@@ -166,8 +166,28 @@ export type UnmountedProject = ProjectStore & {
   data: LocalProject | SshProject;
   phase: UnmountedProjectPhase;
   error: string | undefined;
-  errorCode: 'path-not-found' | 'ssh-disconnected' | undefined;
+  errorCode: 'path-not-found' | 'ssh-disconnected' | 'unattached' | undefined;
 };
+
+/**
+ * A project that arrived via sync with no local anchor on this machine:
+ * `path === null` for local projects, `connectionId === null` for SSH ones.
+ * Distinct from path-not-found, where the row still has a path but the
+ * directory was deleted.
+ *
+ * Plain boolean on purpose: as a type guard it would narrow the store to
+ * `never` after an outer `isUnmountedProject` check (the false branch of the
+ * second guard removes the already-narrowed type).
+ */
+export function isUnattachedProject(store: ProjectStore | undefined): boolean {
+  return (
+    store !== undefined &&
+    isUnmountedProject(store) &&
+    store.errorCode === 'unattached' &&
+    store.data !== null &&
+    isUnattachedProjectData(store.data)
+  );
+}
 
 export function isUnregisteredProject(p: ProjectStore): p is UnregisteredProject {
   return p.state === 'unregistered';

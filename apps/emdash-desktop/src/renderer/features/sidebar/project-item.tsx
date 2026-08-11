@@ -3,6 +3,7 @@ import {
   ChevronRight,
   FolderClosed,
   FolderInput,
+  Link2,
   Loader2,
   Plus,
   RotateCcw,
@@ -14,6 +15,7 @@ import React, { useCallback, useEffect } from 'react';
 import { taskNeedsAttention } from '@renderer/features/board/board-attention';
 import { useConfirmDeleteProject } from '@renderer/features/projects/hooks/use-confirm-delete-project';
 import {
+  isUnattachedProject,
   isUnmountedProject,
   isUnregisteredProject,
   type UnregisteredProject,
@@ -72,6 +74,7 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
   const { params: boardParams } = useParams('board');
   const showCreateTaskModal = useShowModal('taskModal');
   const showChangeConnectionModal = useShowModal('changeProjectConnectionModal');
+  const showAttachModal = useShowModal('attachProjectModal');
   const confirmDeleteProject = useConfirmDeleteProject();
 
   const project = getProjectStore(projectId);
@@ -202,6 +205,14 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
               ) : (
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate">{project.name}</span>
+                  {isUnattachedProject(project) && (
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <Link2 className="h-3.5 w-3.5 shrink-0 text-foreground-passive" />
+                      </TooltipTrigger>
+                      <TooltipContent>Not attached on this machine</TooltipContent>
+                    </Tooltip>
+                  )}
                   {projectViewKind(project) === 'path_not_found' && (
                     <Tooltip>
                       <TooltipTrigger>
@@ -223,32 +234,54 @@ export const SidebarProjectItem = observer(function SidebarProjectItem({
               {attentionCount}
             </Badge>
           )}
-          <Tooltip>
-            <TooltipTrigger
-              className="h-6"
-              render={
-                <SidebarItemMiniButton
-                  type="button"
-                  aria-label={`New task for ${projectLabel}`}
-                  className={
-                    'opacity-0 transition-opacity duration-150 group-hover/row:opacity-100'
-                  }
-                  onPointerEnter={() => prefetchRepository()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    showCreateTaskModal({ projectId });
-                  }}
-                  disabled={project.state === 'unregistered'}
-                >
-                  <Plus className="h-4 w-4" />
-                </SidebarItemMiniButton>
-              }
-            />
-            <TooltipContent>
-              New Task
-              <BoundShortcut settingsKey="newTask" variant="keycaps" />
-            </TooltipContent>
-          </Tooltip>
+          {isUnattachedProject(project) ? (
+            <Tooltip>
+              <TooltipTrigger
+                className="h-6"
+                render={
+                  <SidebarItemMiniButton
+                    type="button"
+                    aria-label={`Attach ${projectLabel}`}
+                    className="text-foreground-passive"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      showAttachModal({ projectId });
+                    }}
+                  >
+                    <Link2 className="h-4 w-4" />
+                  </SidebarItemMiniButton>
+                }
+              />
+              <TooltipContent>Attach Project</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger
+                className="h-6"
+                render={
+                  <SidebarItemMiniButton
+                    type="button"
+                    aria-label={`New task for ${projectLabel}`}
+                    className={
+                      'opacity-0 transition-opacity duration-150 group-hover/row:opacity-100'
+                    }
+                    onPointerEnter={() => prefetchRepository()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      showCreateTaskModal({ projectId });
+                    }}
+                    disabled={project.state === 'unregistered'}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </SidebarItemMiniButton>
+                }
+              />
+              <TooltipContent>
+                New Task
+                <BoundShortcut settingsKey="newTask" variant="keycaps" />
+              </TooltipContent>
+            </Tooltip>
+          )}
         </SidebarMenuRow>
       </ContextMenuTrigger>
       <ContextMenuContent>

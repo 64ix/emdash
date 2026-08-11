@@ -14,6 +14,8 @@ const RUN_ERROR_DISPLAY: Record<RunError['step'], Record<string, ErrorFormatter>
   create_task: {
     interrupted_by_restart: () => 'The run was interrupted because the app restarted',
     project_not_found: () => 'Project could not be found or opened',
+    project_unattached: () =>
+      'This project has no repository workspace on this machine — attach it before running',
     worktree_setup_failed: (branch) =>
       branch ? `Could not set up the worktree for "${branch}"` : 'Could not set up the worktree',
     branch_create_failed: (branch) =>

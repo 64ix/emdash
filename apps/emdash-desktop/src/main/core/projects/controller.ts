@@ -1,4 +1,5 @@
 import { createRPCController } from '@shared/lib/ipc/rpc';
+import { attachProject } from './operations/attachProject';
 import { createProject, inspectProjectPath } from './operations/createProject';
 import { deleteProject } from './operations/deleteProject';
 import { getProjects } from './operations/getProjects';
@@ -24,5 +25,6 @@ export const projectController = createRPCController({
     projectSettingsService.migrateProjectConfig(projectId, request),
   countProjectsUsingGithubAccount,
   updateProjectConnection,
+  attachProject,
   openProject,
 });

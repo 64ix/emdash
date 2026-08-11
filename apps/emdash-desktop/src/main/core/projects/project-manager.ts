@@ -2,7 +2,7 @@ import { LifecycleMap } from '@emdash/shared';
 import { err, ok, type IDisposable, type IReleasable, type Result } from '@emdash/shared';
 import { HookCore, type Hookable } from '@main/lib/hookable';
 import { log } from '@main/lib/logger';
-import type { LocalProject, SshProject } from '@shared/projects';
+import type { AttachedProject } from '@shared/projects';
 import { createProvider } from './create-project-provider';
 import type { ProjectProvider } from './project-provider';
 import { TimeoutSignal, withTimeout } from './utils';
@@ -50,7 +50,7 @@ class ProjectSessionManager
   }
 
   async openProject(
-    project: LocalProject | SshProject
+    project: AttachedProject
   ): Promise<Result<ProjectProvider, ProviderLifecycleError>> {
     return this._lifecycle.provision(project.id, async () => {
       try {

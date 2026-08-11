@@ -168,6 +168,11 @@ export async function executeTaskCreate(
         case 'project-not-found':
           runError = { step: 'create_task', code: 'project_not_found' };
           break;
+        case 'workspace-not-resolved':
+          // The automation targets the repository root but the project has no
+          // repository workspace on this machine — fail before a task exists.
+          runError = { step: 'create_task', code: 'project_unattached' };
+          break;
         case 'initial-commit-required':
           runError = {
             step: 'create_task',

@@ -4,7 +4,7 @@ import { computeWorkspaceKey } from '@main/core/workspaces/workspace-key';
 import { db } from '@main/db/client';
 import { projects, workspaces } from '@main/db/schema';
 import { log } from '@main/lib/logger';
-import type { LocalProject, SshProject } from '@shared/projects';
+import type { AttachedProject } from '@shared/projects';
 
 /**
  * Ensures the project has a `project-root` workspace row and sets
@@ -15,9 +15,11 @@ import type { LocalProject, SshProject } from '@shared/projects';
  * key, we recover by looking up the existing row by key and linking it.
  *
  * Called from `createLocalProject`/`createSshProject` (so the returned project
- * already carries the ID) and from `openProject` (for pre-migration rows).
+ * already carries the ID), from `openProject` (for pre-migration rows), and
+ * from the attach operation once a project is anchored to a path (ticket
+ * #136).
  */
-export function ensureRepositoryWorkspace(project: LocalProject | SshProject): string {
+export function ensureRepositoryWorkspace(project: AttachedProject): string {
   const [row] = db
     .select({ repositoryWorkspaceId: projects.repositoryWorkspaceId })
     .from(projects)

@@ -54,7 +54,7 @@ const baseCtx: PresetContext = {
 describe('new-worktree preset', () => {
   it('produces create-branch git setup with defaultBranch as fromBranch', () => {
     const cfg = buildWorkspaceConfigFromPreset('new-worktree', baseCtx, { branchName: 'feat/x' });
-    expect(cfg.version).toBe('2');
+    expect(cfg.version).toBe('3');
     expect(cfg.git).toMatchObject({
       kind: 'create-branch',
       branchName: 'feat/x',

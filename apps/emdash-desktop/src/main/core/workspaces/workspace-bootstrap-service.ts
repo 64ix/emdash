@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { GitBranchRef } from '@emdash/core/git';
 import { err, ok, type Result } from '@emdash/shared';
 import { eq, sql } from 'drizzle-orm';
@@ -12,7 +13,7 @@ import {
 import { buildTaskFromWorkspace, emitTaskProvisionProgress } from '@main/core/tasks/task-builder';
 import { mapTaskRowToTask } from '@main/core/tasks/utils/utils';
 import { db as appDb, type AppDb } from '@main/db/client';
-import { tasks, workspaces } from '@main/db/schema';
+import { projects, tasks, workspaces } from '@main/db/schema';
 import type { Task, ProvisionWorkspaceError } from '@shared/core/tasks/tasks';
 import type { WorkspaceConfig } from '@shared/core/workspaces/workspace-config';
 import type { WorkspaceProviderData } from '@shared/core/workspaces/workspace-provider-data';
@@ -242,20 +243,71 @@ export class WorkspaceBootstrapService {
     taskId: string
   ): Promise<Result<WorkspaceBootstrapResult, ProvisionWorkspaceError>> {
     const [row] = await this.db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
-    if (!row?.workspaceId) return err({ type: 'missing-workspace' });
+    if (!row) return err({ type: 'missing-workspace' });
 
-    const [wsRow] = await this.db
-      .select()
-      .from(workspaces)
-      .where(eq(workspaces.id, row.workspaceId))
-      .limit(1);
-    if (!wsRow) return err({ type: 'missing-workspace' });
+    let wsRow = row.workspaceId
+      ? (
+          await this.db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId)).limit(1)
+        )[0]
+      : undefined;
 
     const project = projectManager.getProject(row.projectId);
+
+    // A synced task arrives with no local workspace: its `workspace_id` is a
+    // machine-local reference that never travels (see allowlist.ts), so the
+    // row imports with a NULL (or, defensively, dangling) workspace id and no
+    // matching `workspaces` row on this machine. Mint one on demand from the
+    // (attached) project so the task is provisionable here (spec #130 story 25
+    // / ticket #136). Requires the project to be attached/mounted; until then
+    // there is nothing to provision against — report missing-workspace so the
+    // caller surfaces "attach the project first".
+    if (!wsRow) {
+      if (!project) return err({ type: 'missing-workspace' });
+      const minted = await this.mintWorktreeWorkspaceForTask(row.projectId);
+      await this.db.update(tasks).set({ workspaceId: minted.id }).where(eq(tasks.id, taskId));
+      row.workspaceId = minted.id;
+      wsRow = minted;
+    }
+
     if (!project) throw new Error(`Project ${row.projectId} not found`);
 
     const task = mapTaskRowToTask(row);
     return this.ensureWorkspaceSetup(wsRow, row, task, project);
+  }
+
+  /**
+   * Creates a fresh local/SSH worktree `workspaces` row for a synced task that
+   * has no workspace on this machine. Location and SSH connection are derived
+   * from the project (mirroring `createTask`'s new-worktree branch); `config`
+   * is left NULL so `resolveWorkspaceIntent` falls back to the task's own
+   * branch (`use-branch`) — the branch was pushed from the origin machine, so
+   * the worktree checks it out here.
+   */
+  private async mintWorktreeWorkspaceForTask(
+    projectId: string
+  ): Promise<typeof workspaces.$inferSelect> {
+    const [projectRow] = await this.db
+      .select({
+        workspaceProvider: projects.workspaceProvider,
+        sshConnectionId: projects.sshConnectionId,
+      })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+
+    const isRemote = projectRow?.workspaceProvider === 'ssh';
+    const [minted] = await this.db
+      .insert(workspaces)
+      .values({
+        id: crypto.randomUUID(),
+        kind: 'worktree',
+        location: isRemote ? 'remote' : 'local',
+        sshConnectionId: isRemote ? (projectRow?.sshConnectionId ?? null) : null,
+        type: isRemote ? 'project-ssh' : 'local',
+        config: null,
+      })
+      .returning();
+    return minted;
   }
 
   /**

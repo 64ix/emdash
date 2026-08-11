@@ -43,7 +43,8 @@ function createAppDb(): {
       ssh_connection_id TEXT,
       repository_workspace_id TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE tasks (
@@ -68,7 +69,8 @@ function createAppDb(): {
       workspace_intent TEXT,
       type TEXT NOT NULL DEFAULT 'task',
       automation_run_id TEXT,
-      assigned_pr_url TEXT
+      assigned_pr_url TEXT,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE workspaces (
@@ -101,10 +103,12 @@ function createAppDb(): {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_interacted_at TEXT,
       is_initial_conversation INTEGER,
+      source TEXT NOT NULL DEFAULT 'local',
       session_id TEXT,
       agent_status TEXT,
       agent_status_seen INTEGER DEFAULT 1,
-      type TEXT
+      type TEXT,
+      sync_ts INTEGER NOT NULL DEFAULT 0
     );
   `);
 
@@ -226,7 +230,7 @@ describe('legacy-port table passes', () => {
         'local',
         'feature/shared',
         JSON.stringify({
-          version: '2',
+          version: '3',
           git: { kind: 'use-branch', branchName: 'feature/shared' },
           workspace: { kind: 'new-worktree' },
         })
@@ -394,7 +398,7 @@ describe('legacy-port table passes', () => {
       branch_name: 'feature/new-legacy',
     });
     expect(JSON.parse(importedWorkspace.config)).toEqual({
-      version: '2',
+      version: '3',
       git: { kind: 'use-branch', branchName: 'feature/new-legacy' },
       workspace: { kind: 'new-worktree' },
     });

@@ -38,6 +38,7 @@ function makeTaskRow(values: Partial<TaskRow>): TaskRow {
     type: values.type ?? 'task',
     automationRunId: values.automationRunId ?? null,
     assignedPrUrl: values.assignedPrUrl ?? null,
+    syncTs: values.syncTs ?? 0,
   };
 }
 

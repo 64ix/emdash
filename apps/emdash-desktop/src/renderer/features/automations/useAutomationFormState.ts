@@ -59,6 +59,9 @@ function workspaceInitialFromConfig(
 
   if (git.kind === 'none') {
     if (workspace.kind === 'repository-instance') {
+      // v3 stored targets carry no machine-local workspace id; the id is
+      // resolved at run time against the project's repository workspace.
+      if (!workspace.workspaceId) return { mode: 'existing', presetId: 'repo-root' };
       return {
         mode: 'existing',
         presetId: 'use-existing',
@@ -162,22 +165,18 @@ export function useAutomationFormState(
     !!effectiveProjectId &&
     workspaceConfig.isValid;
 
-  function buildTaskConfig(targetProjectId: string): StoredAutomationTaskConfig | null {
-    const effectiveRepoWsId =
-      asMounted(getProjectStore(targetProjectId))?.data?.repositoryWorkspaceId ?? null;
-
-    // Re-resolve with the target project's repositoryWorkspaceId in case it differs.
-    // For most cases effectiveProjectId === targetProjectId so workspaceConfig.resolvedConfig is correct.
-    // We only need to patch if mode=existing/repo-root and the workspace ID is project-specific.
+  function buildTaskConfig(): StoredAutomationTaskConfig | null {
+    // v3: ONLY the repo-root target is stored without the machine-local
+    // workspace id — it means "the project's own repository workspace", which
+    // the run resolves against the mounted project at execution time. The
+    // `use-existing` preset also produces a `repository-instance` config, but
+    // its workspaceId points at a specific user-chosen workspace; stripping it
+    // there silently redirected the run to the project root, so it is kept.
     const wsConfig = workspaceConfig.resolvedConfig;
 
-    // Patch repository-instance workspace if target project differs.
     const patchedConfig =
-      wsConfig.workspace.kind === 'repository-instance' && effectiveRepoWsId
-        ? {
-            ...wsConfig,
-            workspace: { kind: 'repository-instance' as const, workspaceId: effectiveRepoWsId },
-          }
+      wsConfig.workspace.kind === 'repository-instance' && workspaceConfig.presetId === 'repo-root'
+        ? { ...wsConfig, workspace: { kind: 'repository-instance' as const } }
         : wsConfig;
 
     const result: StoredAutomationTaskConfig = {

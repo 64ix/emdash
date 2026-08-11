@@ -6,7 +6,15 @@ import { viewStateCache } from '@renderer/lib/stores/view-state-cache';
 import { log } from '@renderer/utils/logger';
 import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { sshConnectionEventChannel } from '@shared/core/ssh/sshEvents';
-import { type LocalProject, type SshProject } from '@shared/projects';
+import { syncStatusChannel } from '@shared/events/syncEvents';
+import type {
+  AttachProjectParams,
+  AttachProjectResult,
+  LocalProject,
+  Project,
+  SshProject,
+} from '@shared/projects';
+import { isUnattachedProjectData } from '@shared/projects';
 import { splitNameWithOwner } from '@shared/repository-ref';
 import type { ProjectViewSnapshot } from '@shared/view-state';
 import {
@@ -32,8 +40,10 @@ export class ProjectManagerStore {
   pendingCreationIds = observable.set<string>();
   private _projectMountPromises = new Map<string, Promise<void>>();
   private _loadPromise: Promise<void> | null = null;
+  private _syncReloadInFlight: Promise<void> | null = null;
   private _lastSshRecoveryAttemptAt = 0;
   private _disposeSshConnectionEvent: (() => void) | null = null;
+  private _disposeSyncStatusEvent: (() => void) | null = null;
   private readonly _handleOnline = (): void => {
     this.retryDisconnectedSshProjects({ force: true });
   };
@@ -49,6 +59,17 @@ export class ProjectManagerStore {
       this._mountDisconnectedSshProjects(event.connectionId);
     });
 
+    // A completed sync cycle may have applied pulled rows (spec #130): the
+    // engine writes them straight into the DB, so the project list loaded at
+    // boot is stale. Re-query and merge the rows the boot load did not see —
+    // e.g. a project synced from another machine — without touching rows the
+    // user is already looking at. Merge-only: remotely deleted rows are
+    // reaped on the next launch.
+    this._disposeSyncStatusEvent = events.on(syncStatusChannel, (status) => {
+      if (status.state !== 'up-to-date') return;
+      void this._reloadSyncedProjects();
+    });
+
     globalThis.window?.addEventListener('online', this._handleOnline);
     globalThis.window?.addEventListener('focus', this._handleFocus);
   }
@@ -56,6 +77,8 @@ export class ProjectManagerStore {
   dispose(): void {
     this._disposeSshConnectionEvent?.();
     this._disposeSshConnectionEvent = null;
+    this._disposeSyncStatusEvent?.();
+    this._disposeSyncStatusEvent = null;
     globalThis.window?.removeEventListener('online', this._handleOnline);
     globalThis.window?.removeEventListener('focus', this._handleFocus);
   }
@@ -69,12 +92,42 @@ export class ProjectManagerStore {
 
   private async _doLoad(): Promise<void> {
     const rawProjects = await rpc.projects.getProjects();
+    await this._mergeProjectRows(rawProjects);
+  }
+
+  /**
+   * Re-queries the project list after a sync cycle completes, merging in any
+   * projects that arrived via the relay while the app was running (spec
+   * #130: synced projects must appear without a restart). Coalesced: a burst
+   * of status events collapses onto one reload.
+   */
+  private _reloadSyncedProjects(): void {
+    if (this._syncReloadInFlight !== null) return;
+    this._syncReloadInFlight = (async () => {
+      try {
+        const rawProjects = await rpc.projects.getProjects();
+        await this._mergeProjectRows(rawProjects);
+      } finally {
+        this._syncReloadInFlight = null;
+      }
+    })();
+  }
+
+  private async _mergeProjectRows(rawProjects: Project[]): Promise<void> {
     const toMount: string[] = [];
     runInAction(() => {
       for (const p of rawProjects) {
         if (this.projects.has(p.id)) continue;
-        this.projects.set(p.id, createUnmountedProject(p, 'idle'));
-        toMount.push(p.id);
+        const store = createUnmountedProject(p, 'idle');
+        // A synced project with no local anchor stays Unattached: it must not
+        // be opened (openProject would fail with `unattached`) — the user
+        // attaches it first.
+        if (isUnattachedProjectData(p)) {
+          store.errorCode = 'unattached';
+        } else {
+          toMount.push(p.id);
+        }
+        this.projects.set(p.id, store);
       }
     });
     await Promise.allSettled(toMount.map((id) => this.mountProject(id)));
@@ -281,6 +334,8 @@ export class ProjectManagerStore {
 
     const project = this.projects.get(projectId);
     if (!project || !isUnmountedProject(project)) return Promise.resolve();
+    // Unattached projects have nothing to mount until the user attaches them.
+    if (project.errorCode === 'unattached') return Promise.resolve();
 
     runInAction(() => {
       project.phase = 'opening';
@@ -304,6 +359,11 @@ export class ProjectManagerStore {
               } else if (openResult.error.type === 'ssh-disconnected') {
                 current.error = openResult.error.connectionId;
                 current.errorCode = 'ssh-disconnected';
+              } else if (openResult.error.type === 'unattached') {
+                // Safety net: a synced project with no local anchor must not
+                // mount; it stays Unattached with an Attach action.
+                current.error = undefined;
+                current.errorCode = 'unattached';
               } else {
                 current.error = openResult.error.message;
                 current.errorCode = undefined;
@@ -397,7 +457,8 @@ export class ProjectManagerStore {
       if (
         isUnmountedProject(store) &&
         store.errorCode === 'ssh-disconnected' &&
-        store.data.type === 'ssh'
+        store.data.type === 'ssh' &&
+        store.data.connectionId !== null
       ) {
         connectionIds.add(store.data.connectionId);
       }
@@ -463,6 +524,39 @@ export class ProjectManagerStore {
     if (inFlight) await inFlight.catch(() => {});
 
     this.mountProject(projectId).catch(() => {});
+  }
+
+  /**
+   * Attach an unattached (synced) project on this machine (ticket #136).
+   * On a direct attach the store is updated and the project is mounted; on a
+   * merge the synced row disappears (the local project wins) and the store
+   * entry is dropped.
+   */
+  async attachProject(
+    projectId: string,
+    params: AttachProjectParams
+  ): Promise<AttachProjectResult> {
+    const result = await rpc.projects.attachProject(params);
+    if (!result.success) return result;
+
+    runInAction(() => {
+      if (result.data.mergedInto !== null) {
+        // The synced row merged into an existing local project — one row left.
+        this.projects.delete(projectId);
+      } else {
+        const current = this.projects.get(projectId);
+        if (current && isUnmountedProject(current)) {
+          current.data = result.data.project;
+          current.error = undefined;
+          current.errorCode = undefined;
+        }
+      }
+    });
+
+    if (result.data.mergedInto === null) {
+      this.mountProject(projectId).catch(() => {});
+    }
+    return result;
   }
 
   removeUnregisteredProject(projectId: string): void {

@@ -29,6 +29,7 @@ import { cn } from '@renderer/utils/utils';
 import { MAX_CONVERSATION_TITLE_LENGTH } from '@shared/core/conversations/conversations';
 import { getAcpChatResourceManager } from './acp/acp-chat-resource-manager';
 import { ConversationAgentIcon } from './conversation-agent-icon';
+import { ConversationResumabilityBadge } from './conversation-resumability-badge';
 
 const ROW_HEIGHT = 32;
 
@@ -156,7 +157,12 @@ const ConversationRow = observer(function ConversationRow({
             <span className="min-w-0 flex-1 truncate">{displayTitle}</span>
           )}
           <span className="shrink-0">
-            {conversation.indicatorStatus ? (
+            {!conversation.isResumable ? (
+              // A conversation imported from another machine has no session on
+              // this machine until one is created (sessionId is machine-local
+              // and never synced) — spec #130, ticket #137.
+              <ConversationResumabilityBadge />
+            ) : conversation.indicatorStatus ? (
               <AgentStatusIndicator status={conversation.indicatorStatus} disableTooltip />
             ) : (
               <RelativeTime
