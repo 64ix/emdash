@@ -128,6 +128,21 @@ describe('createInstallMethodDetector', () => {
       const result = await detector.detect('/usr/local/lib/Node_Modules/@openai/codex/bin/codex');
       expect(result.kind).toBe('npm');
     });
+
+    it('returns npm (confirmed) for a Windows .cmd shim in the npm prefix dir', async () => {
+      const ctx = makeRootCtx(null, 'C:\\Users\\user\\AppData\\Roaming\\npm\\node_modules');
+      const detector = createInstallMethodDetector(ctx, 'windows');
+      const result = await detector.detect('C:\\Users\\user\\AppData\\Roaming\\npm\\opencode.cmd');
+      expect(result.kind).toBe('npm');
+      expect(result.confidence).toBe('confirmed');
+    });
+
+    it('does not confirm npm from the prefix on non-Windows platforms', async () => {
+      const ctx = makeRootCtx(null, '/usr/local/lib/node_modules');
+      const detector = createInstallMethodDetector(ctx, 'linux');
+      const result = await detector.detect('/usr/local/lib/some-other-bin');
+      expect(result.kind).not.toBe('npm');
+    });
   });
 
   describe('fallback to inferMethod', () => {

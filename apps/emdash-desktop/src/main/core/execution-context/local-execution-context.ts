@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveWindowsCommandSpec } from '@emdash/core/exec';
 import {
   getGitExecutable,
   isMissingGitExecutableError,
@@ -39,7 +40,11 @@ export class LocalExecutionContext implements IExecutionContext {
 
   exec(command: string, args: string[] = [], opts: ExecOptions = {}): Promise<ExecResult> {
     const { timeout, maxBuffer } = opts;
-    return execFileAsync(this.resolveCommand(command), args, {
+    const { command: resolvedCommand, args: resolvedArgs } = resolveWindowsCommandSpec({
+      command: this.resolveCommand(command),
+      args,
+    });
+    return execFileAsync(resolvedCommand, resolvedArgs, {
       cwd: this.root || undefined,
       env: command === 'git' ? buildNonInteractiveGitEnv() : undefined,
       timeout,
@@ -67,7 +72,11 @@ export class LocalExecutionContext implements IExecutionContext {
         return;
       }
 
-      const child = spawn(this.resolveCommand(command), args, {
+      const { command: resolvedCommand, args: resolvedArgs } = resolveWindowsCommandSpec({
+        command: this.resolveCommand(command),
+        args,
+      });
+      const child = spawn(resolvedCommand, resolvedArgs, {
         cwd: this.root || undefined,
         env: command === 'git' ? buildNonInteractiveGitEnv() : undefined,
       });

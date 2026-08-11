@@ -98,4 +98,38 @@ describe('LocalExecutionContext', () => {
 
     await expect(promise).rejects.toThrow('Git is not installed or Emdash cannot find it');
   });
+
+  describe.skipIf(process.platform !== 'win32')('Windows npm shim routing', () => {
+    it('routes a .cmd shim through cmd.exe instead of failing with EINVAL', async () => {
+      execFileMock.mockImplementation(
+        (
+          command: string,
+          _args: string[],
+          _options: unknown,
+          callback: (e: unknown, r?: { stdout: string; stderr: string }) => void
+        ) => {
+          if (typeof command === 'string' && command.toLowerCase().endsWith('cmd.exe')) {
+            callback(null, { stdout: 'fake-version-1.2.3\r\n', stderr: '' });
+            return;
+          }
+          callback(Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' }));
+        }
+      );
+      const ctx = new LocalExecutionContext({ root: '/repo' });
+
+      const result = await ctx.exec('C:\\Users\\Test User\\AppData\\Roaming\\npm\\opencode.cmd', [
+        '--version',
+      ]);
+
+      expect(result.stdout).toContain('fake-version-1.2.3');
+      const call = execFileMock.mock.calls.at(-1);
+      expect(call?.[0]?.toLowerCase()).toBe((process.env.ComSpec ?? 'cmd.exe').toLowerCase());
+      expect(call?.[1]).toEqual([
+        '/d',
+        '/s',
+        '/c',
+        '""C:\\Users\\Test User\\AppData\\Roaming\\npm\\opencode.cmd" --version"',
+      ]);
+    });
+  });
 });
