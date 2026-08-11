@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { win32 } from 'node:path';
 import type {
   AcpFs,
   AcpProcessHandle,
   AcpTerminalExit,
   AcpTerminalProcess,
 } from '@emdash/core/acp';
+import { resolveWindowsCommandSpec } from '@emdash/core/exec';
 import type { AcpRuntimeProcessHost } from '../runtime/types';
 
 type ChildProcessSpawnSpec = {
@@ -17,51 +17,17 @@ type ChildProcessSpawnSpec = {
   cwd: string;
 };
 
-function getEnvValue(env: Record<string, string | undefined>, key: string): string | undefined {
-  const normalizedKey = key.toLowerCase();
-  const entry = Object.entries(env).find(
-    ([candidate]) => candidate.toLowerCase() === normalizedKey
-  );
-  return entry?.[1];
-}
-
-function quoteForCmdExe(input: string): string {
-  if (input.length === 0) return '""';
-  if (!/[\s"^&|<>()%!]/.test(input)) return input;
-  return `"${input
-    .replace(/%/g, '%%')
-    .replace(/!/g, '^!')
-    .replace(/(["^&|<>()])/g, '^$1')}"`;
-}
-
-function wrapCmdExeCommandLine(commandLine: string): string {
-  return commandLine.startsWith('"') ? `"${commandLine}"` : commandLine;
-}
-
 /**
- * Node cannot spawn Windows .cmd/.bat shims directly. Route only those files through
- * cmd.exe and quote each argv token explicitly instead of enabling `shell: true`.
+ * Node cannot spawn Windows .cmd/.bat shims directly. Route only those files
+ * (and bare command names that resolve to shims via PATHEXT) through cmd.exe,
+ * quoting each argv token explicitly instead of enabling `shell: true`.
+ * Canonical implementation: resolveWindowsCommandSpec in @emdash/core/exec.
  */
 export function resolveChildProcessSpawnSpec(
   spec: ChildProcessSpawnSpec,
   platform: NodeJS.Platform = process.platform
 ): Pick<ChildProcessSpawnSpec, 'command' | 'args'> {
-  if (platform !== 'win32') return { command: spec.command, args: spec.args };
-
-  const extension = win32.extname(spec.command).toLowerCase();
-  if (extension !== '.cmd' && extension !== '.bat') {
-    return { command: spec.command, args: spec.args };
-  }
-
-  const commandLine = [spec.command, ...spec.args].map(quoteForCmdExe).join(' ');
-  const command =
-    getEnvValue(spec.env, 'ComSpec') ??
-    getEnvValue(process.env, 'ComSpec') ??
-    'C:\\Windows\\System32\\cmd.exe';
-  return {
-    command,
-    args: ['/d', '/s', '/c', wrapCmdExeCommandLine(commandLine)],
-  };
+  return resolveWindowsCommandSpec(spec, platform);
 }
 
 class ChildProcessHandle implements AcpProcessHandle {

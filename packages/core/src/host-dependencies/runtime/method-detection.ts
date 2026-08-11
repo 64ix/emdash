@@ -109,7 +109,7 @@ export function createInstallMethodDetector(
 
   function pathStartsWith(lower: string, dir: string): boolean {
     const norm = normalizeDir(dir);
-    return lower.startsWith(norm + '/') || lower === norm;
+    return lower === norm || lower.startsWith(norm + '/') || lower.startsWith(norm + '\\');
   }
 
   /** Extract a segment of a path that follows a known prefix directory. */
@@ -121,6 +121,11 @@ export function createInstallMethodDetector(
     const rest = realPath.slice(norm.length).replace(/^\/+/, '');
     // First path segment = formula/cask name
     return rest.split('/')[0] ?? undefined;
+  }
+
+  /** Parent directory of an `npm root -g` result, e.g. `.../lib/node_modules` → `.../lib`. */
+  function npmPrefixOf(npmRootDir: string): string {
+    return npmRootDir.replace(/[\\/]+node_modules[\\/]*$/i, '');
   }
 
   return {
@@ -153,6 +158,12 @@ export function createInstallMethodDetector(
       const root = await npmRoot();
       if (root && pathStartsWith(lower, root)) {
         // managerRef: parent dir of node_modules is the package root; use descriptor later
+        return { kind: 'npm', confidence: 'confirmed' };
+      }
+      // Windows npm shims (.cmd files) live in the npm prefix dir — the parent of
+      // node_modules — because they are standalone launchers, not symlinks into
+      // the package. Match the prefix so those shims are confirmed as npm too.
+      if (platform === 'windows' && root && pathStartsWith(lower, npmPrefixOf(root))) {
         return { kind: 'npm', confidence: 'confirmed' };
       }
 
