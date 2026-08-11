@@ -25,6 +25,7 @@ import type {
   StopReason,
   ToolCallItem,
   ToolNode,
+  TranscriptItem,
   TranscriptTurn,
   TranscriptTurnOutcome,
 } from '@emdash/core/acp';
@@ -66,6 +67,14 @@ type ConfigDimension = 'model' | 'effort';
  * would show "working" with no other information. Any transcript/session event
  * arriving during the turn re-arms the timer, so long-running but live turns
  * are never affected — only truly silent ones are.
+ *
+ * Two healthy-but-silent states are excluded from settlement, mirroring each
+ * other: a turn blocked on a pending permission (the agent waits for the
+ * user's answer) and a turn whose agent spawned a subagent that is still
+ * running (opencode streams nothing on the parent session while a subagent
+ * works). Both re-arm the watchdog instead, so live work is never marked
+ * `prompt_failed`; once the blocker resolves, the next expiry settles a
+ * genuinely silent turn.
  */
 export const ACP_PROMPT_IDLE_TIMEOUT_MS = 10 * 60_000;
 
@@ -720,6 +729,17 @@ export class SessionCell {
         return;
       }
 
+      // A spawned subagent that is still running means the turn is healthy but
+      // blocked on the subagent's work: opencode delegates long tasks to
+      // subagent sessions and streams nothing on the parent ACP session while
+      // they run. Settling here would mark live work `prompt_failed` and drop
+      // its output — re-arm instead. Once the subagent's tool call completes
+      // or errors, the next expiry settles a genuinely silent turn.
+      if (this.hasRunningSubagentSpawn()) {
+        this.armPromptIdleTimer();
+        return;
+      }
+
       this.deps.logger.warn(
         'SessionCell: prompt turn stalled with no activity, settling as failed',
         {
@@ -740,6 +760,17 @@ export class SessionCell {
 
   private rearmPromptIdleTimer(): void {
     if (this.promptIdleTimer !== null) this.armPromptIdleTimer();
+  }
+
+  /**
+   * True when the active turn has a subagent spawn tool call that is still
+   * running — the agent delegated part of this turn to a subagent and is
+   * waiting on its result (see the watchdog re-arm in `armPromptIdleTimer`).
+   */
+  private hasRunningSubagentSpawn(): boolean {
+    const active = this.transcript.activeTurn;
+    if (!active) return false;
+    return active.items.some((item) => containsRunningSubagentSpawn(item));
   }
 
   private clearPromptIdleTimer(): void {
@@ -859,6 +890,13 @@ function findToolCall(
     }
   }
   return undefined;
+}
+
+/** True when the item (or any nested child) is a subagent spawn still running. */
+function containsRunningSubagentSpawn(item: TranscriptItem): boolean {
+  if (item.kind === 'spawn-subagent-tool-call') return item.status === 'running';
+  if ('children' in item && item.children) return item.children.some(containsRunningSubagentSpawn);
+  return false;
 }
 
 function machineOutcome(
