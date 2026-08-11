@@ -129,7 +129,7 @@ describe('createTask', () => {
     expect(mocks.transaction).toHaveBeenCalledTimes(1);
   });
 
-  it('does not write taskBranch or sourceBranch to the tasks row', async () => {
+  it('writes taskBranch derived from a create-branch workspace config', async () => {
     const { captured } = setupTransactionMock();
 
     await createTask({
@@ -147,10 +147,78 @@ describe('createTask', () => {
       },
     });
 
+    // task_branch is the sync-carried branch identity (spec #130 story 25):
+    // the workspaces row does not travel, so the receiving machine recovers
+    // the branch from the task's own row.
     const taskInsert = captured[0] as Record<string, unknown>;
-    expect(taskInsert).not.toEqual(
-      expect.objectContaining({ taskBranch: expect.anything(), sourceBranch: expect.anything() })
-    );
+    expect(taskInsert.taskBranch).toBe('feature/x');
+  });
+
+  it('writes the task branch for pr-branch configs', async () => {
+    const { captured } = setupTransactionMock();
+
+    await createTask({
+      id: 'task-1',
+      projectId: 'project-1',
+      taskConfig: { version: '1', name: 'Test Task' },
+      workspaceConfig: {
+        version: '3',
+        git: {
+          kind: 'pr-branch',
+          prNumber: 153,
+          headBranch: 'pr/153-head',
+          headRepositoryUrl: 'https://github.com/64ix/emdash',
+          isFork: false,
+          taskBranch: 'task/from-pr',
+        },
+        workspace: { kind: 'new-worktree' },
+      },
+    });
+
+    const taskInsert = captured[0] as Record<string, unknown>;
+    expect(taskInsert.taskBranch).toBe('task/from-pr');
+  });
+
+  it('falls back to the PR head branch when a pr-branch config has no task branch', async () => {
+    const { captured } = setupTransactionMock();
+
+    await createTask({
+      id: 'task-1',
+      projectId: 'project-1',
+      taskConfig: { version: '1', name: 'Test Task' },
+      workspaceConfig: {
+        version: '3',
+        git: {
+          kind: 'pr-branch',
+          prNumber: 153,
+          headBranch: 'pr/153-head',
+          headRepositoryUrl: 'https://github.com/64ix/emdash',
+          isFork: false,
+        },
+        workspace: { kind: 'new-worktree' },
+      },
+    });
+
+    const taskInsert = captured[0] as Record<string, unknown>;
+    expect(taskInsert.taskBranch).toBe('pr/153-head');
+  });
+
+  it('leaves taskBranch null for branchless workspace configs', async () => {
+    const { captured } = setupTransactionMock();
+
+    await createTask({
+      id: 'task-1',
+      projectId: 'project-1',
+      taskConfig: { version: '1', name: 'Test Task' },
+      workspaceConfig: {
+        version: '3',
+        git: { kind: 'none' },
+        workspace: { kind: 'repository-instance', workspaceId: 'ws-repo-1' },
+      },
+    });
+
+    const taskInsert = captured[0] as Record<string, unknown>;
+    expect(taskInsert.taskBranch).toBeNull();
   });
 
   it('includes workspaceId in the task row insert', async () => {

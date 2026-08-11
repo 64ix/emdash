@@ -109,7 +109,39 @@ export class WorkspaceBootstrapService {
         workspaceBranchName,
         workspaceSourceBranch
       );
-      if (!serveResult.success) {
+      if (serveResult.success) {
+        const resolvedPath = serveResult.data;
+
+        await this.persistPath(
+          workspaceRow.id,
+          resolvedPath,
+          workspaceRow.type,
+          connectionId,
+          workspaceBranchName
+        );
+
+        if (connectionId) {
+          sshConnectionManager.reportChannelRecovered(connectionId);
+        }
+
+        return this._acquireAndBuild(
+          workspaceRow.id,
+          task,
+          project,
+          resolvedPath,
+          workspaceBranchName,
+          workspaceSourceBranch
+        );
+      }
+
+      // The branch no longer exists locally or on the checked remotes. When the
+      // workspace still carries its config, fall through to the intent-based
+      // setup below instead of failing: `create-branch` recreates the branch
+      // from its source ref, `pr-branch` re-fetches refs/pull/<n>/head (which
+      // survives the head branch being deleted). A config-less row can only
+      // mean `use-branch` — the intent path would retry the same checkout and
+      // fail identically, so surface the error directly.
+      if (serveResult.error.type !== 'branch-not-found' || !wsConfig) {
         const provisionError = mapWorktreeErrorToProvisionError(
           workspaceBranchName,
           serveResult.error
@@ -121,28 +153,6 @@ export class WorkspaceBootstrapService {
           message: formatProvisionTaskError(provisionError),
         });
       }
-      const resolvedPath = serveResult.data;
-
-      await this.persistPath(
-        workspaceRow.id,
-        resolvedPath,
-        workspaceRow.type,
-        connectionId,
-        workspaceBranchName
-      );
-
-      if (connectionId) {
-        sshConnectionManager.reportChannelRecovered(connectionId);
-      }
-
-      return this._acquireAndBuild(
-        workspaceRow.id,
-        task,
-        project,
-        resolvedPath,
-        workspaceBranchName,
-        workspaceSourceBranch
-      );
     }
 
     // Fast path: non-worktree path already persisted and still exists on disk.
@@ -263,7 +273,13 @@ export class WorkspaceBootstrapService {
     // caller surfaces "attach the project first".
     if (!wsRow) {
       if (!project) return err({ type: 'missing-workspace' });
-      const minted = await this.mintWorktreeWorkspaceForTask(row.projectId);
+      // Branch-based synced tasks mint a worktree from their own branch; a
+      // task with no branch identity (repository-instance / project-root
+      // tasks) ran against the project root on its origin machine, so
+      // re-attach it to this machine's own repository workspace.
+      const minted = row.taskBranch
+        ? await this.mintWorktreeWorkspaceForTask(row.projectId)
+        : await this.mintProjectRootWorkspaceForTask(project, row.projectId);
       await this.db.update(tasks).set({ workspaceId: minted.id }).where(eq(tasks.id, taskId));
       row.workspaceId = minted.id;
       wsRow = minted;
@@ -286,14 +302,7 @@ export class WorkspaceBootstrapService {
   private async mintWorktreeWorkspaceForTask(
     projectId: string
   ): Promise<typeof workspaces.$inferSelect> {
-    const [projectRow] = await this.db
-      .select({
-        workspaceProvider: projects.workspaceProvider,
-        sshConnectionId: projects.sshConnectionId,
-      })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
+    const projectRow = await this.loadProjectWorkspaceFields(projectId);
 
     const isRemote = projectRow?.workspaceProvider === 'ssh';
     const [minted] = await this.db
@@ -308,6 +317,82 @@ export class WorkspaceBootstrapService {
       })
       .returning();
     return minted;
+  }
+
+  /**
+   * Re-attaches a branchless synced task (repository-instance / project-root
+   * origin) to this machine's project-root workspace, creating it if needed
+   * and linking `projects.repositoryWorkspaceId` exactly like
+   * `ensureRepositoryWorkspace` does at attach time.
+   */
+  private async mintProjectRootWorkspaceForTask(
+    project: ProjectProvider,
+    projectId: string
+  ): Promise<typeof workspaces.$inferSelect> {
+    const projectRow = await this.loadProjectWorkspaceFields(projectId);
+
+    if (projectRow?.repositoryWorkspaceId) {
+      const [existing] = await this.db
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, projectRow.repositoryWorkspaceId))
+        .limit(1);
+      if (existing) return existing;
+    }
+
+    const isRemote = projectRow?.workspaceProvider === 'ssh';
+    const type = isRemote ? 'project-ssh' : 'local';
+    const sshConnectionId = isRemote ? (projectRow?.sshConnectionId ?? null) : null;
+    const key = computeWorkspaceKey(type, project.repoPath, sshConnectionId ?? undefined);
+
+    const [byKey] = await this.db.select().from(workspaces).where(eq(workspaces.key, key)).limit(1);
+    const resolvedId = byKey?.id ?? crypto.randomUUID();
+
+    if (!byKey) {
+      await this.db.insert(workspaces).values({
+        id: resolvedId,
+        kind: 'project-root',
+        location: isRemote ? 'remote' : 'local',
+        sshConnectionId,
+        type,
+        path: project.repoPath,
+        key,
+      });
+    }
+
+    await this.db
+      .update(projects)
+      .set({ repositoryWorkspaceId: resolvedId })
+      .where(eq(projects.id, projectId));
+
+    const [resolved] = await this.db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, resolvedId))
+      .limit(1);
+    return resolved;
+  }
+
+  private async loadProjectWorkspaceFields(
+    projectId: string
+  ): Promise<
+    | {
+        workspaceProvider: string | null;
+        sshConnectionId: string | null;
+        repositoryWorkspaceId: string | null;
+      }
+    | undefined
+  > {
+    const [projectRow] = await this.db
+      .select({
+        workspaceProvider: projects.workspaceProvider,
+        sshConnectionId: projects.sshConnectionId,
+        repositoryWorkspaceId: projects.repositoryWorkspaceId,
+      })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    return projectRow;
   }
 
   /**
