@@ -299,7 +299,13 @@ export const SidebarCardList = observer(function SidebarCardList() {
     // destination slot is the over card's position, above or below per the
     // pointer, and the persisted order is the store's existing
     // `setProjectOrder` — one reorder source, snapshot-persisted (ADR 0006).
-    const isAbove = isCursorAbove(pointerY, active.rect.current.translated, over.rect);
+    // The boundary is the card's header row — the row the pointer aims at —
+    // never the whole (expanded) card: a card that nests task rows is far
+    // taller than its header, and its midline sits deep in the body, so an
+    // aim at the header's bottom half would read "above" and land the card
+    // one notch too high (or not at all).
+    const overRowRect = projectDropRowRect(over.rect);
+    const isAbove = isCursorAbove(pointerY, active.rect.current.translated, overRowRect);
     let newIdx = isAbove ? overCardIdx : overCardIdx + 1;
     const ids = sidebarStore.orderedProjects.map((p) => p.id).filter(Boolean);
     const oldIdx = ids.indexOf(activeProjectId);
@@ -980,7 +986,11 @@ function taskDropAuthority(
 
 /**
  * Card drags consider every card container except the active one (dnd-kit's
- * own convention: an item is never a drop target for itself). Task drags
+ * own convention: an item is never a drop target for itself) — and never a
+ * task row: a project drop aimed at an expanded card's nested task body
+ * must resolve to the card itself, not to a task row that would swallow
+ * the drop as a no-op (pointerWithin picks the tightest rect under the
+ * pointer, which for a task row inside a card is the row). Task drags
  * stay restricted to their own project's task rows. The pointer's target
  * wins when the pointer is inside one, the nearest otherwise — the old row
  * collision shape.
@@ -992,11 +1002,12 @@ const cardCollision: CollisionDetection = (args) => {
   const containers = args.droppableContainers.filter((c) => {
     const id = String(c.id);
     if (id === activeId) return false;
+    const cParsed = parseDndId(id);
+    if (!cParsed) return false;
     if (parsed.kind === 'task') {
-      const cParsed = parseDndId(id);
-      return cParsed?.kind === 'task' && cParsed.projectId === parsed.projectId;
+      return cParsed.kind === 'task' && cParsed.projectId === parsed.projectId;
     }
-    return true;
+    return cParsed.kind === 'project';
   });
   const filteredArgs = { ...args, droppableContainers: containers };
   const pointerCollisions = pointerWithin(filteredArgs);
@@ -1010,6 +1021,26 @@ function getEventClientY(event: Event): number | null {
     return touch?.clientY ?? null;
   }
   return null;
+}
+
+/**
+ * The header row of a project card — the `h-9` row that carries the drag
+ * handle and that the pointer actually aims at. The droppable is the whole
+ * card, which nests the Stage Group task rows when expanded and can be far
+ * taller than its header; the drop boundary (midline and insertion-line
+ * edges) must be the header, never the full card, so a header-bottom aim
+ * lands "after" the card instead of one notch too high. A card no taller
+ * than its header (collapsed) is its own row, unchanged.
+ */
+const PROJECT_HEADER_ROW_HEIGHT = 36;
+
+function projectDropRowRect(overRect: ClientRect): ClientRect {
+  if (overRect.height <= PROJECT_HEADER_ROW_HEIGHT) return overRect;
+  return {
+    ...overRect,
+    height: PROJECT_HEADER_ROW_HEIGHT,
+    bottom: overRect.top + PROJECT_HEADER_ROW_HEIGHT,
+  };
 }
 
 function isCursorAbove(
@@ -1109,7 +1140,7 @@ function InsertionIndicator({
     );
     if (authority.blocked) return null;
   }
-  const overRect = over.rect;
+  const overRect = activeParsed.kind === 'project' ? projectDropRowRect(over.rect) : over.rect;
   if (!overRect) return null;
   const isAbove = isCursorAbove(pointerY, active.rect.current.translated, overRect);
   const top = isAbove ? overRect.top : overRect.top + overRect.height;

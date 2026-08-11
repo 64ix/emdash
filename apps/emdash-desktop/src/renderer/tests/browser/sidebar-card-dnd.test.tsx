@@ -81,7 +81,7 @@ type MockSidebarStore = {
 
 const managersByProject = new Map<string, Map<string, MockTaskStore>>();
 
-const PROJECT_NAMES: Record<string, string> = { p1: 'Alpha', p2: 'Beta', p3: 'Gamma' };
+const PROJECT_NAMES: Record<string, string> = { p1: 'Alpha', p2: 'Beta', p3: 'Gamma', p4: 'Delta' };
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -621,6 +621,62 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
 
     expect(mocks.navigate).toHaveBeenCalledWith('board', { projectId: 'p1' });
     expect(mocks.setProjectOrder).not.toHaveBeenCalled();
+  });
+
+  it('lands a card dropped on the bottom half of an expanded card header AFTER that card, not one notch too high', async () => {
+    store().rawSidebarRows = [
+      { kind: 'project', projectId: 'p1' },
+      { kind: 'project', projectId: 'p2' },
+      { kind: 'task', projectId: 'p2', taskId: 't1' },
+      { kind: 'task', projectId: 'p2', taskId: 't2' },
+      { kind: 'project', projectId: 'p3' },
+      { kind: 'project', projectId: 'p4' },
+    ];
+    store().orderedProjects = [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }, { id: 'p4' }];
+    store().expandedProjectIds.add('p2');
+    managersByProject.set(
+      'p2',
+      new Map([
+        ['t1', makeTask('t1', 'idle')],
+        ['t2', makeTask('t2', 'idle')],
+      ])
+    );
+    await mount(<SidebarCardList />);
+
+    // The header is the row the user aims at; its bottom half must mean
+    // "after p2", even though the expanded card's droppable rect is far
+    // taller than the header (its midline sits deep in the task body).
+    await dragCardTo(cardHeader('p4'), () => cardHeader('p2'), 'bottom');
+
+    expect(mocks.setProjectOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.setProjectOrder).toHaveBeenCalledWith(['p1', 'p2', 'p4', 'p3']);
+  });
+
+  it('resolves a project drop aimed at an expanded card task body to the card itself', async () => {
+    store().rawSidebarRows = [
+      { kind: 'project', projectId: 'p1' },
+      { kind: 'project', projectId: 'p2' },
+      { kind: 'task', projectId: 'p2', taskId: 't1' },
+      { kind: 'task', projectId: 'p2', taskId: 't2' },
+      { kind: 'project', projectId: 'p3' },
+    ];
+    store().expandedProjectIds.add('p2');
+    managersByProject.set(
+      'p2',
+      new Map([
+        ['t1', makeTask('t1', 'idle')],
+        ['t2', makeTask('t2', 'idle')],
+      ])
+    );
+    await mount(<SidebarCardList />);
+
+    // Dropping on the nested task body is "below the header" — the card
+    // lands right after the target card, never silently swallowed by the
+    // task row under the pointer.
+    await dragCardTo(cardHeader('p1'), () => taskRow('t2'), 'bottom');
+
+    expect(mocks.setProjectOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.setProjectOrder).toHaveBeenCalledWith(['p2', 'p1', 'p3']);
   });
 
   it('a task drag never reorders projects, and the task row keeps its click-to-task', async () => {
