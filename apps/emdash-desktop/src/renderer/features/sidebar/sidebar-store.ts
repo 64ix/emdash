@@ -113,6 +113,14 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
    * the app ever gains multiple workspaces, key this field by workspace id.
    */
   globalBoardProjectFilter: string[] | undefined = undefined;
+  /**
+   * True while a sidebar task drag is active (set by the card list's drag
+   * handlers). Suspends the Awaiting Input elevation in the row stream —
+   * `partitionAwaitingInput`'s `frozen` contract, the board's own drag
+   * behavior — so the order under the pointer is the pure `sortColumn`
+   * order the drop math ranks against. Never persisted.
+   */
+  taskDragActive = false;
 
   constructor(private readonly projectManager: ProjectManagerStore) {
     makeAutoObservable(this, {
@@ -270,8 +278,14 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
         ? new Set()
         : new Set(this.collapsedStageGroupIdsByProject[projectId] ?? []),
       awaitingInputIds,
+      frozen: this.taskDragActive,
       isVisible: (task) => !hiddenIds.has(task.id) && !fadedIds.has(task.id),
     });
+  }
+
+  /** See `taskDragActive` — set by the card list's drag start/end/cancel. */
+  setTaskDragActive(active: boolean) {
+    this.taskDragActive = active;
   }
 
   /** Visible unpinned tasks in the same order they are rendered in the project tree. */

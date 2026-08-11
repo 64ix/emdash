@@ -18,6 +18,7 @@ import {
   isStageDestinationSafe,
 } from '@shared/core/tasks/stage-authority';
 import { workflowStages, type StageHoldingPr, type WorkflowStage } from '@shared/core/tasks/tasks';
+import { rankBetween } from '@shared/lib/board-rank';
 
 /**
  * The sidebar's grouped row model (spec #85, ticket #86): the pure,
@@ -102,6 +103,15 @@ export type StageGroupRowsInput = {
    */
   awaitingInputIds?: ReadonlySet<string>;
   /**
+   * True while a sidebar task drag is active: suspends the Awaiting Input
+   * elevation (`partitionAwaitingInput`'s own `frozen` contract) so the
+   * rendered order is pure `sortColumn` order for the whole drag — the same
+   * order the drop math interpolates ranks in, and the board's own drag
+   * behavior. Without it, an elevated task makes the visible slot the user
+   * aims at disagree with the rank slot the drop persists.
+   */
+  frozen?: boolean;
+  /**
    * Render-time visibility filter. Ticket #87 injects Shipped Fade and
    * Hidden Task filtering here; the default keeps every given task
    * visible, which is this ticket's group membership rule.
@@ -151,6 +161,7 @@ export function buildStageGroupedRows(input: StageGroupRowsInput): SidebarRow[] 
   const { projectId, tasks, collapsedStages, awaitingInputIds } = input;
   const isVisible = input.isVisible ?? (() => true);
   const awaiting = awaitingInputIds ?? new Set<string>();
+  const frozen = input.frozen ?? false;
 
   // Partition tasks by column in task-manager input order — the order
   // `sortColumn` preserves for unranked entries.
@@ -173,9 +184,9 @@ export function buildStageGroupedRows(input: StageGroupRowsInput): SidebarRow[] 
     if (!entries) continue;
     // Same order the board shows the column in: `sortColumn` (Board Rank
     // first, unranked after), then the render-time awaiting-input
-    // partition (`partitionAwaitingInput`'s `frozen` flag stays false —
-    // there is no drag to freeze for, and the ordering is read-only).
-    const sorted = partitionAwaitingInput(sortColumn(entries), awaiting, false);
+    // partition — suspended (`frozen`) while a task drag is active, so the
+    // order under the pointer is the order the drop math ranks against.
+    const sorted = partitionAwaitingInput(sortColumn(entries), awaiting, frozen);
 
     if (column === 'unstaged') {
       // Loose rows directly under the project row — no "Unstaged" header.
@@ -244,6 +255,97 @@ export function computeSidebarDropPosition(
   return {
     stage: destinationColumn === 'unstaged' ? null : destinationColumn,
     rank: dropIndex === null ? null : computeDropRank(destinationEntries, dropIndex, trueEntries),
+  };
+}
+
+/**
+ * A sidebar drop resolved into every write it takes to land the task at the
+ * aimed slot: the dragged task's own `{ stage, rank }` plus the `backfills` —
+ * Board Ranks to persist on destination tasks that had none.
+ */
+export type SidebarTaskDropPlan = SidebarDropPosition & {
+  /**
+   * Ranks to persist (same stage, `updateBoardPosition`) on the destination
+   * column's previously-unranked tasks, in order. Empty whenever the aimed
+   * slot is already expressible against ranked neighbours.
+   */
+  backfills: { id: string; rank: string }[];
+};
+
+/**
+ * Plans a sidebar task drop, fixing `computeSidebarDropPosition`'s blind spot
+ * for unranked destinations. `computeDropRank` clamps every drop into the
+ * ranked prefix ("an unranked card has no rank to slot next to"), and
+ * `rank: null` floats a task back to its task-manager input order — so in a
+ * group whose tasks were never dragged on the board (the common case: tasks
+ * are created unranked), a positioned drop always landed at the *top* of the
+ * group and an end-of-group drop landed wherever creation order put it,
+ * never where the user aimed.
+ *
+ * When the aimed slot touches the unranked tail, the tail is first
+ * *materialized*: every unranked entry of `trueEntries` (the column's full
+ * rank-candidate set, hidden tasks included, dragged task excluded) gets a
+ * rank appended after the last ranked entry, in its current order. That
+ * changes no rendered order anywhere — `sortColumn` renders ranked-then-
+ * unranked-in-input-order, and the backfilled ranks encode exactly that
+ * sequence — it only makes the slot expressible. The dragged task then ranks
+ * between its now-ranked visible neighbours (`computeDropRank`, collision
+ * guard included); an unpositioned drop (`dropIndex: null` — a group-header
+ * drop or a below-the-last-row drop) keeps the spec's stage-only
+ * `rank: null` write, which now deterministically renders at the group's
+ * end because everything else holds a rank (spec #85 user story 16).
+ */
+export function planSidebarTaskDrop(
+  destinationColumn: ColumnId,
+  destinationEntries: readonly SidebarDropEntry[],
+  dropIndex: number | null,
+  trueEntries: readonly SidebarDropEntry[]
+): SidebarTaskDropPlan {
+  const stage = destinationColumn === 'unstaged' ? null : destinationColumn;
+
+  let rankedLength = destinationEntries.findIndex((entry) => entry.rank === null);
+  if (rankedLength === -1) rankedLength = destinationEntries.length;
+  const needsBackfill =
+    trueEntries.some((entry) => entry.rank === null) &&
+    (dropIndex === null || dropIndex > rankedLength);
+
+  if (!needsBackfill) {
+    return {
+      stage,
+      rank: dropIndex === null ? null : computeDropRank(destinationEntries, dropIndex, trueEntries),
+      backfills: [],
+    };
+  }
+
+  const backfills: { id: string; rank: string }[] = [];
+  const backfilledRankById = new Map<string, string>();
+  let previousRank: string | null = null;
+  for (let i = trueEntries.length - 1; i >= 0; i--) {
+    const rank = trueEntries[i]!.rank;
+    if (rank !== null) {
+      previousRank = rank;
+      break;
+    }
+  }
+  for (const entry of trueEntries) {
+    if (entry.rank !== null) continue;
+    const rank = rankBetween(previousRank, null);
+    backfills.push({ id: entry.id, rank });
+    backfilledRankById.set(entry.id, rank);
+    previousRank = rank;
+  }
+  const withBackfills = (entries: readonly SidebarDropEntry[]) =>
+    entries.map((entry) => ({
+      ...entry,
+      rank: entry.rank ?? backfilledRankById.get(entry.id) ?? null,
+    }));
+  return {
+    stage,
+    rank:
+      dropIndex === null
+        ? null
+        : computeDropRank(withBackfills(destinationEntries), dropIndex, withBackfills(trueEntries)),
+    backfills,
   };
 }
 

@@ -77,6 +77,8 @@ type MockSidebarStore = {
   headerFoldTaskIdsForProject(projectId: string): string[];
   hideTaskFromSidebar: ReturnType<typeof vi.fn>;
   showTaskInSidebar: ReturnType<typeof vi.fn>;
+  taskDragActive: boolean;
+  setTaskDragActive(active: boolean): void;
 };
 
 const managersByProject = new Map<string, Map<string, MockTaskStore>>();
@@ -179,6 +181,10 @@ vi.mock('@renderer/lib/stores/app-state', async () => {
     },
     hideTaskFromSidebar: vi.fn(),
     showTaskInSidebar: vi.fn(),
+    taskDragActive: false,
+    setTaskDragActive(active: boolean) {
+      this.taskDragActive = active;
+    },
   });
   mocks.sidebarStore = store as unknown as MockSidebarStore;
   return {
@@ -281,6 +287,8 @@ vi.mock('@renderer/lib/ui/relative-time', () => ({
 }));
 
 import { SidebarCardList } from '@renderer/features/sidebar/sidebar-card-list';
+import { buildStageGroupedRows } from '@renderer/features/sidebar/stage-group-row-model';
+import type { StageGroupableTask } from '@renderer/features/sidebar/stage-group-row-model';
 
 function makeTask(
   id: string,
@@ -898,5 +906,221 @@ describe('SidebarCardList task drag & drop between Stage Groups (spec #85, ticke
     expect(mocks.toast).toHaveBeenCalledTimes(1);
     const toastCall = mocks.toast.mock.calls[0]![0] as { title?: string };
     expect(toastCall.title).toBe('Stage move blocked');
+  });
+});
+
+/**
+ * One expanded project mixing a ranked group (Idea) with a fully unranked one
+ * (Spec) — the real-world shape: tasks are created without a Board Rank and
+ * only ever gain one through an explicit drop. The release defects this block
+ * locks down all live on the unranked side or on the drop targeting itself.
+ */
+function mixedRankRows(): SidebarRow[] {
+  return [
+    { kind: 'project', projectId: 'p1' },
+    { kind: 'stage-group', projectId: 'p1', stage: 'idea', label: 'Idea', count: 2 },
+    { kind: 'task', projectId: 'p1', taskId: 'idea-1' },
+    { kind: 'task', projectId: 'p1', taskId: 'idea-2' },
+    { kind: 'stage-group', projectId: 'p1', stage: 'spec', label: 'Spec', count: 3 },
+    { kind: 'task', projectId: 'p1', taskId: 'u1' },
+    { kind: 'task', projectId: 'p1', taskId: 'u2' },
+    { kind: 'task', projectId: 'p1', taskId: 'u3' },
+  ];
+}
+
+function mixedRankManagers() {
+  managersByProject.set(
+    'p1',
+    new Map([
+      ['idea-1', makeTask('idea-1', 'idle', { workflowStage: 'idea', boardRank: 'a' })],
+      ['idea-2', makeTask('idea-2', 'idle', { workflowStage: 'idea', boardRank: 'm' })],
+      ['u1', makeTask('u1', 'idle', { workflowStage: 'spec' })],
+      ['u2', makeTask('u2', 'idle', { workflowStage: 'spec' })],
+      ['u3', makeTask('u3', 'idle', { workflowStage: 'spec' })],
+    ])
+  );
+}
+
+/** The Stage Group header row for `label` (the SidebarMenuAction's parent). */
+function groupHeaderRow(label: string): HTMLElement {
+  const action = host.querySelector<HTMLElement>(`button[aria-label^="${label},"]`);
+  if (!action) throw new Error(`no group header ${label}`);
+  return action.parentElement as HTMLElement;
+}
+
+/**
+ * Replays every `updateBoardPosition` write recorded on the mock task stores
+ * onto their task data, then rebuilds the row stream with the real row model
+ * — exactly what the projection does after a drop — so assertions read the
+ * order the user actually ends up seeing, not just the write parameters.
+ */
+async function applyBoardWrites(projectId: string) {
+  const manager = managersByProject.get(projectId)!;
+  for (const task of manager.values()) {
+    for (const call of task.updateBoardPosition.mock.calls) {
+      const [stage, rank] = call as [string | null, string | null];
+      task.data.workflowStage = stage ?? undefined;
+      task.data.boardRank = rank ?? undefined;
+    }
+  }
+  store().rawSidebarRows = buildStageGroupedRows({
+    projectId,
+    tasks: [...manager.values()].map((task) => task.data as StageGroupableTask),
+  });
+  await settle();
+}
+
+function renderedTaskOrder(): string[] {
+  return Array.from(host.querySelectorAll('[data-sidebar-task-id]')).map(
+    (el) => el.getAttribute('data-sidebar-task-id')!
+  );
+}
+
+describe('SidebarCardList task drops on unranked groups and group headers (sidebar dnd release fixes)', () => {
+  beforeEach(async () => {
+    await page.viewport(400, 800);
+    style = document.createElement('style');
+    style.textContent = LAYOUT_CSS;
+    document.head.appendChild(style);
+    host = document.createElement('div');
+    host.id = 'card-dnd-host';
+    document.body.appendChild(host);
+    root = createRoot(host);
+
+    managersByProject.clear();
+    mocks.navigate.mockClear();
+    mocks.captureTelemetry.mockClear();
+    mocks.confirmDeleteProject.mockClear();
+    mocks.setProjectOrder.mockClear();
+    mocks.toast.mockClear();
+    mocks.taskGitWorktree = undefined;
+    mocks.currentView = 'project';
+    mocks.taskParams = {};
+    mocks.projectParams = {};
+    mocks.boardParams = {};
+    mocks.projectViewKind = 'ready';
+    mocks.sshState = 'connected';
+    mocks.getProjectStore.mockImplementation((id: string) => defaultProject(id));
+    mocks.interfaceSettings = {};
+    mocks.TaskGitDiffStats.mockClear();
+    mocks.PrBadge.mockClear();
+    mocks.RelativeTime.mockClear();
+
+    const s = store();
+    s.rawSidebarRows = mixedRankRows();
+    s.orderedProjects = [{ id: 'p1' }];
+    s.expandedProjectIds.clear();
+    s.expandedProjectIds.add('p1');
+    s.collapsedStageGroupIdsByProject = {};
+    s.hiddenTaskIdsByProject = {};
+    s.visibleTaskIdsByProject = {};
+    s.taskSortBy = 'created-at';
+    mixedRankManagers();
+  });
+
+  afterEach(() => {
+    root.unmount();
+    host.remove();
+    style.remove();
+  });
+
+  it('lands an unranked-group drop exactly where it was aimed, not at the top of the group', async () => {
+    await mount(<SidebarCardList />);
+
+    // u3 dropped above u2 in the all-unranked Spec group: the user aimed at
+    // the slot between u1 and u2, so that is where u3 must end up rendered.
+    const u2Center = center(taskRow('u2'));
+    await dragTo(taskRow('u3'), u2Center.x, u2Center.y - 5);
+
+    await applyBoardWrites('p1');
+    expect(renderedTaskOrder()).toEqual(['idea-1', 'idea-2', 'u1', 'u3', 'u2']);
+  });
+
+  it('lands an end-of-group drop at the end the user aimed at, unranked tail included', async () => {
+    await mount(<SidebarCardList />);
+
+    // idea-1 dropped below u3, the Spec group's last row: it must render at
+    // the end of the Spec group — never floated back up by creation order.
+    const u3Center = center(taskRow('u3'));
+    await dragTo(taskRow('idea-1'), u3Center.x, u3Center.y + 5);
+
+    const idea1 = managersByProject.get('p1')!.get('idea-1')!;
+    expect(idea1.updateBoardPosition).toHaveBeenCalledWith('spec', null);
+
+    await applyBoardWrites('p1');
+    expect(renderedTaskOrder()).toEqual(['idea-2', 'u1', 'u2', 'u3', 'idea-1']);
+  });
+
+  it('drops a task aimed at a Stage Group header into that group, never the one above', async () => {
+    await mount(<SidebarCardList />);
+
+    // idea-2 dropped onto the Spec header itself: an unpositioned drop into
+    // the Spec group (spec #85 user story 16) — stage-only, rendered at the
+    // group's end. Aim slightly above the header's midline: the exact aim
+    // that used to leak into whichever task row happened to be nearest.
+    const headerCenter = center(groupHeaderRow('Spec'));
+    await dragTo(taskRow('idea-2'), headerCenter.x, headerCenter.y - 2);
+
+    const idea2 = managersByProject.get('p1')!.get('idea-2')!;
+    expect(idea2.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(idea2.updateBoardPosition).toHaveBeenCalledWith('spec', null);
+
+    await applyBoardWrites('p1');
+    expect(renderedTaskOrder()).toEqual(['idea-1', 'u1', 'u2', 'u3', 'idea-2']);
+  });
+
+  it('drops a task onto a collapsed Stage Group header into that group', async () => {
+    // Spec collapsed: its header stays, its task rows are omitted — the
+    // header is the only drop target that can mean "into Spec".
+    const s = store();
+    s.collapsedStageGroupIdsByProject = { p1: ['spec'] };
+    s.rawSidebarRows = mixedRankRows().filter(
+      (row) => row.kind !== 'task' || !row.taskId.startsWith('u')
+    );
+    await mount(<SidebarCardList />);
+
+    const headerCenter = center(groupHeaderRow('Spec'));
+    await dragTo(taskRow('idea-2'), headerCenter.x, headerCenter.y);
+
+    const idea2 = managersByProject.get('p1')!.get('idea-2')!;
+    expect(idea2.updateBoardPosition).toHaveBeenCalledTimes(1);
+    expect(idea2.updateBoardPosition).toHaveBeenCalledWith('spec', null);
+  });
+
+  it('keeps every other row in place mid-drag: no row ever crosses a group header', async () => {
+    await mount(<SidebarCardList />);
+
+    // Dragging u1 up into the Idea group used to displace idea-2 down across
+    // the Spec header — the "task jumps into the neighbouring group" defect.
+    // The rows must stay put: the overlay replica and the insertion line are
+    // the only things that move during a drag.
+    const beforeTops = new Map(
+      ['idea-1', 'idea-2', 'u2', 'u3'].map((id) => [id, taskRow(id).getBoundingClientRect().top])
+    );
+    const idea2Center = center(taskRow('idea-2'));
+    await dragTo(taskRow('u1'), idea2Center.x, idea2Center.y - 5, 6, () => {
+      for (const [id, top] of beforeTops) {
+        expect(Math.abs(taskRow(id).getBoundingClientRect().top - top)).toBeLessThan(1);
+      }
+      expect(insertionIndicator()).not.toBeNull();
+    });
+
+    await applyBoardWrites('p1');
+    expect(renderedTaskOrder()).toEqual(['idea-1', 'u1', 'idea-2', 'u2', 'u3']);
+  });
+
+  it('cancels a drop released outside the project card without writing anything', async () => {
+    await mount(<SidebarCardList />);
+
+    // u2 released 150px below the card, in the sidebar's empty scroll area:
+    // no target under the pointer means no move — never a silent write to
+    // whichever row happened to be nearest.
+    const cardRect = cardContainer('p1').getBoundingClientRect();
+    await dragTo(taskRow('u2'), cardRect.left + cardRect.width / 2, cardRect.bottom + 150);
+
+    for (const task of managersByProject.get('p1')!.values()) {
+      expect(task.updateBoardPosition).not.toHaveBeenCalled();
+    }
+    expect(renderedTaskOrder()).toEqual(['idea-1', 'idea-2', 'u1', 'u2', 'u3']);
   });
 });

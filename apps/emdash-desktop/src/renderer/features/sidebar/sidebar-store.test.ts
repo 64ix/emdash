@@ -260,6 +260,52 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     ]);
   });
 
+  it('suspends the Awaiting Input elevation while a task drag is active', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'awaiting',
+              createdAt: '2026-01-01T00:00:01.000Z',
+              workflowStage: 'spec',
+              boardRank: 'm',
+            },
+            {
+              id: 'ranked-a',
+              createdAt: '2026-01-01T00:00:02.000Z',
+              workflowStage: 'spec',
+              boardRank: 'a',
+            },
+          ],
+        },
+      ])
+    );
+    registryMocks.statusByTaskId.set('awaiting', 'awaiting-input');
+    store.ensureProjectExpanded('project-1');
+
+    // While the card list's drag is active the rows are pure sortColumn
+    // order — the order the drop math ranks against; the elevation returns
+    // as soon as the drag ends.
+    store.setTaskDragActive(true);
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'group:Spec:2',
+      'task:ranked-a',
+      'task:awaiting',
+    ]);
+
+    store.setTaskDragActive(false);
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-1',
+      'group:Spec:2',
+      'task:awaiting',
+      'task:ranked-a',
+    ]);
+  });
+
   it('shows the visible-task count on each group header', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([

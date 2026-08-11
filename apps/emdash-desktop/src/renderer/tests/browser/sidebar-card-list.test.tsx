@@ -187,6 +187,10 @@ vi.mock('@renderer/lib/stores/app-state', async () => {
     },
     hideTaskFromSidebar: vi.fn(),
     showTaskInSidebar: vi.fn(),
+    taskDragActive: false,
+    setTaskDragActive(active: boolean) {
+      this.taskDragActive = active;
+    },
   });
   mocks.sidebarStore = store as unknown as MockSidebarStore;
   return {
