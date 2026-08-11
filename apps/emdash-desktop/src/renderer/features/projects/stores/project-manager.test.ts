@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { syncStatusChannel } from '@shared/events/syncEvents';
 import type { LocalProject, SshProject } from '@shared/projects';
 import {
   createUnmountedProject,
@@ -837,5 +838,47 @@ describe('ProjectManagerStore unattached projects (spec #130, ticket #136)', () 
     expect(entry && isUnmountedProject(entry)).toBe(true);
     expect(entry?.errorCode).toBe('unattached');
     expect(mocks.openProject).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProjectManagerStore sync reload (spec #130: rows applied while running)', () => {
+  type Channel = { name: string };
+  type Handler = (payload: unknown) => void;
+  let handlers: Map<string, Handler>;
+
+  beforeEach(() => {
+    handlers = new Map();
+    mocks.eventOn.mockImplementation((channel: Channel, handler: Handler) => {
+      handlers.set(channel.name, handler);
+      return () => handlers.delete(channel.name);
+    });
+  });
+
+  it('picks up projects a completed sync cycle applied while the app was running', async () => {
+    const rpc = await import('@renderer/lib/ipc');
+    vi.spyOn(rpc.rpc.projects, 'getProjects').mockResolvedValueOnce([]);
+    const store = new ProjectManagerStore();
+    await store.load();
+    expect(store.projects.size).toBe(0);
+
+    // The main process applies the pulled rows, then reports the cycle done.
+    vi.spyOn(rpc.rpc.projects, 'getProjects').mockResolvedValueOnce([
+      localProject({ id: 'synced-project', path: null }),
+    ]);
+    const fireSync = handlers.get(syncStatusChannel.name);
+    expect(fireSync).toBeDefined();
+    fireSync?.({
+      state: 'up-to-date',
+      paired: true,
+      lastSyncAt: 1,
+      lastError: null,
+      pendingCount: 0,
+    });
+
+    await vi.waitFor(() => {
+      const synced = store.projects.get('synced-project');
+      expect(synced).toBeDefined();
+      expect(synced?.errorCode).toBe('unattached');
+    });
   });
 });

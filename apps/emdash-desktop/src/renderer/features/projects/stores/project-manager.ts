@@ -6,10 +6,12 @@ import { viewStateCache } from '@renderer/lib/stores/view-state-cache';
 import { log } from '@renderer/utils/logger';
 import { captureTelemetry } from '@renderer/utils/telemetryClient';
 import { sshConnectionEventChannel } from '@shared/core/ssh/sshEvents';
+import { syncStatusChannel } from '@shared/events/syncEvents';
 import type {
   AttachProjectParams,
   AttachProjectResult,
   LocalProject,
+  Project,
   SshProject,
 } from '@shared/projects';
 import { isUnattachedProjectData } from '@shared/projects';
@@ -38,8 +40,10 @@ export class ProjectManagerStore {
   pendingCreationIds = observable.set<string>();
   private _projectMountPromises = new Map<string, Promise<void>>();
   private _loadPromise: Promise<void> | null = null;
+  private _syncReloadInFlight: Promise<void> | null = null;
   private _lastSshRecoveryAttemptAt = 0;
   private _disposeSshConnectionEvent: (() => void) | null = null;
+  private _disposeSyncStatusEvent: (() => void) | null = null;
   private readonly _handleOnline = (): void => {
     this.retryDisconnectedSshProjects({ force: true });
   };
@@ -55,6 +59,17 @@ export class ProjectManagerStore {
       this._mountDisconnectedSshProjects(event.connectionId);
     });
 
+    // A completed sync cycle may have applied pulled rows (spec #130): the
+    // engine writes them straight into the DB, so the project list loaded at
+    // boot is stale. Re-query and merge the rows the boot load did not see —
+    // e.g. a project synced from another machine — without touching rows the
+    // user is already looking at. Merge-only: remotely deleted rows are
+    // reaped on the next launch.
+    this._disposeSyncStatusEvent = events.on(syncStatusChannel, (status) => {
+      if (status.state !== 'up-to-date') return;
+      void this._reloadSyncedProjects();
+    });
+
     globalThis.window?.addEventListener('online', this._handleOnline);
     globalThis.window?.addEventListener('focus', this._handleFocus);
   }
@@ -62,6 +77,8 @@ export class ProjectManagerStore {
   dispose(): void {
     this._disposeSshConnectionEvent?.();
     this._disposeSshConnectionEvent = null;
+    this._disposeSyncStatusEvent?.();
+    this._disposeSyncStatusEvent = null;
     globalThis.window?.removeEventListener('online', this._handleOnline);
     globalThis.window?.removeEventListener('focus', this._handleFocus);
   }
@@ -75,6 +92,28 @@ export class ProjectManagerStore {
 
   private async _doLoad(): Promise<void> {
     const rawProjects = await rpc.projects.getProjects();
+    await this._mergeProjectRows(rawProjects);
+  }
+
+  /**
+   * Re-queries the project list after a sync cycle completes, merging in any
+   * projects that arrived via the relay while the app was running (spec
+   * #130: synced projects must appear without a restart). Coalesced: a burst
+   * of status events collapses onto one reload.
+   */
+  private _reloadSyncedProjects(): void {
+    if (this._syncReloadInFlight !== null) return;
+    this._syncReloadInFlight = (async () => {
+      try {
+        const rawProjects = await rpc.projects.getProjects();
+        await this._mergeProjectRows(rawProjects);
+      } finally {
+        this._syncReloadInFlight = null;
+      }
+    })();
+  }
+
+  private async _mergeProjectRows(rawProjects: Project[]): Promise<void> {
     const toMount: string[] = [];
     runInAction(() => {
       for (const p of rawProjects) {
