@@ -46,6 +46,7 @@ import {
   handleJoinDeepLink,
 } from './core/sync/deep-link';
 import { syncService } from './core/sync/sync-service-instance';
+import { backfillTaskBranches } from './core/tasks/backfill-task-branches';
 import { boardSyncService } from './core/tasks/board-sync-service';
 import { updateService } from './core/updates/update-service';
 import { viewStateService } from './core/view-state/view-state-service';
@@ -123,6 +124,8 @@ void app.whenReady().then(async () => {
 
   try {
     await initializeDatabase();
+    const { db } = await import('./db/client');
+    backfillTaskBranches(db);
     await resetStaleAcpAgentStatuses();
     searchService.initialize();
     workspaceFileIndexService.initialize();

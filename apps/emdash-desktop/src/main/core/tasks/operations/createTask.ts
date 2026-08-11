@@ -21,6 +21,7 @@ import type {
   CreateTaskSuccess,
   TaskLifecycleStatus,
 } from '@shared/core/tasks/tasks';
+import { deriveBranchName } from '../resolve-workspace-intent';
 import { mapTaskRowToTask } from '../utils/utils';
 
 type ConvInsert = typeof conversations.$inferInsert;
@@ -51,6 +52,8 @@ export interface PreparedCreateTask {
   workspaceId: string;
   newWorkspaceValues: typeof workspaces.$inferInsert | null;
   convInsert: ConvInsert | undefined;
+  /** Sync-carried branch identity — see `commitCreateTask`. */
+  taskBranch: string | null;
 }
 
 /**
@@ -67,6 +70,12 @@ export async function prepareCreateTask(
 
   const { workspaceConfig } = params;
   const initialStatus: TaskLifecycleStatus = params.taskConfig.initialStatus ?? 'in_progress';
+
+  // The task's branch identity, mirrored onto the synced task row. The branch
+  // itself only lives in the machine-local `workspaces.config`, which never
+  // travels across machines — without this column the receiving machine cannot
+  // recover any setup intent for a synced task (spec #130 story 25).
+  const taskBranch = deriveBranchName(workspaceConfig.git);
 
   let workspaceId: string;
   let newWorkspaceValues: typeof workspaces.$inferInsert | null = null;
@@ -164,7 +173,7 @@ export async function prepareCreateTask(
     };
   }
 
-  return ok({ params, initialStatus, workspaceId, newWorkspaceValues, convInsert });
+  return ok({ params, initialStatus, workspaceId, newWorkspaceValues, convInsert, taskBranch });
 }
 
 /**
@@ -177,7 +186,8 @@ export function commitCreateTask(
   prepared: PreparedCreateTask,
   tx: DrizzleTx
 ): { taskRow: TaskRow; convRow: ConversationRow | undefined } {
-  const { params, initialStatus, workspaceId, newWorkspaceValues, convInsert } = prepared;
+  const { params, initialStatus, workspaceId, newWorkspaceValues, convInsert, taskBranch } =
+    prepared;
 
   const [taskRow] = tx
     .insert(tasks)
@@ -187,6 +197,7 @@ export function commitCreateTask(
       name: params.taskConfig.name,
       status: initialStatus,
       workspaceId,
+      taskBranch,
       linkedIssues: linkedIssueRolesFromOrigin(params.taskConfig.linkedIssue),
       type: params.automationRunId ? 'automation-run' : 'task',
       automationRunId: params.automationRunId ?? null,

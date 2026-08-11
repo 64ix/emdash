@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { ok } from '@emdash/shared';
+import { err, ok } from '@emdash/shared';
 import { openFixture } from '@tooling/utils/db';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -230,6 +230,71 @@ describe('WorkspaceBootstrapService', () => {
 
       getProject.mockRestore();
     });
+
+    // A modern synced task carries no branch identity on its own row (the
+    // branch lives in the machine-local workspaces.config, which never
+    // travels). Without a task_branch there is nothing to check out — the task
+    // ran against the project root on its origin machine, so re-attach it to
+    // this machine's own repository workspace instead of minting a worktree.
+    it('re-points a branchless synced task to the project-root workspace', async () => {
+      await fixture.db.insert(workspaces).values({
+        id: 'ws-root',
+        kind: 'project-root',
+        location: 'local',
+        type: 'local',
+        path: '/repo',
+      });
+      await fixture.db
+        .update(projects)
+        .set({ repositoryWorkspaceId: 'ws-root' })
+        .where(eq(projects.id, 'proj-1'));
+
+      const project = {
+        projectId: 'proj-1',
+        type: 'local',
+        repoPath: '/repo',
+        defaultWorkspaceType: { kind: 'local' },
+        settings: { get: vi.fn() },
+        gitRepository: {
+          getConfiguredRemotes: vi.fn(),
+        },
+        gitRepositoryFetchService: {},
+        worktreeService: {
+          existsAtAbsolutePath: vi.fn().mockResolvedValue(true),
+        },
+      } as unknown as ProjectProvider;
+      const getProject = vi.spyOn(projectManager, 'getProject').mockReturnValue(project);
+
+      await fixture.db.insert(tasks).values({
+        id: 'task-branchless',
+        projectId: 'proj-1',
+        name: 'Branchless synced task',
+        status: 'in_progress',
+        workspaceId: null,
+        taskBranch: null,
+      });
+
+      const result = await svc.ensureWorkspaceSetupForTask('task-branchless');
+
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error('expected success');
+      expect(result.data.path).toBe('/repo');
+
+      const [taskRow] = await fixture.db
+        .select()
+        .from(tasks)
+        .where(eq(tasks.id, 'task-branchless'));
+      expect(taskRow.workspaceId).toBe('ws-root');
+
+      const worktrees = await fixture.db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(eq(workspaces.kind, 'worktree'));
+      expect(worktrees).toHaveLength(0);
+      expect(mocks.acquireWorkspace).toHaveBeenCalled();
+
+      getProject.mockRestore();
+    });
   });
 
   describe('ensureWorkspaceSetup', () => {
@@ -456,6 +521,155 @@ describe('WorkspaceBootstrapService', () => {
       const [ws] = await fixture.db.select().from(workspaces).where(eq(workspaces.id, WS_ID));
       expect(ws.path).toBe('/worktrees/task-branch');
       expect(ws.branchName).toBe('task/branch');
+    });
+
+    // A persisted worktree whose branch vanished (cleaned worktree + deleted
+    // branch + remote branch gone) must not fail outright: the workspace still
+    // carries its full config, so the intent path can rebuild the checkout —
+    // for a pr-branch config by re-fetching refs/pull/<n>/head.
+    it('recovers a persisted worktree via the pr-branch intent when the branch is gone', async () => {
+      const serveBranchWorktree = vi
+        .fn()
+        .mockResolvedValue(err({ type: 'branch-not-found', branch: 'task/branch' }));
+      const existsAtAbsolutePath = vi.fn().mockResolvedValue(true);
+      const getWorktreePoolPath = vi.fn().mockResolvedValue('/worktrees');
+      const runWorkspaceSetup = vi.fn().mockResolvedValue(ok({ path: '/worktrees/task-branch' }));
+      const project = {
+        projectId: 'proj-1',
+        type: 'local',
+        repoPath: '/repo',
+        defaultWorkspaceType: { kind: 'local' },
+        settings: {
+          get: vi.fn(),
+        },
+        gitRepository: {
+          getConfiguredRemotes: vi.fn().mockResolvedValue({
+            baseRemote: 'origin',
+            pushRemote: 'origin',
+          }),
+        },
+        gitRepositoryFetchService: {},
+        worktreeService: {
+          existsAtAbsolutePath,
+          serveBranchWorktree,
+          getWorktreePoolPath,
+        },
+        runWorkspaceSetup,
+      } as unknown as ProjectProvider;
+
+      const result = await svc.ensureWorkspaceSetup(
+        {
+          id: WS_ID,
+          type: 'local',
+          kind: 'worktree',
+          path: '/worktrees/task-branch',
+          branchName: 'task/branch',
+          config: {
+            version: '3',
+            git: {
+              kind: 'pr-branch',
+              prNumber: 153,
+              headBranch: 'pr/153-head',
+              headRepositoryUrl: 'https://github.com/64ix/emdash',
+              isFork: false,
+              taskBranch: 'task/branch',
+            },
+            workspace: { kind: 'new-worktree' },
+          },
+        },
+        { workspaceIntent: null, workspaceProvider: null },
+        task,
+        project
+      );
+
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error('expected success');
+      expect(result.data.path).toBe('/worktrees/task-branch');
+      expect(serveBranchWorktree).toHaveBeenCalledWith('task/branch', undefined);
+      expect(runWorkspaceSetup).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          {
+            kind: 'git-fetch',
+            args: {
+              remote: 'origin',
+              refspec: 'refs/pull/153/head:refs/heads/pr/153-head',
+              force: true,
+            },
+          },
+          { kind: 'add-worktree', args: { branchName: 'task/branch' } },
+        ]),
+        '/worktrees'
+      );
+      expect(mocks.acquireWorkspace).toHaveBeenCalled();
+
+      const [ws] = await fixture.db.select().from(workspaces).where(eq(workspaces.id, WS_ID));
+      expect(ws.path).toBe('/worktrees/task-branch');
+      expect(ws.branchName).toBe('task/branch');
+    });
+
+    it('surfaces branch-not-found when the intent path cannot recover the branch either', async () => {
+      const serveBranchWorktree = vi
+        .fn()
+        .mockResolvedValue(err({ type: 'branch-not-found', branch: 'task/branch' }));
+      const existsAtAbsolutePath = vi.fn().mockResolvedValue(true);
+      const getWorktreePoolPath = vi.fn().mockResolvedValue('/worktrees');
+      const runWorkspaceSetup = vi.fn().mockResolvedValue(
+        err({
+          kind: 'add-worktree',
+          type: 'worktree-failed',
+          branchName: 'task/branch',
+          message: 'Branch "task/branch" was not found locally or on remote',
+        })
+      );
+      const project = {
+        projectId: 'proj-1',
+        type: 'local',
+        repoPath: '/repo',
+        defaultWorkspaceType: { kind: 'local' },
+        settings: {
+          get: vi.fn(),
+        },
+        gitRepository: {
+          getConfiguredRemotes: vi.fn().mockResolvedValue({
+            baseRemote: 'origin',
+            pushRemote: 'origin',
+          }),
+        },
+        gitRepositoryFetchService: {},
+        worktreeService: {
+          existsAtAbsolutePath,
+          serveBranchWorktree,
+          getWorktreePoolPath,
+        },
+        runWorkspaceSetup,
+      } as unknown as ProjectProvider;
+
+      const result = await svc.ensureWorkspaceSetup(
+        {
+          id: WS_ID,
+          type: 'local',
+          kind: 'worktree',
+          path: '/worktrees/task-branch',
+          branchName: 'task/branch',
+          config: {
+            version: '3',
+            git: { kind: 'use-branch', branchName: 'task/branch' },
+            workspace: { kind: 'new-worktree' },
+          },
+        },
+        { workspaceIntent: null, workspaceProvider: null },
+        task,
+        project
+      );
+
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('expected failure');
+      expect(result.error.type).toBe('setup-failed');
+      if (result.error.type === 'setup-failed') {
+        expect(result.error.stepKind).toBe('add-worktree');
+        expect(result.error.stepErrorType).toBe('worktree-failed');
+      }
+      expect(mocks.acquireWorkspace).not.toHaveBeenCalled();
     });
   });
 });
