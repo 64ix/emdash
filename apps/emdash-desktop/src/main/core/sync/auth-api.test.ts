@@ -31,15 +31,27 @@ describe('HttpRelayAuthApi', () => {
     return new HttpRelayAuthApi(endpoint);
   }
 
-  it('POSTs to /v1/space without a bearer token and returns the created space', async () => {
+  it('POSTs to /v1/space without a bearer token and maps the snake_case reply to camelCase', async () => {
     globalThis.fetch = fetchMock;
     fetchMock.mockResolvedValue(
-      jsonResponse({ space_id: 's1', device_id: 'd1', device_token: 'tok', secret: 'emdj1_x' })
+      jsonResponse({
+        space_id: 's1',
+        device_id: 'd1',
+        device_token: 'tok',
+        secret: 'emdj1_x',
+      })
     );
 
     const result = await makeApi().createSpace('main');
 
     expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toEqual({
+      spaceId: 's1',
+      deviceId: 'd1',
+      deviceToken: 'tok',
+      secret: 'emdj1_x',
+    });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://relay.example/v1/space');
     expect(init.method).toBe('POST');
@@ -47,6 +59,54 @@ describe('HttpRelayAuthApi', () => {
     expect(headers.get('authorization')).toBeNull();
     expect(headers.get('x-relay-key')).toBe('key-1');
     expect(JSON.parse(init.body as string)).toEqual({ name: 'main' });
+  });
+
+  it('maps the snake_case join reply to camelCase', async () => {
+    globalThis.fetch = fetchMock;
+    fetchMock.mockResolvedValue(
+      jsonResponse({ device_id: 'd2', device_token: 'tok2', space_id: 's1' })
+    );
+
+    const result = await makeApi().joinSpace('join-hash', 's1', 'second');
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toEqual({ deviceId: 'd2', deviceToken: 'tok2', spaceId: 's1' });
+  });
+
+  it('maps snake_case device rows to camelCase', async () => {
+    globalThis.fetch = fetchMock;
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        devices: [
+          {
+            device_id: 'd1',
+            name: 'main',
+            created_at: 123,
+            last_seen_at: 456,
+            revoked: false,
+            revoked_at: null,
+            self: true,
+          },
+        ],
+      })
+    );
+
+    const result = await makeApi().listDevices('tok');
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toEqual([
+      {
+        deviceId: 'd1',
+        name: 'main',
+        createdAt: 123,
+        lastSeenAt: 456,
+        revoked: false,
+        revokedAt: null,
+        self: true,
+      },
+    ]);
   });
 
   it('sends the bearer token on authenticated endpoints', async () => {

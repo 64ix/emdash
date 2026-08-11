@@ -46,6 +46,62 @@ export interface RelayDeviceInfo {
 }
 
 /**
+ * Wire shapes (the relay speaks snake_case): used only to read raw JSON,
+ * then mapped to the camelCase DTOs above at the API boundary.
+ */
+interface RelayWireSpaceCreated {
+  space_id: string;
+  device_id: string;
+  device_token: string;
+  secret: string;
+}
+
+interface RelayWireJoinResult {
+  device_id: string;
+  device_token: string;
+  space_id: string;
+}
+
+interface RelayWireDeviceInfo {
+  device_id: string;
+  name: string;
+  created_at: number;
+  last_seen_at: number | null;
+  revoked: boolean;
+  revoked_at: number | null;
+  self: boolean;
+}
+
+function toSpaceCreated(wire: RelayWireSpaceCreated): RelaySpaceCreated {
+  return {
+    spaceId: wire.space_id,
+    deviceId: wire.device_id,
+    deviceToken: wire.device_token,
+    secret: wire.secret,
+  };
+}
+
+function toJoinResult(wire: RelayWireJoinResult): RelayJoinResult {
+  return {
+    deviceId: wire.device_id,
+    deviceToken: wire.device_token,
+    spaceId: wire.space_id,
+  };
+}
+
+function toDeviceInfo(wire: RelayWireDeviceInfo): RelayDeviceInfo {
+  return {
+    deviceId: wire.device_id,
+    name: wire.name,
+    createdAt: wire.created_at,
+    lastSeenAt: wire.last_seen_at,
+    revoked: wire.revoked,
+    revokedAt: wire.revoked_at,
+    self: wire.self,
+  };
+}
+
+/**
  * `POST /v1/devices/join-secret` response: the echo of the registered
  * SHA-256 digest of the join credential. The secret itself is composed
  * client-side (fresh join half + the stored K0) and never sent.
@@ -91,7 +147,9 @@ export class HttpRelayAuthApi implements RelayAuthApi {
   ) {}
 
   async createSpace(name: string): Promise<Result<RelaySpaceCreated, RelayApiError>> {
-    return this.post<RelaySpaceCreated, { name?: string }>('/v1/space', { name });
+    const result = await this.post<RelayWireSpaceCreated, { name?: string }>('/v1/space', { name });
+    if (!result.success) return result;
+    return ok(toSpaceCreated(result.data));
   }
 
   async joinSpace(
@@ -99,10 +157,12 @@ export class HttpRelayAuthApi implements RelayAuthApi {
     spaceId: string,
     name: string
   ): Promise<Result<RelayJoinResult, RelayApiError>> {
-    return this.post<RelayJoinResult, { join_hash: string; space_id: string; name?: string }>(
+    const result = await this.post<RelayWireJoinResult, { join_hash: string; space_id: string; name?: string }>(
       '/v1/join',
       { join_hash: joinHash, space_id: spaceId, name }
     );
+    if (!result.success) return result;
+    return ok(toJoinResult(result.data));
   }
 
   async mintJoinSecret(
@@ -119,11 +179,11 @@ export class HttpRelayAuthApi implements RelayAuthApi {
   }
 
   async listDevices(token: string): Promise<Result<RelayDeviceInfo[], RelayApiError>> {
-    const result = await this.request<{ devices: RelayDeviceInfo[] }>('/v1/devices', {
+    const result = await this.request<{ devices: RelayWireDeviceInfo[] }>('/v1/devices', {
       method: 'GET',
       token,
     });
-    return result.success ? ok(result.data.devices) : result;
+    return result.success ? ok(result.data.devices.map(toDeviceInfo)) : result;
   }
 
   async revokeDevice(token: string, deviceId: string): Promise<Result<void, RelayApiError>> {
