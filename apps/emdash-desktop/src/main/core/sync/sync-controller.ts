@@ -68,6 +68,9 @@ export const syncController = createRPCController({
   /** Clears the machine-local relay settings (does not un-pair). */
   clearRelaySettings: async (): Promise<{ success: true }> => {
     await relaySettingsStore.clear();
+    // Re-emit the status so the widget flips to "sync isn't set up" right
+    // away instead of waiting for the next poll cycle to notice.
+    syncService.kick();
     return { success: true };
   },
 

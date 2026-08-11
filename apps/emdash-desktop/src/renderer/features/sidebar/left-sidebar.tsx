@@ -2,7 +2,6 @@ import { Clock, FolderInput, Library, MessageSquareShare, Settings } from 'lucid
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ProviderUsageGauges } from '@renderer/features/provider-usage/provider-usage-gauges';
-import { SyncOnboardingPrompt } from '@renderer/features/sync/sync-onboarding-prompt';
 import { SyncStatusWidget } from '@renderer/features/sync/sync-status-widget';
 import { useWorkspaceLayoutContext } from '@renderer/lib/layout/layout-provider';
 import {
@@ -77,10 +76,9 @@ export const LeftSidebar: React.FC = observer(function LeftSidebar() {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
-          {/* First-run sync onboarding: Join (primary) vs Start from scratch
-              (secondary), dismissible for the session (spec #130, #137). */}
-          <SyncOnboardingPrompt />
           <ProviderUsageGauges />
+          {/* The single sync surface: relay-unconfigured message, onboarding
+              actions, and daily status all live in the widget (spec #130). */}
           <SyncStatusWidget />
           <SidebarMenu>
             <SidebarSearchTrigger />

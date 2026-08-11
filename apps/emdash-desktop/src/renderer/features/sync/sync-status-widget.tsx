@@ -1,14 +1,20 @@
 import {
   AlertCircle,
+  ArrowRight,
   CheckCircle2,
   Cloud,
+  CloudCog,
   CloudOff,
   KeyRound,
   LoaderCircle,
+  Plus,
   RefreshCw,
   X,
 } from 'lucide-react';
 import { useSyncExternalStore } from 'react';
+import { toast } from '@renderer/lib/hooks/use-toast';
+import { rpc } from '@renderer/lib/ipc';
+import { useNavigate } from '@renderer/lib/layout/navigation-provider';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
 import {
   Popover,
@@ -28,9 +34,15 @@ import { syncStore } from './sync-store';
  * per-state icon, an always-visible "Sync now" action, and a popover with the
  * last successful sync time and any error.
  *
- * States: syncing (spinner) / up-to-date (check) / offline-with-pending
- * (cloud-off + pending badge) / error (alert) / idle (cloud — not paired; the
- * onboarding prompt covers first-run and "Sync now" opens the join modal).
+ * The widget is the single sync surface in the sidebar (the first-run
+ * onboarding prompt lives inside it):
+ * - Relay not configured (no URL + key): the row itself shows "Sync isn't
+ *   set up" and navigates to Settings → Devices, where the relay form lives.
+ * - Configured but not paired: idle state (cloud) — "Sync now" opens the join
+ *   modal, and the popover carries both onboarding actions (Join an existing
+ *   space / Start from scratch).
+ * - Paired: syncing (spinner) / up-to-date (check) / offline-with-pending
+ *   (cloud-off + pending badge) / error (alert).
  */
 const STATE_LABELS: Record<SyncStatus['state'], string> = {
   idle: 'Sync is off — not paired with a sync space',
@@ -43,6 +55,18 @@ const STATE_LABELS: Record<SyncStatus['state'], string> = {
 export function SyncStatusWidget() {
   const status = useSyncExternalStore(syncStore.subscribe, syncStore.getSnapshot);
 
+  // No relay configured: sync cannot run at all — the row itself carries the
+  // message and redirects to the relay form (Settings → Devices) instead of
+  // pretending sync exists. Covers unpaired AND paired machines whose relay
+  // was cleared.
+  if (status.relayConfigured === false) {
+    return (
+      <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
+        <SyncSetupRequiredTrigger />
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
       <SyncStatusTrigger status={status} />
@@ -51,7 +75,43 @@ export function SyncStatusWidget() {
   );
 }
 
+/**
+ * The unconfigured-relay row: a plain button (no popover) that takes the user
+ * to Settings → Devices, where the relay URL + key form lives. When the
+ * values come from env vars the form is read-only and explains that.
+ */
+function SyncSetupRequiredTrigger() {
+  const { navigate } = useNavigate();
+  return (
+    <button
+      type="button"
+      data-testid="sync-setup-required"
+      onClick={() => navigate('settings', { tab: 'devices' })}
+      aria-label="Sync isn't set up — open sync settings"
+      className="group focus-visible:ring-accent flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none hover:bg-background-quaternary focus-visible:ring-1"
+    >
+      <CloudCog className="size-3.5 shrink-0 text-foreground-warning" />
+      <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+        Sync isn&apos;t set up
+      </span>
+      <ArrowRight className="size-3.5 shrink-0 text-foreground-muted" />
+    </button>
+  );
+}
+
 function SyncStatusTrigger({ status }: { status: SyncStatus }) {
+  const showJoin = useShowModal('joinSyncSpaceModal');
+  const showPairingSecret = useShowModal('pairingSecretModal');
+
+  const createSpace = async () => {
+    const result = await rpc.sync.createSpace();
+    if (!result.success) {
+      toast({ title: result.message, variant: 'destructive' });
+      return;
+    }
+    showPairingSecret({ secret: result.secret, deepLink: result.deepLink });
+  };
+
   return (
     <Popover onOpenChange={(open) => open && void syncStore.refresh()}>
       <PopoverTrigger
@@ -95,6 +155,28 @@ function SyncStatusTrigger({ status }: { status: SyncStatus }) {
             </PopoverClose>
           </div>
         </div>
+        {!status.paired && (
+          <div className="flex flex-col gap-1.5">
+            <button
+              type="button"
+              data-testid="sync-popover-join"
+              onClick={() => showJoin({})}
+              className="focus-visible:ring-accent flex items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-xs font-medium text-background outline-none hover:opacity-90 focus-visible:ring-1"
+            >
+              <ArrowRight className="size-3.5" aria-hidden />
+              Join an existing space
+            </button>
+            <button
+              type="button"
+              data-testid="sync-popover-create"
+              onClick={() => void createSpace()}
+              className="focus-visible:ring-accent flex items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs font-medium text-foreground-muted outline-none hover:bg-background-tertiary hover:text-foreground focus-visible:ring-1"
+            >
+              <Plus className="size-3.5" aria-hidden />
+              Start from scratch
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-3 text-xs">
           <span className="text-foreground-muted">Last sync</span>
           <span

@@ -43,4 +43,20 @@ export type SyncStatus = {
    * counted here — they are dropped, never retried.
    */
   quarantinedCount?: number;
+  /**
+   * Whether a sync relay URL + key are configured on this machine (stored in
+   * Settings → Devices, or overridden by EMDASH_SYNC_RELAY_URL / _KEY env
+   * vars). Absent (undefined) while the service has not resolved the endpoint
+   * yet — callers must treat undefined as *unknown*, never as unconfigured.
+   * When `false` the machine cannot sync at all until the relay is configured,
+   * regardless of pairing: the sidebar widget surfaces this as its own state
+   * (and redirects to the settings form) instead of reporting sync errors.
+   */
+  relayConfigured?: boolean;
+  /**
+   * True when at least one relay value comes from environment variables, which
+   * makes the in-app settings form read-only — the fix for an unconfigured
+   * env-managed relay is to set the vars, not the settings form.
+   */
+  relayEnvManaged?: boolean;
 };

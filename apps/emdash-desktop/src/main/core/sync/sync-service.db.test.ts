@@ -311,9 +311,27 @@ describe('SyncService', () => {
       expect(status.lastSyncAt).toBe(1_800_000_000_000);
       expect(status.lastError).toBeNull();
       expect(status.pendingCount).toBe(0);
+      expect(status.relayConfigured).toBe(true);
       // The transition was emitted: syncing first, then up-to-date.
       expect(statuses.map((s) => s.state)).toContain('syncing');
       expect(statuses[statuses.length - 1]?.state).toBe('up-to-date');
+    });
+
+    it('reports the relay as unconfigured when no endpoint is resolved', async () => {
+      const service = makeService({
+        getRelayEndpoint: async () => ({
+          baseUrl: 'https://sync-relay.unconfigured.invalid',
+          relayKey: undefined,
+          configured: false,
+          envManaged: false,
+        }),
+      });
+      await service.syncNow();
+
+      expect(service.getStatus().relayConfigured).toBe(false);
+      expect(service.getStatus().relayEnvManaged).toBe(false);
+      // The flag rides every emitted snapshot, so the widget can react.
+      expect(statuses[statuses.length - 1]?.relayConfigured).toBe(false);
     });
 
     it('stays idle when no space credential exists', async () => {

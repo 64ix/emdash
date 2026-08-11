@@ -35,6 +35,7 @@ export const syncService = new SyncService({
   },
   getDeviceIdentity: getOrCreateDeviceIdentity,
   createTransport: (token) => new HttpRelayTransport(getRelayEndpoint, async () => token),
+  getRelayEndpoint,
   projectAttachHook: createProjectAutoAttachHook(),
   onStatusChange: (status) => events.emit(syncStatusChannel, status),
   connectivity: {

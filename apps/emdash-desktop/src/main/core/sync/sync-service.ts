@@ -21,7 +21,10 @@
  *   call while a cycle runs coalesces onto the running cycle.
  * - Every state transition is pushed through `onStatusChange` (production:
  *   the `sync:status` event, whose main-process emitter already guards window
- *   liveness by iterating live windows).
+ *   liveness by iterating live windows). Each snapshot also carries the
+ *   machine's relay-configuration flags (`relayConfigured` / `relayEnvManaged`,
+ *   re-resolved every cycle) so the widget can surface "sync isn't set up"
+ *   before any pairing/error state.
  *
  * The service is fully injectable so behavior tests drive it against a fake
  * RelayTransport with fake timers.
@@ -34,6 +37,7 @@ import type { SyncStatus } from '@shared/core/sync/status';
 import type { DeviceIdentity } from './device-identity';
 import { EncryptingRelayTransport } from './encrypting-transport';
 import { SyncEngine, type SyncEngineOptions, type SyncError } from './engine';
+import type { ResolvedRelayEndpoint } from './relay-config';
 import type { SpaceKey, SpaceKeyStoreError } from './space-key-store';
 import type { SyncCredential, SyncCredentialError } from './sync-credentials';
 import { RelayHttpError } from './transport';
@@ -68,6 +72,13 @@ export type SyncServiceDeps = {
   getDeviceIdentity: () => Promise<DeviceIdentity>;
   /** Builds the base transport for a device token (production: HttpRelayTransport). */
   createTransport: (token: string) => RelayTransport;
+  /**
+   * Resolves the machine's relay endpoint (env → stored settings) so status
+   * snapshots can report whether sync can run at all. Production wires
+   * `getRelayEndpoint`; tests may omit it (defaults to "configured" so the
+   * flag is invisible in service-level tests).
+   */
+  getRelayEndpoint?: () => Promise<ResolvedRelayEndpoint>;
   /** Freshly imported projects get a chance to re-anchor (ticket #136). */
   projectAttachHook?: SyncEngineOptions['projectAttachHook'];
   /** Status sink; production wires `events.emit(syncStatusChannel, status)`. */
@@ -139,8 +150,18 @@ const IDLE_STATUS: SyncStatus = {
   quarantinedCount: 0,
 };
 
+/** Relay settings that make the status flag invisible when not injected. */
+const DEFAULT_RELAY_ENDPOINT: ResolvedRelayEndpoint = {
+  baseUrl: 'http://relay.invalid',
+  relayKey: 'test',
+  configured: true,
+  envManaged: false,
+};
+
 export class SyncService {
   private status: SyncStatus = { ...IDLE_STATUS };
+  private relayConfig: ResolvedRelayEndpoint | null = null;
+  private readonly getRelayEndpoint: () => Promise<ResolvedRelayEndpoint>;
   private started = false;
   private stopped = true;
   private inFlight: Promise<void> | null = null;
@@ -165,6 +186,7 @@ export class SyncService {
     this.notPairedRecheckMs = deps.notPairedRecheckMs ?? NOT_PAIRED_RECHECK_MS;
     this.pollIdleDelayMs = deps.pollIdleDelayMs ?? DEFAULT_POLL_IDLE_DELAY_MS;
     this.retryDelayMs = this.retryBaseMs;
+    this.getRelayEndpoint = deps.getRelayEndpoint ?? (async () => DEFAULT_RELAY_ENDPOINT);
   }
 
   getStatus(): SyncStatus {
@@ -248,6 +270,7 @@ export class SyncService {
   // -------------------------------------------------------------------------
 
   private async runCycle(): Promise<void> {
+    await this.refreshRelayConfig();
     const engine = await this.buildEngine();
     if (engine === null) {
       this.updateStatus({ ...IDLE_STATUS });
@@ -321,7 +344,10 @@ export class SyncService {
     while (!this.stopped) {
       const credential = await this.deps.getCredentials();
       if (!credential.success || credential.data === null) {
-        // Not paired (yet): keep the status honest, re-check periodically.
+        // Not paired (yet): keep the status honest, re-check periodically. The
+        // relay config is re-read here too so a relay saved while unpaired is
+        // reflected without a manual kick.
+        await this.refreshRelayConfig();
         this.updateStatus({ ...IDLE_STATUS });
         await this.sleep(this.notPairedRecheckMs);
         continue;
@@ -406,15 +432,31 @@ export class SyncService {
   // Status
   // -------------------------------------------------------------------------
 
+  /** Re-reads the machine's relay endpoint; failures keep the last value. */
+  private async refreshRelayConfig(): Promise<void> {
+    try {
+      this.relayConfig = await this.getRelayEndpoint();
+    } catch (error) {
+      log.error('[sync] relay config resolution failed', error);
+    }
+  }
+
   private updateStatus(patch: Partial<SyncStatus>): void {
-    const next: SyncStatus = { ...this.status, ...patch };
+    const next: SyncStatus = {
+      ...this.status,
+      ...patch,
+      relayConfigured: this.relayConfig?.configured,
+      relayEnvManaged: this.relayConfig?.envManaged,
+    };
     if (
       next.state === this.status.state &&
       next.paired === this.status.paired &&
       next.lastSyncAt === this.status.lastSyncAt &&
       next.lastError === this.status.lastError &&
       next.pendingCount === this.status.pendingCount &&
-      (next.quarantinedCount ?? 0) === (this.status.quarantinedCount ?? 0)
+      (next.quarantinedCount ?? 0) === (this.status.quarantinedCount ?? 0) &&
+      next.relayConfigured === this.status.relayConfigured &&
+      next.relayEnvManaged === this.status.relayEnvManaged
     ) {
       return;
     }

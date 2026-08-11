@@ -72,9 +72,9 @@ describe('workspace branch metadata', () => {
 
 describe('getTaskPrBranch', () => {
   it('returns the persisted branch for a worktree workspace', () => {
-    expect(
-      getTaskPrBranch({ kind: 'worktree', branchName: 'task/own-branch', config: null })
-    ).toBe('task/own-branch');
+    expect(getTaskPrBranch({ kind: 'worktree', branchName: 'task/own-branch', config: null })).toBe(
+      'task/own-branch'
+    );
   });
 
   // Deliberate: the config-derived branch is a provisioning intent, not PR

@@ -157,10 +157,10 @@ export class HttpRelayAuthApi implements RelayAuthApi {
     spaceId: string,
     name: string
   ): Promise<Result<RelayJoinResult, RelayApiError>> {
-    const result = await this.post<RelayWireJoinResult, { join_hash: string; space_id: string; name?: string }>(
-      '/v1/join',
-      { join_hash: joinHash, space_id: spaceId, name }
-    );
+    const result = await this.post<
+      RelayWireJoinResult,
+      { join_hash: string; space_id: string; name?: string }
+    >('/v1/join', { join_hash: joinHash, space_id: spaceId, name });
     if (!result.success) return result;
     return ok(toJoinResult(result.data));
   }
