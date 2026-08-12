@@ -13,6 +13,7 @@ import type {
   AcpSendPromptError,
   AcpSetModeOptionError,
   AcpSetModelOptionError,
+  AgentState,
   InvalidStateError,
   NormalizedEvent,
   PromptDraft,
@@ -770,7 +771,8 @@ export class SessionCell {
   private hasRunningSubagentSpawn(): boolean {
     const active = this.transcript.activeTurn;
     if (!active) return false;
-    return active.items.some((item) => containsRunningSubagentSpawn(item));
+    const agents = this.transcript.agents;
+    return active.items.some((item) => containsRunningSubagentSpawn(item, agents));
   }
 
   private clearPromptIdleTimer(): void {
@@ -893,9 +895,29 @@ function findToolCall(
 }
 
 /** True when the item (or any nested child) is a subagent spawn still running. */
-function containsRunningSubagentSpawn(item: TranscriptItem): boolean {
-  if (item.kind === 'spawn-subagent-tool-call') return item.status === 'running';
-  if ('children' in item && item.children) return item.children.some(containsRunningSubagentSpawn);
+function containsRunningSubagentSpawn(
+  item: TranscriptItem,
+  agents: readonly AgentState[]
+): boolean {
+  if (item.kind === 'spawn-subagent-tool-call' && item.status === 'running') {
+    // The transcript item's own status can go stale: Claude's async/background
+    // Agent tool reports completion as a `subagent_update`, which the reducer
+    // folds into the `agents` registry only — never the item — so the item can
+    // read 'running' long after the subagent finished. Trust the registry when
+    // it tracks this spawn (matched by tool call / agent id); only fall back to
+    // the item's own status for providers (opencode's synchronous `task` tool)
+    // whose subagents never register there.
+    const tracked = agents.find(
+      (a) =>
+        a.toolCallId === item.toolCallId || (item.agentId != null && a.agentId === item.agentId)
+    );
+    if (!tracked || tracked.status === 'running') return true;
+    // Registry says this spawn is done — but a nested sub-subagent it launched
+    // may still be running one level deeper, so keep descending.
+  }
+  if ('children' in item && item.children) {
+    return item.children.some((child) => containsRunningSubagentSpawn(child, agents));
+  }
   return false;
 }
 
