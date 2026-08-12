@@ -484,6 +484,33 @@ describe('planSidebarTaskDrop (sidebar dnd release fixes)', () => {
     expect(plan.backfills.map((b) => b.id)).toEqual(['u1']);
     expect(landedOrder(entries, plan, 'dropped')).toEqual(['u1', 'dropped']);
   });
+
+  it('ignores a visible-but-unregistered slot the backfill cannot rank', () => {
+    // `unreg` is rendered in the destination (so it is in `destinationEntries`)
+    // but is not a Board Rank candidate, so it never appears in `trueEntries`
+    // and the backfill leaves it null. Aiming past the whole group must still
+    // land after the ranked tail, not stop at (or collide with) the backfilled
+    // `u1` because a stray null sat between them.
+    const destinationEntries = [
+      { id: 'r1', rank: 'm' },
+      { id: 'unreg', rank: null },
+      { id: 'u1', rank: null },
+    ];
+    const trueEntries = [
+      { id: 'r1', rank: 'm' },
+      { id: 'u1', rank: null },
+    ];
+    const plan = planSidebarTaskDrop('spec', destinationEntries, 3, trueEntries);
+    const u1Rank = plan.backfills.find((b) => b.id === 'u1')!.rank;
+    expect(plan.rank).not.toBeNull();
+    expect(plan.rank! > u1Rank).toBe(true);
+    expect(landedOrder(destinationEntries, plan, 'dropped')).toEqual([
+      'r1',
+      'u1',
+      'dropped',
+      'unreg',
+    ]);
+  });
 });
 
 function issue(overrides: Partial<LinkedIssue> = {}): LinkedIssue {

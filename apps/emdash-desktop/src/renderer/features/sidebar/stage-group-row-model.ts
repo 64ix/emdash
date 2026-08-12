@@ -339,12 +339,27 @@ export function planSidebarTaskDrop(
       ...entry,
       rank: entry.rank ?? backfilledRankById.get(entry.id) ?? null,
     }));
+
+  if (dropIndex === null) return { stage, rank: null, backfills };
+
+  // A destination slot the backfill could not rank — a visible-but-unregistered
+  // task, present in the rendered rows but absent from `trueEntries` — stays
+  // `null` after `withBackfills`. Left in place amid the materialized ranks it
+  // would break `computeDropRank`'s "ranked prefix, then null tail" invariant
+  // (its `findIndex(rank === null)` would stop early and misplace the drop), so
+  // drop those unrankable slots and shift the drop index past any that preceded
+  // it: they hold no rank to slot against, so the drop lands between its nearest
+  // rankable neighbours instead.
+  const backfilledDest = withBackfills(destinationEntries);
+  let adjustedIndex = dropIndex;
+  const rankableDest = backfilledDest.filter((entry, i) => {
+    if (entry.rank !== null) return true;
+    if (i < dropIndex) adjustedIndex--;
+    return false;
+  });
   return {
     stage,
-    rank:
-      dropIndex === null
-        ? null
-        : computeDropRank(withBackfills(destinationEntries), dropIndex, withBackfills(trueEntries)),
+    rank: computeDropRank(rankableDest, adjustedIndex, withBackfills(trueEntries)),
     backfills,
   };
 }
