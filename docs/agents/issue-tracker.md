@@ -84,7 +84,8 @@ is the filter: `no:parent-issue`, `parent-issue:64ix/emdash#<n>` and
 
 ## Task Marker
 
-When a skill publishes a **Spec** (`[Spec] <feature>`) or **Map**
+When a skill publishes a **Spec** (`[Spec] <feature>`, or the recognized
+variants `[Spec #N]`, `Spec:`, `[PRD]`, `[PRD #N]`, `PRD:`) or **Map**
 (`wayfinder:map`) issue for the task the current agent session is running in,
 append a final body line:
 

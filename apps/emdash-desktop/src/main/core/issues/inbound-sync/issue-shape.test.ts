@@ -12,6 +12,22 @@ describe('isSpecShapedIssue', () => {
     expect(isSpecShapedIssue('[Spec] GitHub-derived Feature Board')).toBe(true);
   });
 
+  it('matches the numbered [Spec #N] form', () => {
+    expect(isSpecShapedIssue('[Spec #120] Sidebar project cards UI')).toBe(true);
+  });
+
+  it('matches the Spec: and Spec : forms', () => {
+    expect(isSpecShapedIssue('Spec: Auto-update in-game')).toBe(true);
+    expect(isSpecShapedIssue('Spec : Auto-update in-game')).toBe(true);
+  });
+
+  it('matches the [PRD], [PRD #N], PRD: and PRD : forms', () => {
+    expect(isSpecShapedIssue('[PRD] Fondations UI')).toBe(true);
+    expect(isSpecShapedIssue('[PRD #152] Fenêtrage côté client')).toBe(true);
+    expect(isSpecShapedIssue('PRD: Combat')).toBe(true);
+    expect(isSpecShapedIssue('PRD : Combat')).toBe(true);
+  });
+
   it('tolerates leading whitespace before the prefix', () => {
     expect(isSpecShapedIssue('  [Spec] Trimmed title')).toBe(true);
   });
@@ -23,6 +39,11 @@ describe('isSpecShapedIssue', () => {
   it('does not match a plain title', () => {
     expect(isSpecShapedIssue('Fix the login bug')).toBe(false);
   });
+
+  it('does not match a title that merely contains the words Spec or PRD', () => {
+    expect(isSpecShapedIssue('Inspect the release pipeline')).toBe(false);
+    expect(isSpecShapedIssue('Support PRD exports')).toBe(false);
+  });
 });
 
 describe('stripSpecTitlePrefix', () => {
@@ -30,6 +51,21 @@ describe('stripSpecTitlePrefix', () => {
     expect(stripSpecTitlePrefix('[Spec] GitHub-derived Feature Board')).toBe(
       'GitHub-derived Feature Board'
     );
+  });
+
+  it('strips the numbered [Spec #N] prefix', () => {
+    expect(stripSpecTitlePrefix('[Spec #120] Sidebar project cards UI')).toBe(
+      'Sidebar project cards UI'
+    );
+  });
+
+  it('strips the Spec:, Spec :, [PRD], [PRD #N], PRD: and PRD : prefixes', () => {
+    expect(stripSpecTitlePrefix('Spec: Auto-update in-game')).toBe('Auto-update in-game');
+    expect(stripSpecTitlePrefix('Spec : Auto-update in-game')).toBe('Auto-update in-game');
+    expect(stripSpecTitlePrefix('[PRD] Fondations UI')).toBe('Fondations UI');
+    expect(stripSpecTitlePrefix('[PRD #152] Fenêtrage côté client')).toBe('Fenêtrage côté client');
+    expect(stripSpecTitlePrefix('PRD: Combat')).toBe('Combat');
+    expect(stripSpecTitlePrefix('PRD : Combat')).toBe('Combat');
   });
 
   it('trims a title it does not strip', () => {

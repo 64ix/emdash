@@ -4,7 +4,7 @@ import { isSpecShapedIssue, isWayfinderLabeled } from './issue-shape';
 /**
  * Ghost Card root-issue shape filter (ticket #9, CONTEXT.md "Ghost Card"):
  * true when an issue is eligible to surface as a Ghost Card by its *shape*
- * alone — not `[Spec]`-titled, not labelled `wayfinder:*`, and carrying no
+ * alone — not Spec-titled, not labelled `wayfinder:*`, and carrying no
  * `Emdash-Task:` marker (a marker means the issue is already claimed by a
  * task, even one this sync pass doesn't recognize — see
  * `parseEmdashTaskMarker`).

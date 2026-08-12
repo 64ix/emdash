@@ -6,6 +6,7 @@ import { getOctokit } from '@main/core/github/services/octokit-provider';
 import { githubRateLimiter } from '@main/lib/rate-limiter';
 import { withRetry } from '@main/lib/retry';
 import type { RepositoryRef } from '@shared/repository-ref';
+import { isSpecShapedIssue } from './issue-shape';
 
 /** Only what the inbound issues sync needs to know about a fetched GitHub issue. */
 export type RemoteIssue = {
@@ -29,11 +30,11 @@ export interface GitHubIssuesClient {
   getIssue(repo: RepositoryRef, number: number): Promise<RemoteIssue | null>;
   /** Lists Map-shaped issues (open + closed) via the `wayfinder:map` label. */
   listMapIssues(repo: RepositoryRef): Promise<RemoteIssue[]>;
-  /** Lists Spec-shaped candidate issues (open + closed) via a title search for `[Spec]`. */
+  /** Lists Spec-shaped candidate issues (open + closed) via a title search for the spec prefixes. */
   listSpecIssues(repo: RepositoryRef): Promise<RemoteIssue[]>;
   /**
    * Lists open issues that are not sub-issues of another issue (Ghost Card
-   * candidates — ticket #9). Shape filtering (not `[Spec]`, not
+   * candidates — ticket #9). Shape filtering (not Spec-shaped, not
    * `wayfinder:*`, no Task Marker) and "already linked to a task" exclusion
    * happen in `IssuesSyncEngine`, not here.
    */
@@ -127,10 +128,14 @@ function createClientFromOctokit(octokit: Octokit): GitHubIssuesClient {
     },
 
     async listSpecIssues(repo) {
+      // Word-token search: broad enough to recall every recognized prefix form
+      // (`[Spec]`, `[Spec #N]`, `Spec:`, `Spec :`, `[PRD]`, `[PRD #N]`, `PRD:`,
+      // `PRD :`) in one call; `isSpecShapedIssue` re-checks the shape precisely,
+      // so a title that merely contains the words never slips through.
       const { data } = await withRetry(() =>
         githubRateLimiter.acquire().then(() =>
           octokit.rest.search.issuesAndPullRequests({
-            q: `"[Spec]" in:title repo:${repo.nameWithOwner} is:issue`,
+            q: `("Spec" OR "PRD") in:title repo:${repo.nameWithOwner} is:issue`,
             per_page: PER_PAGE,
           })
         )
@@ -138,7 +143,7 @@ function createClientFromOctokit(octokit: Octokit): GitHubIssuesClient {
       return data.items
         .filter((issue) => !issue.pull_request)
         .map(toRemoteIssue)
-        .filter((issue) => issue.title.trimStart().startsWith('[Spec]'));
+        .filter((issue) => isSpecShapedIssue(issue.title));
     },
 
     async listOpenRootIssues(repo) {

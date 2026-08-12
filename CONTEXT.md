@@ -155,11 +155,13 @@ feature goes through Wayfinder. Optional.
 
 ## Spec
 
-The `[Spec] <feature>` issue for a task. The anchor link: once a task has
-a Spec, everything downstream (tickets, PR, shipped) is derived from
-GitHub by walking from the Spec. A PR is derived from the Spec by default
-— unless the user assigns one explicitly, which overrides derivation (see
-[Assigned PR](#assigned-pr)).
+The `[Spec] <feature>` issue for a task — recognized title prefixes are
+`[Spec]`, the numbered `[Spec #N]`, `Spec:`/`Spec :`, and the PRD forms
+`[PRD]`, `[PRD #N]`, `PRD:`/`PRD :` (see `issue-shape.ts`). The anchor link:
+once a task has a Spec, everything downstream (tickets, PR, shipped) is
+derived from GitHub by walking from the Spec. A PR is derived from the Spec
+by default — unless the user assigns one explicitly, which overrides
+derivation (see [Assigned PR](#assigned-pr)).
 
 ## Assigned PR
 
