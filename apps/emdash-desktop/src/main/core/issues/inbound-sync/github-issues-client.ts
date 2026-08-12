@@ -129,13 +129,13 @@ function createClientFromOctokit(octokit: Octokit): GitHubIssuesClient {
 
     async listSpecIssues(repo) {
       // Word-token search: broad enough to recall every recognized prefix form
-      // (`[Spec]`, `[Spec #N]`, `Spec:`, `Spec :`, `[PRD]`, `[PRD #N]`, `PRD:`,
-      // `PRD :`) in one call; `isSpecShapedIssue` re-checks the shape precisely,
-      // so a title that merely contains the words never slips through.
+      // (`[Spec]`, `[Spec #N]`, `Spec:`, `Spec :`) in one call;
+      // `isSpecShapedIssue` re-checks the shape precisely, so a title that
+      // merely contains the word never slips through.
       const { data } = await withRetry(() =>
         githubRateLimiter.acquire().then(() =>
           octokit.rest.search.issuesAndPullRequests({
-            q: `("Spec" OR "PRD") in:title repo:${repo.nameWithOwner} is:issue`,
+            q: `"Spec" in:title repo:${repo.nameWithOwner} is:issue`,
             per_page: PER_PAGE,
           })
         )

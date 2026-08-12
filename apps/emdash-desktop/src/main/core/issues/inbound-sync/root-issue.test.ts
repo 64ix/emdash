@@ -22,8 +22,7 @@ describe('isRootIssueCandidate', () => {
   it('rejects any recognized spec prefix, not just [Spec]', () => {
     expect(isRootIssueCandidate(makeIssue({ title: '[Spec #120] Feature' }))).toBe(false);
     expect(isRootIssueCandidate(makeIssue({ title: 'Spec: Feature' }))).toBe(false);
-    expect(isRootIssueCandidate(makeIssue({ title: '[PRD] Feature' }))).toBe(false);
-    expect(isRootIssueCandidate(makeIssue({ title: 'PRD : Feature' }))).toBe(false);
+    expect(isRootIssueCandidate(makeIssue({ title: 'Spec : Feature' }))).toBe(false);
   });
 
   it('rejects any wayfinder:*-labelled issue, not just wayfinder:map', () => {

@@ -4,15 +4,14 @@ const WAYFINDER_LABEL_PREFIX = 'wayfinder:';
 
 /**
  * Accepted spec title prefixes (CONTEXT.md "Spec"): the canonical `[Spec]`,
- * the fork's numbered `[Spec #N]` form, and the implement-spec conventions
- * `[Spec]`, `Spec:`, `[PRD]`, `[PRD #N]`, `PRD:` — case-insensitive on the
- * marker word, with optional whitespace before the colon (`Spec :`). The
- * bracket forms match the full `[...]` group so stripping removes the whole
- * marker (`[Spec #120] Title` → `Title`).
+ * the fork's numbered `[Spec #N]` form, and the `Spec:` variant —
+ * case-insensitive on the marker word, with optional whitespace before the
+ * colon (`Spec :`). The bracket forms match the full `[...]` group so
+ * stripping removes the whole marker (`[Spec #120] Title` → `Title`).
  */
-const SPEC_TITLE_PREFIX_PATTERN = /^\[(?:spec|prd)(?:\]|\s[^\]]*\])|^(?:spec|prd)\s*:/i;
+const SPEC_TITLE_PREFIX_PATTERN = /^\[spec(?:\]|\s[^\]]*\])|^spec\s*:/i;
 
-/** Spec-shaped: title starts with a recognized spec prefix (`[Spec]`, `Spec:`, `[PRD]`, `PRD:`, ...). */
+/** Spec-shaped: title starts with a recognized spec prefix (`[Spec]`, `[Spec #N]`, `Spec:`). */
 export function isSpecShapedIssue(title: string): boolean {
   return SPEC_TITLE_PREFIX_PATTERN.test(title.trimStart());
 }

@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues on the fork **`64ix/emdash`**
+Issues for this repo live as GitHub issues on the fork **`64ix/emdash`**
 (not upstream `generalaction/emdash`). Use the `gh` CLI for all operations — the
 default repo is set via `gh repo set-default 64ix/emdash`, so plain `gh issue ...`
 commands target the fork.
@@ -85,7 +85,7 @@ is the filter: `no:parent-issue`, `parent-issue:64ix/emdash#<n>` and
 ## Task Marker
 
 When a skill publishes a **Spec** (`[Spec] <feature>`, or the recognized
-variants `[Spec #N]`, `Spec:`, `[PRD]`, `[PRD #N]`, `PRD:`) or **Map**
+variants `[Spec #N]`, `Spec:`, `Spec :`) or **Map**
 (`wayfinder:map`) issue for the task the current agent session is running in,
 append a final body line:
 
