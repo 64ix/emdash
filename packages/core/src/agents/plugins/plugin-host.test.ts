@@ -173,7 +173,7 @@ describe('AgentPluginHost', () => {
   });
 
   it('threads autoApprove into the ACP spawn context', async () => {
-    const buildSpawn = vi.fn((ctx: { autoApprove: boolean }) => ({
+    const buildSpawn = vi.fn((_ctx: { autoApprove: boolean }) => ({
       command: 'test',
       args: [],
       env: {},
