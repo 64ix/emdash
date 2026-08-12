@@ -522,6 +522,10 @@ describe('SidebarCardList drag-reorder (spec #120, ticket #123)', () => {
     s.hiddenTaskIdsByProject = {};
     s.visibleTaskIdsByProject = {};
     s.taskSortBy = 'created-at';
+    // Reset the drag-active freeze like every other mutable field: a mid-drag
+    // assertion that throws before the synthetic pointerup skips handleDragEnd's
+    // cleanup, and a stale `true` would corrupt every later test in the file.
+    s.taskDragActive = false;
   });
 
   afterEach(() => {

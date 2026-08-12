@@ -173,6 +173,14 @@ export const SidebarCardList = observer(function SidebarCardList() {
     sidebarStore.ensureProjectExpanded(targetProjectId);
   }, [currentView, boardParams.projectId]);
 
+  // Safety net for the drag-active freeze: if this DndContext unmounts
+  // mid-drag (view switch, re-render, HMR) before dnd-kit fires its end/cancel
+  // callback, the flag would stay set and suspend the Awaiting Input elevation
+  // until another full drag cycle completes. Clear it on unmount.
+  useEffect(() => {
+    return () => sidebarStore.setTaskDragActive(false);
+  }, []);
+
   // Scroll the active project card (or task row) into view only when the
   // navigation target itself changes, plus the active task's project
   // expansion state. Re-running on every `rows` change would yank the user
