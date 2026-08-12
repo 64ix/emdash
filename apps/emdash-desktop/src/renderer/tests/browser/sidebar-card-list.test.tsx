@@ -174,13 +174,26 @@ vi.mock('@renderer/lib/stores/app-state', async () => {
     },
     // Mirrors `SidebarStore.headerFoldTaskIdsForProject`: the task ids the
     // stream omits for the project — collapsed-group tasks of expanded
-    // projects, every displayable task of collapsed projects.
+    // projects, every displayable task of collapsed projects. Like the real
+    // store — which derives these from the task manager
+    // (`groupedRowsForProject` with `ignoreGroupCollapse`), never from the
+    // stream — this double reads the task-manager double: a collapsed
+    // project's stream carries no task rows to derive from, so a
+    // stream-derived fold always came back empty and the header aggregates
+    // never lit (the divergence that kept the collapsed-header test red).
     headerFoldTaskIdsForProject(projectId: string) {
       const collapsedStages = this.collapsedStageGroupIdsByProject[projectId] ?? [];
       if (collapsedStages.length === 0 && this.expandedProjectIds.has(projectId)) return [];
-      const taskIds = this.rawSidebarRows
-        .filter((row) => row.kind === 'task' && row.projectId === projectId)
-        .map((row) => (row as { taskId: string }).taskId);
+      const hidden = new Set(this.hiddenTaskIdsByProject[projectId] ?? []);
+      const taskIds = [...(managersByProject.get(projectId)?.values() ?? [])]
+        .filter(
+          (task) =>
+            task.data.type !== 'automation-run' &&
+            !task.data.isPinned &&
+            !task.data.archivedAt &&
+            !hidden.has(task.data.id)
+        )
+        .map((task) => task.data.id);
       if (!this.expandedProjectIds.has(projectId)) return taskIds;
       const visible = new Set(this.visibleTaskIdsByProject[projectId] ?? []);
       return taskIds.filter((id) => !visible.has(id));
