@@ -121,6 +121,12 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
    * order the drop math ranks against. Never persisted.
    */
   taskDragActive = false;
+  /**
+   * The project whose tree is being dragged in, so only that project's rows
+   * freeze (the drop math only reorders one project's column). `null` freezes
+   * every project — the legacy behavior kept for callers that don't scope it.
+   */
+  taskDragProjectId: string | null = null;
 
   constructor(private readonly projectManager: ProjectManagerStore) {
     makeAutoObservable(this, {
@@ -278,14 +284,21 @@ export class SidebarStore implements Snapshottable<SidebarSnapshot> {
         ? new Set()
         : new Set(this.collapsedStageGroupIdsByProject[projectId] ?? []),
       awaitingInputIds,
-      frozen: this.taskDragActive,
+      frozen:
+        this.taskDragActive &&
+        (this.taskDragProjectId === null || this.taskDragProjectId === projectId),
       isVisible: (task) => !hiddenIds.has(task.id) && !fadedIds.has(task.id),
     });
   }
 
-  /** See `taskDragActive` — set by the card list's drag start/end/cancel. */
-  setTaskDragActive(active: boolean) {
+  /**
+   * See `taskDragActive` — set by the card list's drag start/end/cancel.
+   * Pass the dragged task's project id so only that project's rows freeze; a
+   * missing id freezes every project (the legacy, unscoped behavior).
+   */
+  setTaskDragActive(active: boolean, projectId: string | null = null) {
     this.taskDragActive = active;
+    this.taskDragProjectId = active ? projectId : null;
   }
 
   /** Visible unpinned tasks in the same order they are rendered in the project tree. */

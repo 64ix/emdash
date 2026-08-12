@@ -264,9 +264,11 @@ export const SidebarCardList = observer(function SidebarCardList() {
     // Freeze the Awaiting Input elevation for the whole drag (the board's
     // own behavior): the rendered order must be the `sortColumn` order the
     // drop math interpolates ranks in, or the slot the user aims at and the
-    // slot the drop persists disagree.
-    if (parseDndId(String(event.active.id))?.kind === 'task') {
-      sidebarStore.setTaskDragActive(true);
+    // slot the drop persists disagree. Scope it to the dragged task's project
+    // so an unrelated expanded project's elevation does not snap mid-drag.
+    const startParsed = parseDndId(String(event.active.id));
+    if (startParsed?.kind === 'task') {
+      sidebarStore.setTaskDragActive(true, startParsed.projectId);
     }
   }
 
@@ -1119,7 +1121,14 @@ const cardCollision: CollisionDetection = (args) => {
       (c) => String(c.id) === toProjectDndId(parsed.projectId)
     );
     const insideOwnCard = pointerWithin({ ...args, droppableContainers: ownCard }).length > 0;
-    return insideOwnCard ? closestCenter(targetArgs) : [];
+    if (!insideOwnCard) return [];
+    // Fall back to the nearest task row only — never a Stage Group header. A
+    // header is a valid drop target only directly under the pointer (already
+    // handled by `pointerWithin` above); letting closestCenter score headers
+    // too would snap a release in the gap near a group boundary into the
+    // neighbouring group instead of reordering within the aimed one.
+    const rowTargets = targets.filter((c) => parseDndId(String(c.id))?.kind === 'task');
+    return closestCenter({ ...args, droppableContainers: rowTargets });
   }
 
   const containers = args.droppableContainers.filter((c) => {

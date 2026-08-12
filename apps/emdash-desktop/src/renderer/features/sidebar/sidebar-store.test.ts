@@ -306,6 +306,68 @@ describe('SidebarStore grouped rows (spec #85, ticket #86)', () => {
     ]);
   });
 
+  it('freezes only the dragged project, leaving other projects elevated', () => {
+    const store = new SidebarStore(
+      projectManagerWithTasks([
+        {
+          id: 'project-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'p1-awaiting',
+              createdAt: '2026-01-01T00:00:01.000Z',
+              workflowStage: 'spec',
+              boardRank: 'm',
+            },
+            {
+              id: 'p1-ranked',
+              createdAt: '2026-01-01T00:00:02.000Z',
+              workflowStage: 'spec',
+              boardRank: 'a',
+            },
+          ],
+        },
+        {
+          id: 'project-2',
+          createdAt: '2026-01-02T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'p2-awaiting',
+              createdAt: '2026-01-02T00:00:01.000Z',
+              workflowStage: 'spec',
+              boardRank: 'm',
+            },
+            {
+              id: 'p2-ranked',
+              createdAt: '2026-01-02T00:00:02.000Z',
+              workflowStage: 'spec',
+              boardRank: 'a',
+            },
+          ],
+        },
+      ])
+    );
+    registryMocks.statusByTaskId.set('p1-awaiting', 'awaiting-input');
+    registryMocks.statusByTaskId.set('p2-awaiting', 'awaiting-input');
+    store.ensureProjectExpanded('project-1');
+    store.ensureProjectExpanded('project-2');
+
+    // Drag started in project-1: only project-1's rows drop to pure sortColumn
+    // order (ranked-before-awaiting); project-2 keeps its Awaiting Input
+    // elevation (awaiting-before-ranked).
+    store.setTaskDragActive(true, 'project-1');
+    expect(shape(store.sidebarRows)).toEqual([
+      'project:project-2',
+      'group:Spec:2',
+      'task:p2-awaiting',
+      'task:p2-ranked',
+      'project:project-1',
+      'group:Spec:2',
+      'task:p1-ranked',
+      'task:p1-awaiting',
+    ]);
+  });
+
   it('shows the visible-task count on each group header', () => {
     const store = new SidebarStore(
       projectManagerWithTasks([
