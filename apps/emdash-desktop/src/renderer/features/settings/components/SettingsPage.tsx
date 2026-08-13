@@ -16,6 +16,7 @@ import InterfaceSettingsCard from './InterfaceSettingsCard';
 import KeyboardSettingsCard from './KeyboardSettingsCard';
 import NotificationSettingsCard from './NotificationSettingsCard';
 import { RelaySettingsCard } from './RelaySettingsCard';
+import RemoteProjectSettingsCard from './RemoteProjectSettingsCard';
 import RepositorySettingsCard from './RepositorySettingsCard';
 import ResourceMonitorSettingsCard from './ResourceMonitorSettingsCard';
 import SidebarMetadataSettingsCard from './SidebarMetadataSettingsCard';
@@ -86,6 +87,7 @@ function ConnectionsSettingsPage() {
         description="Manage reusable SSH connections for remote projects."
       />
       <SshConnectionsSettingsCard />
+      <RemoteProjectSettingsCard />
     </div>
   );
 }

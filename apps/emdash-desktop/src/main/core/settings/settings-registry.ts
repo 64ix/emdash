@@ -75,6 +75,13 @@ export const SETTINGS_DEFAULTS = {
   resourceMonitor: {
     enabled: false,
   },
+  remoteProject: {
+    gitStatusPollIntervalMs: 10_000,
+    untrackedStatusPollIntervalMs: 30_000,
+    headPollIntervalMs: 10_000,
+    refsPollIntervalMs: 15_000,
+    remotesPollIntervalMs: 60_000,
+  },
   changesViewMode: {
     unstaged: 'flat' as const,
     staged: 'flat' as const,
