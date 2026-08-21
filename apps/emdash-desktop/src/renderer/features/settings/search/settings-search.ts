@@ -153,6 +153,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description: 'Reusable remote hosts for SSH projects.',
     keywords: ['remote', 'host'],
   },
+  {
+    id: 'remote-project-polling',
+    label: 'Remote project polling',
+    tab: 'connections',
+    description:
+      'How often SSH projects are polled for git status, untracked files, head, refs, and remotes.',
+    keywords: ['ssh', 'git status', 'poll', 'interval', 'cpu', 'performance', 'refresh'],
+  },
 
   // Devices
   {

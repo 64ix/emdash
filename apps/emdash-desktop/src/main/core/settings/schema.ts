@@ -138,6 +138,14 @@ export const browserSettingsSchema = z
 
 export const resourceMonitorSettingsSchema = z.object({ enabled: z.boolean() });
 
+export const remoteProjectSettingsSchema = z.object({
+  gitStatusPollIntervalMs: z.number().int().min(1000).max(600_000),
+  untrackedStatusPollIntervalMs: z.number().int().min(1000).max(600_000),
+  headPollIntervalMs: z.number().int().min(1000).max(600_000),
+  refsPollIntervalMs: z.number().int().min(1000).max(600_000),
+  remotesPollIntervalMs: z.number().int().min(1000).max(600_000),
+});
+
 export const openInSettingsSchema = z.object({
   default: openInAppIdSchema,
   hidden: z.array(openInAppIdSchema),
@@ -157,6 +165,7 @@ export const APP_SETTINGS_SCHEMA_MAP = {
   browserPreview: browserPreviewSettingsSchema,
   browser: browserSettingsSchema,
   resourceMonitor: resourceMonitorSettingsSchema,
+  remoteProject: remoteProjectSettingsSchema,
   changesViewMode: changesViewModeSchema,
 } as const;
 
@@ -174,5 +183,6 @@ export const appSettingsSchema = z.object({
   browserPreview: browserPreviewSettingsSchema,
   browser: browserSettingsSchema,
   resourceMonitor: resourceMonitorSettingsSchema,
+  remoteProject: remoteProjectSettingsSchema,
   changesViewMode: changesViewModeSchema,
 });

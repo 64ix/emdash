@@ -14,13 +14,14 @@ import type { Lease } from '@emdash/shared';
 import { appScope } from '@main/app/app-scope';
 import { getDependencyManager } from '@main/core/dependencies/dependency-managers';
 import { NON_INTERACTIVE_GIT_ENV } from '@main/core/execution-context/non-interactive-git-env';
+import { appSettingsService } from '@main/core/settings/settings-service';
 import { sshConnectionManager } from '@main/core/ssh/lifecycle/production-ssh-connection-manager';
 import { getGitExecutable } from '@main/core/utils/exec';
 import { log } from '@main/lib/logger';
 import { desktopWorkerPath } from '@main/worker-manifest';
 import { ConstantHealthSource } from './health';
 import { LegacySshFilesRuntime } from './legacy/ssh-files';
-import { LegacySshGitRuntime } from './legacy/ssh-git';
+import { LegacySshGitRuntime, type SshGitPollingConfig } from './legacy/ssh-git';
 import {
   machineKey,
   type MachineRef,
@@ -124,11 +125,12 @@ class SshMachineRuntime implements MachineRuntime {
 
   constructor(
     connectionId: string,
-    proxy: Awaited<ReturnType<typeof sshConnectionManager.connect>>
+    proxy: Awaited<ReturnType<typeof sshConnectionManager.connect>>,
+    gitPolling: SshGitPollingConfig
   ) {
     this.machine = { kind: 'ssh', connectionId };
     this.files = new LegacySshFilesRuntime(proxy);
-    this.git = new LegacySshGitRuntime(proxy, connectionId);
+    this.git = new LegacySshGitRuntime(proxy, connectionId, gitPolling);
   }
 
   async dispose(): Promise<void> {
@@ -163,7 +165,14 @@ class DefaultRuntimeManager implements RuntimeManager {
       await probeGitDependency(machine);
       if (machine.kind === 'local') return new LocalMachineRuntime();
       const proxy = await sshConnectionManager.connect(machine.connectionId);
-      return new SshMachineRuntime(machine.connectionId, proxy);
+      const remoteProject = await appSettingsService.get('remoteProject');
+      return new SshMachineRuntime(machine.connectionId, proxy, {
+        statusPollMs: remoteProject.gitStatusPollIntervalMs,
+        untrackedStatusPollMs: remoteProject.untrackedStatusPollIntervalMs,
+        headPollMs: remoteProject.headPollIntervalMs,
+        refsPollMs: remoteProject.refsPollIntervalMs,
+        remotesPollMs: remoteProject.remotesPollIntervalMs,
+      });
     });
   }
 

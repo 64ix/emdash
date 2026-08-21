@@ -55,11 +55,28 @@ import { log } from '@main/lib/logger';
 import type { ImageReadResult as LegacyImageReadResult } from '@shared/core/git/types';
 import { LegacySshFileSystem } from './ssh-file-system';
 
-const STATUS_POLL_MS = 10_000;
-const UNTRACKED_STATUS_POLL_MS = 30_000;
-const HEAD_POLL_MS = 10_000;
-const REFS_POLL_MS = 15_000;
-const REMOTES_POLL_MS = 60_000;
+export type SshGitPollingConfig = {
+  statusPollMs: number;
+  untrackedStatusPollMs: number;
+  headPollMs: number;
+  refsPollMs: number;
+  remotesPollMs: number;
+};
+
+function envPollMs(key: string, fallback: number): number {
+  const raw = process.env[key];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export const DEFAULT_SSH_GIT_POLLING_CONFIG: SshGitPollingConfig = {
+  statusPollMs: envPollMs('EMDASH_SSH_STATUS_POLL_MS', 10_000),
+  untrackedStatusPollMs: envPollMs('EMDASH_SSH_UNTRACKED_STATUS_POLL_MS', 30_000),
+  headPollMs: envPollMs('EMDASH_SSH_HEAD_POLL_MS', 10_000),
+  refsPollMs: envPollMs('EMDASH_SSH_REFS_POLL_MS', 15_000),
+  remotesPollMs: envPollMs('EMDASH_SSH_REMOTES_POLL_MS', 60_000),
+};
 
 type LegacyRepositoryResource = {
   repository: LegacySshGitRepository;
@@ -94,7 +111,8 @@ export class LegacySshGitRuntime implements IGitRuntime {
 
   constructor(
     private readonly proxy: SshClientProxy,
-    private readonly connectionId: string
+    private readonly connectionId: string,
+    private readonly polling: SshGitPollingConfig = DEFAULT_SSH_GIT_POLLING_CONFIG
   ) {}
 
   async openRepository(pathInsideRepo: string): Promise<Lease<IGitRepository>> {
@@ -181,7 +199,8 @@ export class LegacySshGitRuntime implements IGitRuntime {
       const worktree = new LegacySshGitWorktree(
         this.createGit(worktreePath),
         worktreePath,
-        repositoryLease.value.repository
+        repositoryLease.value.repository,
+        this.polling
       );
       return {
         worktree,
@@ -214,7 +233,11 @@ export class LegacySshGitRuntime implements IGitRuntime {
   ): Promise<Lease<LegacyRepositoryResource>> {
     const gitCommonDir = await this.resolveGitCommonDir(pathInsideRepo);
     return this.repositories.acquire(gitCommonDir, async () => ({
-      repository: new LegacySshGitRepository(this.createGit(pathInsideRepo), gitCommonDir),
+      repository: new LegacySshGitRepository(
+        this.createGit(pathInsideRepo),
+        gitCommonDir,
+        this.polling
+      ),
     }));
   }
 
@@ -247,7 +270,8 @@ class LegacySshGitRepository implements IGitRepository {
 
   constructor(
     private readonly git: GitService,
-    gitCommonDir: string
+    gitCommonDir: string,
+    private readonly polling: SshGitPollingConfig = DEFAULT_SSH_GIT_POLLING_CONFIG
   ) {
     this.gitCommonDir = gitCommonDir;
     this.objectStoreDir = `${gitCommonDir}/objects`;
@@ -264,8 +288,8 @@ class LegacySshGitRepository implements IGitRepository {
         log.warn('LegacySshGitRepository: remotes refresh failed', { error }),
     });
     this.timers = [
-      setInterval(() => this.refsModel.invalidate(), REFS_POLL_MS),
-      setInterval(() => this.remotesModel.invalidate(), REMOTES_POLL_MS),
+      setInterval(() => this.refsModel.invalidate(), this.polling.refsPollMs),
+      setInterval(() => this.remotesModel.invalidate(), this.polling.remotesPollMs),
     ];
   }
 
@@ -426,7 +450,8 @@ class LegacySshGitWorktree implements IGitWorktree {
   constructor(
     private readonly git: GitService,
     worktreePath: string,
-    repository: LegacySshGitRepository
+    repository: LegacySshGitRepository,
+    private readonly polling: SshGitPollingConfig = DEFAULT_SSH_GIT_POLLING_CONFIG
   ) {
     this.worktree = worktreePath;
     this.repository = repository;
@@ -443,9 +468,9 @@ class LegacySshGitWorktree implements IGitWorktree {
         log.warn('LegacySshGitWorktree: head refresh failed', { error }),
     });
     this.timers = [
-      setInterval(() => void this.pollStatus('no'), STATUS_POLL_MS),
-      setInterval(() => void this.pollStatus('normal'), UNTRACKED_STATUS_POLL_MS),
-      setInterval(() => this.headModel.invalidate(), HEAD_POLL_MS),
+      setInterval(() => void this.pollStatus('no'), this.polling.statusPollMs),
+      setInterval(() => void this.pollStatus('normal'), this.polling.untrackedStatusPollMs),
+      setInterval(() => this.headModel.invalidate(), this.polling.headPollMs),
     ];
   }
 
