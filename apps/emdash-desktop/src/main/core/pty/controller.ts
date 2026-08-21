@@ -52,12 +52,15 @@ export const ptyController = createRPCController({
   },
 
   /**
-   * Atomically return the ring buffer and register the renderer as a consumer
-   * for future IPC delivery. Non-destructive — the ring buffer is kept intact.
-   * Called once by the renderer when connecting a FrontendPty to a session.
+   * Atomically return the ring buffer (or the delta since `sinceOffset`) and
+   * register the renderer as a consumer for future IPC delivery.
+   * Non-destructive — the ring buffer is kept intact. Called by the renderer
+   * when connecting a FrontendPty, and again on remount after an unmount
+   * (with the cursor of the last data it rendered) to pick up what it missed
+   * while hidden.
    */
-  subscribe: (sessionId: string) => {
-    return ok({ buffer: ptySessionRegistry.subscribe(sessionId) });
+  subscribe: (sessionId: string, sinceOffset?: number) => {
+    return ok(ptySessionRegistry.subscribe(sessionId, sinceOffset));
   },
 
   /**

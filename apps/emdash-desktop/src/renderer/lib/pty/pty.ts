@@ -52,9 +52,12 @@ export function buildTheme(theme?: SessionTheme): ITerminalOptions['theme'] {
  * ring buffer and live IPC events — this writes historical output directly
  * to xterm and sets up ongoing data delivery without any renderer-side buffer.
  *
- * DOM management is handled via mount() / unmount():
- *  - mount()   → appends ownedContainer to the visible mount target
- *  - unmount() → moves ownedContainer back to the off-screen host
+ * DOM management is handled via mount() / unmount(), which also own the live
+ * data stream: mount() (re)subscribes — fetching only the delta produced while
+ * hidden — and unmount() unsubscribes so off-screen terminals stop parsing PTY
+ * output (a dominant CPU cost with many redrawing agent TUIs).
+ *  - mount()   → appends ownedContainer to the visible mount target + resume stream
+ *  - unmount() → moves ownedContainer back to the off-screen host + detach stream
  *
  * Lifecycle: created and owned by PtySession (stores/pty-session.ts), one per
  * live session. Survives React component unmounts (e.g. navigating away from a
@@ -70,6 +73,22 @@ export class FrontendPty {
   readonly ownedContainer: HTMLDivElement;
   private theme?: SessionTheme;
   private offData: (() => void) | null = null;
+  /**
+   * Replay cursor: cumulative length of session data written to xterm so far
+   * (mirrors the registry's totalBytes for this session incarnation). Used on
+   * remount to fetch only the delta produced while hidden.
+   */
+  private deliveredOffset = 0;
+  /** True once connect() completed a subscribe round-trip. */
+  private connected = false;
+  /** True once dispose() ran — guards async resume completions. */
+  private disposed = false;
+  /**
+   * Bumped on every mount()/unmount(). An in-flight resume only applies if
+   * its generation is still current, so a stale round-trip can never write
+   * into a detached terminal or arm a listener after an unmount.
+   */
+  private mountGeneration = 0;
   /** Last { cols, rows } sent to rpc.pty.resize(). Used by PaneSizingContext to skip redundant IPC calls. */
   lastSentDims: { cols: number; rows: number } | null = null;
 
@@ -181,11 +200,20 @@ export class FrontendPty {
    */
   async connect(): Promise<void> {
     const result = await rpc.pty.subscribe(this.sessionId);
-    const historical = result.success ? result.data.buffer : '';
-    if (historical) this.terminal.write(historical);
+    if (!result.success || this.disposed) return;
+    const { buffer, totalBytes } = result.data;
+    if (buffer) this.terminal.write(buffer);
+    this.deliveredOffset = totalBytes;
+    this.connected = true;
+    this.armListener();
+  }
+
+  private armListener(): void {
+    if (this.offData) return;
     this.offData = events.on(
       ptyDataChannel,
       (data: string) => {
+        this.deliveredOffset += data.length;
         this.terminal.write(data);
       },
       this.sessionId
@@ -193,9 +221,46 @@ export class FrontendPty {
   }
 
   /**
+   * Detach from the live data stream. While off-screen there is no reason to
+   * parse PTY output into xterm — hidden terminals are the dominant CPU cost
+   * when many agent TUIs keep redrawing. The backend keeps the data in its
+   * ring buffer; resumeStream() fetches the missed delta on remount.
+   */
+  private disarmListener(): void {
+    this.offData?.();
+    this.offData = null;
+    rpc.pty.unsubscribe(this.sessionId).catch(() => {});
+  }
+
+  /**
+   * Re-subscribe after unmount(): request only the data produced while hidden
+   * (delta since deliveredOffset). If that data scrolled out of the backend
+   * ring buffer — or the session was respawned while hidden — reset the
+   * terminal and replay the full snapshot instead.
+   */
+  private async resumeStream(generation: number): Promise<void> {
+    if (!this.connected || this.offData || this.disposed) return;
+    const result = await rpc.pty.subscribe(this.sessionId, this.deliveredOffset);
+    // A newer mount/unmount/dispose superseded this round-trip. Do nothing:
+    // unmount()/dispose() already unsubscribed after our subscribe was sent,
+    // and a superseding mount() runs its own resume.
+    if (!result.success || generation !== this.mountGeneration || this.disposed) return;
+    const { buffer, totalBytes, truncated } = result.data;
+    if (truncated) {
+      try {
+        this.terminal.reset();
+      } catch {}
+    }
+    if (buffer) this.terminal.write(buffer);
+    this.deliveredOffset = totalBytes;
+    this.armListener();
+  }
+
+  /**
    * Append ownedContainer to a visible mount target.
    * If targetDims are provided the terminal is resized BEFORE the appendChild
    * to eliminate the flash caused by a post-mount resize.
+   * Also resumes the live data stream after a previous unmount() (delta fetch).
    */
   mount(mountTarget: HTMLElement, targetDims?: { cols: number; rows: number }): void {
     if (
@@ -213,14 +278,20 @@ export class FrontendPty {
         t.refresh(0, t.rows - 1);
       } catch {}
     });
+    const generation = ++this.mountGeneration;
+    void this.resumeStream(generation);
   }
 
   /**
    * Move ownedContainer back to the off-screen host (tab deactivated /
    * TerminalPane unmounting).  Must be called after all ResizeObservers on
    * the visible mount target have been disconnected.
+   * Also detaches from the live data stream: an off-screen terminal must not
+   * parse PTY output (hidden agent TUIs redrawing are a dominant CPU cost).
    */
   unmount(): void {
+    this.mountGeneration++;
+    this.disarmListener();
     ensureXtermHost().appendChild(this.ownedContainer);
   }
 
@@ -230,11 +301,11 @@ export class FrontendPty {
    * disposes the xterm Terminal, and removes the owned container from the DOM.
    */
   dispose(): void {
+    this.disposed = true;
+    this.mountGeneration++;
     FrontendPty.all.delete(this);
     FrontendPty.bySession.delete(this.sessionId);
-    this.offData?.();
-    this.offData = null;
-    rpc.pty.unsubscribe(this.sessionId).catch(() => {});
+    this.disarmListener();
     try {
       this.terminal.dispose();
     } catch {}
