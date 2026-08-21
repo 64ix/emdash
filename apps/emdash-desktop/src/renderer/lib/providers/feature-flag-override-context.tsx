@@ -11,7 +11,12 @@ export function FeatureFlagProvider({ children }: { children: ReactNode }) {
     staleTime: Infinity,
     refetchInterval: (query) => {
       const data = query.state.data;
-      return !data || Object.keys(data).length === 0 ? 2_000 : false;
+      if (data && Object.keys(data).length > 0) return false;
+      // Flags are evaluated asynchronously after boot and never arrive when
+      // telemetry is disabled — back off and give up instead of polling at
+      // 2 s for the app's entire lifetime.
+      const attempt = query.state.dataUpdateCount;
+      return attempt >= 10 ? false : Math.min(2_000 * 2 ** Math.max(attempt - 1, 0), 30_000);
     },
   });
   return <FeatureFlagContext value={flags}>{children}</FeatureFlagContext>;
