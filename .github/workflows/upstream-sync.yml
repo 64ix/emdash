@@ -7,11 +7,6 @@ on:
 
 permissions:
   contents: write
-  # Fast-forwarding `main` fails with "refusing to allow a GitHub App to create
-  # or update workflow …" whenever an upstream commit touches .github/workflows/
-  # (first hit the 2026-08-17 run after upstream merged its workspace-server
-  # train). The mirror push needs the workflows scope too.
-  workflows: write
   issues: write
 
 jobs:
@@ -24,6 +19,8 @@ jobs:
           fetch-depth: 0
 
       - name: Fast-forward main from upstream
+        env:
+          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
         run: |
           git remote add upstream https://github.com/generalaction/emdash.git
           git fetch upstream main
@@ -35,8 +32,19 @@ jobs:
             printf '%s\n' "$STRAY"
             exit 1
           fi
+          # GITHUB_TOKEN can never push commits that touch .github/workflows/ — the
+          # `workflows` scope is not grantable through a workflow's permissions block.
+          # A classic PAT with repo+workflow scopes, stored as UPSTREAM_SYNC_TOKEN,
+          # is required for those weeks; without it only workflow-free weeks sync.
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::warning title=UPSTREAM_SYNC_TOKEN is not set::If upstream touched .github/workflows/ this week, the push below will be rejected. Fix: create a classic PAT (repo + workflow scopes) and run gh secret set UPSTREAM_SYNC_TOKEN --repo 64ix/emdash"
+          fi
           git merge --ff-only upstream/main
-          git push origin main
+          if [ -n "$SYNC_TOKEN" ]; then
+            git push "https://x-access-token:${SYNC_TOKEN}@github.com/64ix/emdash.git" HEAD:main
+          else
+            git push origin main
+          fi
 
       - name: Check upstream activity on fork touchpoints
         id: hotspots
