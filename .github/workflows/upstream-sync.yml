@@ -7,6 +7,11 @@ on:
 
 permissions:
   contents: write
+  # Fast-forwarding `main` fails with "refusing to allow a GitHub App to create
+  # or update workflow …" whenever an upstream commit touches .github/workflows/
+  # (first hit the 2026-08-17 run after upstream merged its workspace-server
+  # train). The mirror push needs the workflows scope too.
+  workflows: write
   issues: write
 
 jobs:
