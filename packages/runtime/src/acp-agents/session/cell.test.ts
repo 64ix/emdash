@@ -233,6 +233,223 @@ describe('SessionCell prompts', () => {
     }
   });
 
+  it('does not settle a turn that is blocked on a running subagent', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      agent.prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // The agent delegates the turn to a subagent (task tool call) and then
+      // streams nothing — the opencode "subagent runs, parent session silent"
+      // failure mode.
+      cell.push({
+        kind: 'tool_call',
+        toolCallId: 'task-1',
+        title: 'Implement the ticket',
+        toolKind: 'task',
+        status: 'in_progress',
+        parentToolCallId: null,
+        diffs: [],
+      });
+
+      // Multiple idle windows pass while the subagent runs — the turn must
+      // survive: it is blocked on the subagent, not stalled.
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // Once the subagent's tool call completes, a genuinely silent turn
+      // does settle.
+      cell.push({
+        kind: 'tool_update',
+        toolCallId: 'task-1',
+        title: 'Implement the ticket',
+        toolKind: 'task',
+        status: 'completed',
+        parentToolCallId: null,
+        diffs: [],
+      });
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+
+      expect(cell.sessionState.isGenerating).toBe(false);
+      expect(cell.history().committed[0].outcome).toEqual({
+        kind: 'error',
+        reason: 'prompt_failed',
+      });
+      void pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not re-arm the idle watchdog for completed or failed subagent spawns', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      agent.prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // The subagent already finished before the silence began: the spawn is
+      // recorded as done, so the watchdog must treat the turn as stalled.
+      cell.push({
+        kind: 'tool_call',
+        toolCallId: 'task-1',
+        title: 'Finished task',
+        toolKind: 'task',
+        status: 'completed',
+        parentToolCallId: null,
+        diffs: [],
+      });
+
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+
+      expect(cell.sessionState.isGenerating).toBe(false);
+      expect(cell.history().committed[0].outcome).toEqual({
+        kind: 'error',
+        reason: 'prompt_failed',
+      });
+      void pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a turn alive while a nested sub-subagent is still running', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      agent.prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // The agent spawns a subagent (task-1) which itself spawns a nested
+      // sub-subagent (task-2), then the parent session streams nothing.
+      cell.push({
+        kind: 'tool_call',
+        toolCallId: 'task-1',
+        title: 'Outer subagent',
+        toolKind: 'task',
+        status: 'in_progress',
+        parentToolCallId: null,
+        diffs: [],
+      });
+      cell.push({
+        kind: 'tool_call',
+        toolCallId: 'task-2',
+        title: 'Nested subagent',
+        toolKind: 'task',
+        status: 'in_progress',
+        parentToolCallId: 'task-1',
+        diffs: [],
+      });
+
+      // The outer subagent reports completion while its nested child is still
+      // running: the watchdog must recurse into the spawn's children and keep
+      // the turn alive rather than settle live nested work as failed.
+      cell.push({
+        kind: 'tool_update',
+        toolCallId: 'task-1',
+        title: 'Outer subagent',
+        toolKind: 'task',
+        status: 'completed',
+        parentToolCallId: null,
+        diffs: [],
+      });
+
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // Once the nested subagent also completes, a genuinely silent turn settles.
+      cell.push({
+        kind: 'tool_update',
+        toolCallId: 'task-2',
+        title: 'Nested subagent',
+        toolKind: 'task',
+        status: 'completed',
+        parentToolCallId: 'task-1',
+        diffs: [],
+      });
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+
+      expect(cell.sessionState.isGenerating).toBe(false);
+      expect(cell.history().committed[0].outcome).toEqual({
+        kind: 'error',
+        reason: 'prompt_failed',
+      });
+      void pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles a silent turn once an async subagent completes via subagent_update', async () => {
+    vi.useFakeTimers();
+    try {
+      const { cell, agent } = makeCell();
+      agent.prompt = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+      const pending = cell.prompt({ text: 'hello' });
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // Claude launches an async/background agent: the spawn item is created
+      // 'running' and mirrored in the agents registry.
+      cell.push({
+        kind: 'subagent',
+        toolCallId: 'agent-call-1',
+        agentId: 'agent-1',
+        title: 'Async agent',
+        status: 'in_progress',
+        parentToolCallId: null,
+        background: true,
+      });
+
+      // While the subagent runs, a silent turn must survive.
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+      expect(cell.sessionState.isGenerating).toBe(true);
+
+      // The subagent finishes: Claude reports it as a `subagent_update`, which
+      // the reducer folds into the agents registry only — the transcript spawn
+      // item keeps reading 'running'. The watchdog must consult the registry
+      // (now 'completed') and settle a genuinely silent turn rather than re-arm
+      // forever off the stale item.
+      cell.push({
+        kind: 'subagent_update',
+        toolCallId: 'agent-call-1',
+        agentId: 'agent-1',
+        status: 'completed',
+        summary: 'done',
+      });
+      vi.advanceTimersByTime(ACP_PROMPT_IDLE_TIMEOUT_MS + 1);
+      await Promise.resolve();
+
+      expect(cell.sessionState.isGenerating).toBe(false);
+      expect(cell.history().committed[0].outcome).toEqual({
+        kind: 'error',
+        reason: 'prompt_failed',
+      });
+      void pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops late agent output after the watchdog settled the turn', async () => {
     vi.useFakeTimers();
     try {

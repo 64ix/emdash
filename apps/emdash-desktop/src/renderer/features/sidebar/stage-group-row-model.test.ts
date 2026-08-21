@@ -6,6 +6,7 @@ import { rankBetween } from '@shared/lib/board-rank';
 import {
   buildStageGroupedRows,
   computeSidebarDropPosition,
+  planSidebarTaskDrop,
   sidebarStageMoveOptions,
   taskRowVariants,
   type SidebarRow,
@@ -128,6 +129,26 @@ describe('buildStageGroupedRows', () => {
       awaitingInputIds: new Set(['awaiting-u']),
     });
     expect(shape(rows)).toEqual(['project:p1', 'task:awaiting-u', 'task:u1', 'task:u2']);
+  });
+
+  it('suspends the Awaiting Input elevation while frozen (a drag is active)', () => {
+    const rows = build({
+      tasks: [
+        task('ranked-a', { workflowStage: 'spec', boardRank: 'a' }),
+        task('awaiting-ranked', { workflowStage: 'spec', boardRank: 'c' }),
+        task('unranked', { workflowStage: 'spec' }),
+      ],
+      awaitingInputIds: new Set(['awaiting-ranked']),
+      frozen: true,
+    });
+    // Pure sortColumn order — the order the drop math ranks against.
+    expect(shape(rows)).toEqual([
+      'project:p1',
+      'group:Spec:3',
+      'task:ranked-a',
+      'task:awaiting-ranked',
+      'task:unranked',
+    ]);
   });
 
   it('shows the visible-task count on each group header', () => {
@@ -349,6 +370,146 @@ describe('computeSidebarDropPosition', () => {
   it('clears the stage and assigns no rank for an unpositioned Unstaged drop', () => {
     const position = computeSidebarDropPosition('unstaged', [], null);
     expect(position).toEqual({ stage: null, rank: null });
+  });
+});
+
+describe('planSidebarTaskDrop (sidebar dnd release fixes)', () => {
+  /** Renders a plan's outcome: the destination order sortColumn would show. */
+  function landedOrder(
+    entries: { id: string; rank: string | null }[],
+    plan: { rank: string | null; backfills: { id: string; rank: string }[] },
+    droppedId: string
+  ): string[] {
+    const rankById = new Map(plan.backfills.map((b) => [b.id, b.rank]));
+    const all = [
+      ...entries.map((e) => ({ id: e.id, rank: e.rank ?? rankById.get(e.id) ?? null })),
+      { id: droppedId, rank: plan.rank },
+    ];
+    const ranked = all.filter((e) => e.rank !== null);
+    const unranked = all.filter((e) => e.rank === null);
+    ranked.sort((a, b) => (a.rank! < b.rank! ? -1 : 1));
+    return [...ranked, ...unranked].map((e) => e.id);
+  }
+
+  it('matches computeSidebarDropPosition exactly when the destination is fully ranked', () => {
+    const entries = [
+      { id: 'a', rank: 'a' },
+      { id: 'c', rank: 'c' },
+    ];
+    const plan = planSidebarTaskDrop('spec', entries, 1, entries);
+    expect(plan).toEqual({ stage: 'spec', rank: rankBetween('a', 'c'), backfills: [] });
+  });
+
+  it('keeps the stage-only null-rank write for an unpositioned drop on a ranked group', () => {
+    const entries = [{ id: 'a', rank: 'a' }];
+    const plan = planSidebarTaskDrop('spec', entries, null, entries);
+    expect(plan).toEqual({ stage: 'spec', rank: null, backfills: [] });
+  });
+
+  it('lands a positioned drop inside an all-unranked group exactly at the aimed slot', () => {
+    const entries = [
+      { id: 'u1', rank: null },
+      { id: 'u2', rank: null },
+      { id: 'u3', rank: null },
+    ];
+    // Aim between u2 and u3 (index 2): the unranked tail is materialized in
+    // its current order, then the drop interpolates between its neighbours.
+    const plan = planSidebarTaskDrop('spec', entries, 2, entries);
+    expect(plan.backfills.map((b) => b.id)).toEqual(['u1', 'u2', 'u3']);
+    expect(landedOrder(entries, plan, 'dropped')).toEqual(['u1', 'u2', 'dropped', 'u3']);
+  });
+
+  it('backfilled ranks preserve the pre-drop order (ranked prefix, then tail in input order)', () => {
+    const entries = [
+      { id: 'r1', rank: 'm' },
+      { id: 'u1', rank: null },
+      { id: 'u2', rank: null },
+    ];
+    const plan = planSidebarTaskDrop('spec', entries, 2, entries);
+    const ranks = new Map(plan.backfills.map((b) => [b.id, b.rank]));
+    expect(ranks.get('u1')! > 'm').toBe(true);
+    expect(ranks.get('u2')! > ranks.get('u1')!).toBe(true);
+    expect(landedOrder(entries, plan, 'dropped')).toEqual(['r1', 'u1', 'dropped', 'u2']);
+  });
+
+  it('lands an unpositioned drop at the end of a group with an unranked tail', () => {
+    const entries = [
+      { id: 'u1', rank: null },
+      { id: 'u2', rank: null },
+    ];
+    const plan = planSidebarTaskDrop('spec', entries, null, entries);
+    // The dragged task keeps the spec's stage-only write; the tail is ranked
+    // so "unranked" deterministically renders last.
+    expect(plan.rank).toBeNull();
+    expect(plan.backfills.map((b) => b.id)).toEqual(['u1', 'u2']);
+    expect(landedOrder(entries, plan, 'dropped')).toEqual(['u1', 'u2', 'dropped']);
+  });
+
+  it('needs no backfill for a drop at the ranked/unranked boundary', () => {
+    const entries = [
+      { id: 'r1', rank: 'm' },
+      { id: 'u1', rank: null },
+    ];
+    const plan = planSidebarTaskDrop('spec', entries, 1, entries);
+    expect(plan.backfills).toEqual([]);
+    expect(plan.rank! > 'm').toBe(true);
+    expect(landedOrder(entries, plan, 'dropped')).toEqual(['r1', 'dropped', 'u1']);
+  });
+
+  it('materializes hidden unranked tasks too, keeping one coherent rank space', () => {
+    const visible = [
+      { id: 'u1', rank: null },
+      { id: 'u3', rank: null },
+    ];
+    const trueEntries = [
+      { id: 'u1', rank: null },
+      { id: 'hidden', rank: null },
+      { id: 'u3', rank: null },
+    ];
+    // Aim between the two visible tasks: the hidden task between them keeps
+    // its place (u1, hidden, dropped?, u3 — the drop interpolates between
+    // its *visible* neighbours' materialized ranks, so it lands between
+    // hidden and u3, still visually between u1 and u3).
+    const plan = planSidebarTaskDrop('spec', visible, 1, trueEntries);
+    expect(plan.backfills.map((b) => b.id)).toEqual(['u1', 'hidden', 'u3']);
+    const order = landedOrder(trueEntries, plan, 'dropped');
+    expect(order.indexOf('dropped')).toBeGreaterThan(order.indexOf('u1'));
+    expect(order.indexOf('dropped')).toBeLessThan(order.indexOf('u3'));
+  });
+
+  it('clears the stage for Unstaged drops, backfills included', () => {
+    const entries = [{ id: 'u1', rank: null }];
+    const plan = planSidebarTaskDrop('unstaged', entries, 1, entries);
+    expect(plan.stage).toBeNull();
+    expect(plan.backfills.map((b) => b.id)).toEqual(['u1']);
+    expect(landedOrder(entries, plan, 'dropped')).toEqual(['u1', 'dropped']);
+  });
+
+  it('ignores a visible-but-unregistered slot the backfill cannot rank', () => {
+    // `unreg` is rendered in the destination (so it is in `destinationEntries`)
+    // but is not a Board Rank candidate, so it never appears in `trueEntries`
+    // and the backfill leaves it null. Aiming past the whole group must still
+    // land after the ranked tail, not stop at (or collide with) the backfilled
+    // `u1` because a stray null sat between them.
+    const destinationEntries = [
+      { id: 'r1', rank: 'm' },
+      { id: 'unreg', rank: null },
+      { id: 'u1', rank: null },
+    ];
+    const trueEntries = [
+      { id: 'r1', rank: 'm' },
+      { id: 'u1', rank: null },
+    ];
+    const plan = planSidebarTaskDrop('spec', destinationEntries, 3, trueEntries);
+    const u1Rank = plan.backfills.find((b) => b.id === 'u1')!.rank;
+    expect(plan.rank).not.toBeNull();
+    expect(plan.rank! > u1Rank).toBe(true);
+    expect(landedOrder(destinationEntries, plan, 'dropped')).toEqual([
+      'r1',
+      'u1',
+      'dropped',
+      'unreg',
+    ]);
   });
 });
 

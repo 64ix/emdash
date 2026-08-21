@@ -6,6 +6,7 @@ import {
   PointerSensor,
   pointerWithin,
   useDndContext,
+  useDroppable,
   useSensor,
   useSensors,
   type ClientRect,
@@ -20,7 +21,6 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import {
   CableIcon,
   ChevronRight,
@@ -96,7 +96,7 @@ import {
 } from './sidebar-primitives';
 import { SidebarSignalDot, taskSidebarSignal } from './sidebar-signal-dot';
 import { SidebarStageGroupItem } from './stage-group-item';
-import { computeSidebarDropPosition, sidebarStageMoveOptions } from './stage-group-row-model';
+import { planSidebarTaskDrop, sidebarStageMoveOptions } from './stage-group-row-model';
 import { SidebarTaskItem } from './task-item';
 
 const UNREGISTERED_PHASE_LABEL: Record<UnregisteredProject['phase'], string> = {
@@ -172,6 +172,14 @@ export const SidebarCardList = observer(function SidebarCardList() {
     if (!targetProjectId) return;
     sidebarStore.ensureProjectExpanded(targetProjectId);
   }, [currentView, boardParams.projectId]);
+
+  // Safety net for the drag-active freeze: if this DndContext unmounts
+  // mid-drag (view switch, re-render, HMR) before dnd-kit fires its end/cancel
+  // callback, the flag would stay set and suspend the Awaiting Input elevation
+  // until another full drag cycle completes. Clear it on unmount.
+  useEffect(() => {
+    return () => sidebarStore.setTaskDragActive(false);
+  }, []);
 
   // Scroll the active project card (or task row) into view only when the
   // navigation target itself changes, plus the active task's project
@@ -253,6 +261,15 @@ export const SidebarCardList = observer(function SidebarCardList() {
     initialPointerYRef.current = pointerY;
     setActiveDragId(String(event.active.id));
     setCurrentDragPointerY(pointerY);
+    // Freeze the Awaiting Input elevation for the whole drag (the board's
+    // own behavior): the rendered order must be the `sortColumn` order the
+    // drop math interpolates ranks in, or the slot the user aims at and the
+    // slot the drop persists disagree. Scope it to the dragged task's project
+    // so an unrelated expanded project's elevation does not snap mid-drag.
+    const startParsed = parseDndId(String(event.active.id));
+    if (startParsed?.kind === 'task') {
+      sidebarStore.setTaskDragActive(true, startParsed.projectId);
+    }
   }
 
   function handleDragMove(event: DragMoveEvent) {
@@ -265,24 +282,32 @@ export const SidebarCardList = observer(function SidebarCardList() {
     initialPointerYRef.current = null;
     setActiveDragId(null);
     setCurrentDragPointerY(null);
+    sidebarStore.setTaskDragActive(false);
   }
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     const pointerY = dragPointerYRef.current;
-    clearDragPointerY();
-    if (!over || active.id === over.id) return;
-    const activeParsed = parseDndId(String(active.id));
-    const overParsed = parseDndId(String(over.id));
-    if (!activeParsed || !overParsed) return;
+    // The drop must be resolved *before* the drag state clears: clearing
+    // unfreezes the Awaiting Input elevation, and the drop math has to read
+    // the same frozen row order the user aimed at.
+    try {
+      if (!over || active.id === over.id) return;
+      const activeParsed = parseDndId(String(active.id));
+      const overParsed = parseDndId(String(over.id));
+      if (!activeParsed || !overParsed) return;
 
-    if (activeParsed.kind === 'project') {
-      if (overParsed.kind !== 'project') return;
-      handleProjectDrop(activeParsed.projectId, overParsed.projectId, pointerY, active, over);
-      return;
+      if (activeParsed.kind === 'project') {
+        if (overParsed.kind !== 'project') return;
+        handleProjectDrop(activeParsed.projectId, overParsed.projectId, pointerY, active, over);
+        return;
+      }
+      // Only tasks and cards are draggable; group headers are droppable-only.
+      if (activeParsed.kind !== 'task' || overParsed.kind === 'project') return;
+      handleTaskDrop(activeParsed, overParsed, pointerY, active, over);
+    } finally {
+      clearDragPointerY();
     }
-    if (overParsed.kind !== 'task') return;
-    handleTaskDrop(activeParsed, overParsed, pointerY, active, over);
   }
 
   function handleProjectDrop(
@@ -317,7 +342,7 @@ export const SidebarCardList = observer(function SidebarCardList() {
 
   function handleTaskDrop(
     activeParsed: SidebarTaskDndId,
-    overParsed: SidebarTaskDndId,
+    overParsed: SidebarTaskDndId | SidebarGroupDndId,
     pointerY: number | null,
     active: DragEndEvent['active'],
     over: NonNullable<DragEndEvent['over']>
@@ -332,12 +357,14 @@ export const SidebarCardList = observer(function SidebarCardList() {
     if (!card) return;
     const task = getTaskStore(projectId, activeParsed.taskId);
     if (!task) return;
-    const isAbove = isCursorAbove(pointerY, active.rect.current.translated, over.rect);
 
-    // The destination column: the group whose header precedes the over task
-    // in the card body (the row model's own layout), or `unstaged` when no
-    // header precedes.
-    const destinationColumn: ColumnId = taskBodyStage(card, overParsed.taskId) ?? 'unstaged';
+    // The destination column: the group header the drop landed on, or the
+    // group whose header precedes the over task in the card body (the row
+    // model's own layout) — `unstaged` when no header precedes.
+    const destinationColumn: ColumnId =
+      overParsed.kind === 'stage-group'
+        ? overParsed.stage
+        : (taskBodyStage(card, overParsed.taskId) ?? 'unstaged');
     const destinationStage = destinationColumn === 'unstaged' ? null : destinationColumn;
 
     // Board authority gating (ADR 0006): only a cross-stage drop can be
@@ -371,18 +398,21 @@ export const SidebarCardList = observer(function SidebarCardList() {
       destRows.push({ taskId: entry.taskId, rank: destRegistered?.boardRank ?? null });
     }
 
-    // Rank math mirrors the board exactly (`computeDropPosition`): the drop
-    // index is the over task's position among the destination's
-    // `sortColumn`-ordered entries, above or below per the pointer. Dropping
-    // below the destination's last rendered row is an unpositioned
+    // The drop index mirrors the board (`computeDropPosition`): the over
+    // task's position among the destination's `sortColumn`-ordered entries,
+    // above or below per the pointer. A group-header drop, like dropping
+    // below the destination's last rendered row, is an unpositioned
     // end-of-group drop — stage-only, `rank: null` (spec user story 16).
     const destSorted = sortColumn(destRows);
-    const overSortedIdx = destSorted.findIndex((entry) => entry.taskId === overParsed.taskId);
-    if (overSortedIdx === -1) return;
-    const overIsLastRendered =
-      destRows.length > 0 && destRows[destRows.length - 1]!.taskId === overParsed.taskId;
-    const dropIndex: number | null =
-      !isAbove && overIsLastRendered ? null : overSortedIdx + (isAbove ? 0 : 1);
+    let dropIndex: number | null = null;
+    if (overParsed.kind === 'task') {
+      const isAbove = isCursorAbove(pointerY, active.rect.current.translated, over.rect);
+      const overSortedIdx = destSorted.findIndex((entry) => entry.taskId === overParsed.taskId);
+      if (overSortedIdx === -1) return;
+      const overIsLastRendered =
+        destRows.length > 0 && destRows[destRows.length - 1]!.taskId === overParsed.taskId;
+      dropIndex = !isAbove && overIsLastRendered ? null : overSortedIdx + (isAbove ? 0 : 1);
+    }
 
     // True (pre-visibility) entries for the rank math — every task holding
     // a Board Rank in the destination column, hidden or Shipped-Faded rows
@@ -399,13 +429,20 @@ export const SidebarCardList = observer(function SidebarCardList() {
         trueDestEntries.push({ id: candidateData.id, rank: candidateData.boardRank ?? null });
       }
     }
-    const position = computeSidebarDropPosition(
+    // The plan lands the task exactly at the aimed slot even when the
+    // destination's tasks were never ranked (the common case): the unranked
+    // tail is materialized first — see `planSidebarTaskDrop` — then the
+    // dragged task ranks between its visible neighbours.
+    const plan = planSidebarTaskDrop(
       destinationColumn,
       destSorted.map((entry) => ({ id: entry.taskId, rank: entry.rank })),
       dropIndex,
       sortColumn(trueDestEntries)
     );
-    void task.updateBoardPosition(position.stage, position.rank);
+    for (const backfill of plan.backfills) {
+      void getTaskStore(projectId, backfill.id)?.updateBoardPosition(plan.stage, backfill.rank);
+    }
+    void task.updateBoardPosition(plan.stage, plan.rank);
   }
 
   return (
@@ -545,7 +582,13 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
   // never from a nested task row or the chevron (which stops pointerdown
   // propagation itself) — while header clicks keep their click-to-board
   // navigation: the distance-6 activation never fires for a plain click.
-  const { setNodeRef, transform, transition, isDragging, listeners } = useSortable({
+  // The sortable displacement transform is deliberately not applied: rows
+  // and cards stay put during a drag — the overlay replica and the
+  // insertion line are the only moving affordances. Displaced neighbours
+  // would drift across the fixed Stage Group headers (a task visually
+  // "jumping" into the group next door) and desynchronize the visible
+  // positions from the layout rects the indicator and the drop math use.
+  const { setNodeRef, isDragging, listeners } = useSortable({
     id: toProjectDndId(projectId),
   });
 
@@ -613,8 +656,6 @@ const SidebarProjectCard = observer(function SidebarProjectCard({
       className="overflow-hidden rounded-xl border border-border/60 bg-background-tertiary-1/40"
       data-sidebar-project-id={projectId}
       style={{
-        transform: CSS.Transform.toString(transform),
-        transition,
         opacity: isDragging ? 0.4 : 1,
         zIndex: isDragging ? 1 : 'auto',
       }}
@@ -817,7 +858,6 @@ const SidebarCardBody = observer(function SidebarCardBody({
   card: SidebarCardModel;
   project: ProjectStore;
 }) {
-  const { projectId } = card;
   let inGroup = false;
   return (
     <>
@@ -825,13 +865,12 @@ const SidebarCardBody = observer(function SidebarCardBody({
         if (entry.kind === 'stage-group') {
           inGroup = true;
           return (
-            <SidebarStageGroupItem
+            <DroppableStageGroupRow
               key={`group-${entry.stage}`}
-              projectId={projectId}
+              card={card}
               stage={entry.stage}
               label={entry.label}
               count={entry.count}
-              className="pl-1"
             />
           );
         }
@@ -878,6 +917,57 @@ function CardEmptyBody({ project }: { project: ProjectStore }) {
 }
 
 /**
+ * One Stage Group header row, wrapped as a drop target for the project's own
+ * task drags: dropping a task on the header moves it into that group — the
+ * only aimable target for a collapsed group, and the natural "into this
+ * category" gesture for an expanded one (an unpositioned end-of-group drop,
+ * spec #85 user story 16). Highlighted while a droppable task hovers it —
+ * except when the board's authority would reject the drop, mirroring the
+ * insertion line's "no ghost in the disabled column" rule.
+ */
+const DroppableStageGroupRow = observer(function DroppableStageGroupRow({
+  card,
+  stage,
+  label,
+  count,
+}: {
+  card: SidebarCardModel;
+  stage: WorkflowStage;
+  label: string;
+  count: number;
+}) {
+  const { setNodeRef, isOver, active } = useDroppable({
+    id: toGroupDndId(card.projectId, stage),
+  });
+  const activeParsed = active ? parseDndId(String(active.id)) : null;
+  const highlighted =
+    isOver &&
+    activeParsed?.kind === 'task' &&
+    activeParsed.projectId === card.projectId &&
+    !taskDropAuthority(
+      card.projectId,
+      activeParsed.taskId,
+      taskBodyStage(card, activeParsed.taskId),
+      stage
+    ).blocked;
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn('rounded-md', highlighted && 'bg-primary/10 ring-1 ring-primary/40')}
+      data-sidebar-stage-group={stage}
+    >
+      <SidebarStageGroupItem
+        projectId={card.projectId}
+        stage={stage}
+        label={label}
+        count={count}
+        className="pl-1"
+      />
+    </div>
+  );
+});
+
+/**
  * One sortable task row (spec #85 ticket #89 drag-reorder, restored on the
  * cards): the dnd-kit node for a task — same listeners pattern as the card
  * headers, so task rows start their own drags while their click-to-task and
@@ -893,18 +983,17 @@ function SortableTaskRow({
   taskId: string;
   children: React.ReactNode;
 }) {
-  const { setNodeRef, transform, transition, isDragging, listeners } = useSortable({
+  // No displacement transform, same reasoning as the project cards: rows
+  // never move during a drag (they would drift across the fixed Stage Group
+  // headers); the overlay replica and the insertion line carry the preview.
+  const { setNodeRef, isDragging, listeners } = useSortable({
     id: toTaskDndId(projectId, taskId),
   });
   return (
     <div
       ref={setNodeRef}
       data-sidebar-task-id={taskId}
-      style={{
-        transform: CSS.Transform.toString(transform),
-        transition,
-        opacity: isDragging ? 0.4 : 1,
-      }}
+      style={{ opacity: isDragging ? 0.4 : 1 }}
       {...listeners}
     >
       {children}
@@ -914,19 +1003,25 @@ function SortableTaskRow({
 
 const PROJECT_DND_PREFIX = 'proj::';
 const TASK_DND_PREFIX = 'task::';
+const GROUP_DND_PREFIX = 'group::';
 
 const toProjectDndId = (projectId: string) => `${PROJECT_DND_PREFIX}${projectId}`;
 const toTaskDndId = (projectId: string, taskId: string) =>
   `${TASK_DND_PREFIX}${projectId}::${taskId}`;
+const toGroupDndId = (projectId: string, stage: WorkflowStage) =>
+  `${GROUP_DND_PREFIX}${projectId}::${stage}`;
 
 /**
- * The two dnd id shapes. Handlers take the member aliases (not
+ * The three dnd id shapes. Handlers take the member aliases (not
  * `Extract<SidebarDndId, ...>`) so tsgo — which does not narrow a
  * discriminant into an `Extract` parameter type — accepts the call sites.
+ * Stage Group headers are droppable-only (never sortable, never draggable):
+ * a task dropped on one lands in that group.
  */
 type SidebarProjectDndId = { kind: 'project'; projectId: string };
 type SidebarTaskDndId = { kind: 'task'; projectId: string; taskId: string };
-type SidebarDndId = SidebarProjectDndId | SidebarTaskDndId;
+type SidebarGroupDndId = { kind: 'stage-group'; projectId: string; stage: WorkflowStage };
+type SidebarDndId = SidebarProjectDndId | SidebarTaskDndId | SidebarGroupDndId;
 
 /** The entity behind a card-list dnd id, or `null` for anything else. */
 function parseDndId(id: string): SidebarDndId | null {
@@ -936,6 +1031,12 @@ function parseDndId(id: string): SidebarDndId | null {
   if (id.startsWith(TASK_DND_PREFIX)) {
     const [, projectId, taskId] = id.split('::');
     if (projectId && taskId) return { kind: 'task', projectId, taskId };
+  }
+  if (id.startsWith(GROUP_DND_PREFIX)) {
+    const [, projectId, stage] = id.split('::');
+    if (projectId && stage) {
+      return { kind: 'stage-group', projectId, stage: stage as WorkflowStage };
+    }
   }
   return null;
 }
@@ -990,24 +1091,50 @@ function taskDropAuthority(
  * task row: a project drop aimed at an expanded card's nested task body
  * must resolve to the card itself, not to a task row that would swallow
  * the drop as a no-op (pointerWithin picks the tightest rect under the
- * pointer, which for a task row inside a card is the row). Task drags
- * stay restricted to their own project's task rows. The pointer's target
- * wins when the pointer is inside one, the nearest otherwise — the old row
- * collision shape.
+ * pointer, which for a task row inside a card is the row). The pointer's
+ * target wins when the pointer is inside one, the nearest otherwise — the
+ * old row collision shape.
+ *
+ * Task drags stay restricted to their own project's task rows and Stage
+ * Group headers. The nearest-target fallback only applies while the pointer
+ * is still inside the project's own card (row gaps, card padding): a
+ * release outside the card is a cancel — never a silent write to whichever
+ * row happens to be nearest across the whole sidebar.
  */
 const cardCollision: CollisionDetection = (args) => {
   const activeId = String(args.active.id);
   const parsed = parseDndId(activeId);
   if (!parsed) return [];
+
+  if (parsed.kind === 'task') {
+    const targets = args.droppableContainers.filter((c) => {
+      const id = String(c.id);
+      if (id === activeId) return false;
+      const cParsed = parseDndId(id);
+      if (!cParsed || cParsed.kind === 'project') return false;
+      return cParsed.projectId === parsed.projectId;
+    });
+    const targetArgs = { ...args, droppableContainers: targets };
+    const pointerCollisions = pointerWithin(targetArgs);
+    if (pointerCollisions.length > 0) return pointerCollisions;
+    const ownCard = args.droppableContainers.filter(
+      (c) => String(c.id) === toProjectDndId(parsed.projectId)
+    );
+    const insideOwnCard = pointerWithin({ ...args, droppableContainers: ownCard }).length > 0;
+    if (!insideOwnCard) return [];
+    // Fall back to the nearest task row only — never a Stage Group header. A
+    // header is a valid drop target only directly under the pointer (already
+    // handled by `pointerWithin` above); letting closestCenter score headers
+    // too would snap a release in the gap near a group boundary into the
+    // neighbouring group instead of reordering within the aimed one.
+    const rowTargets = targets.filter((c) => parseDndId(String(c.id))?.kind === 'task');
+    return closestCenter({ ...args, droppableContainers: rowTargets });
+  }
+
   const containers = args.droppableContainers.filter((c) => {
     const id = String(c.id);
     if (id === activeId) return false;
-    const cParsed = parseDndId(id);
-    if (!cParsed) return false;
-    if (parsed.kind === 'task') {
-      return cParsed.kind === 'task' && cParsed.projectId === parsed.projectId;
-    }
-    return cParsed.kind === 'project';
+    return parseDndId(id)?.kind === 'project';
   });
   const filteredArgs = { ...args, droppableContainers: containers };
   const pointerCollisions = pointerWithin(filteredArgs);
@@ -1122,6 +1249,10 @@ function InsertionIndicator({
   const activeParsed = parseDndId(String(active.id));
   const overParsed = parseDndId(String(over.id));
   if (!activeParsed || !overParsed) return null;
+  // A hovered Stage Group header draws its own "into this group" highlight
+  // (DroppableStageGroupRow) — an insertion line would promise a slot an
+  // unpositioned drop does not have.
+  if (overParsed.kind === 'stage-group') return null;
   if (
     activeParsed.kind === 'project' &&
     overParsed.kind === 'task' &&
