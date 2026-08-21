@@ -12,6 +12,15 @@ describe('isSpecShapedIssue', () => {
     expect(isSpecShapedIssue('[Spec] GitHub-derived Feature Board')).toBe(true);
   });
 
+  it('matches the numbered [Spec #N] form', () => {
+    expect(isSpecShapedIssue('[Spec #120] Sidebar project cards UI')).toBe(true);
+  });
+
+  it('matches the Spec: and Spec : forms', () => {
+    expect(isSpecShapedIssue('Spec: Auto-update in-game')).toBe(true);
+    expect(isSpecShapedIssue('Spec : Auto-update in-game')).toBe(true);
+  });
+
   it('tolerates leading whitespace before the prefix', () => {
     expect(isSpecShapedIssue('  [Spec] Trimmed title')).toBe(true);
   });
@@ -23,6 +32,11 @@ describe('isSpecShapedIssue', () => {
   it('does not match a plain title', () => {
     expect(isSpecShapedIssue('Fix the login bug')).toBe(false);
   });
+
+  it('does not match a title that merely contains the word Spec', () => {
+    expect(isSpecShapedIssue('Inspect the release pipeline')).toBe(false);
+    expect(isSpecShapedIssue('Respect the retry budget')).toBe(false);
+  });
 });
 
 describe('stripSpecTitlePrefix', () => {
@@ -30,6 +44,17 @@ describe('stripSpecTitlePrefix', () => {
     expect(stripSpecTitlePrefix('[Spec] GitHub-derived Feature Board')).toBe(
       'GitHub-derived Feature Board'
     );
+  });
+
+  it('strips the numbered [Spec #N] prefix', () => {
+    expect(stripSpecTitlePrefix('[Spec #120] Sidebar project cards UI')).toBe(
+      'Sidebar project cards UI'
+    );
+  });
+
+  it('strips the Spec: and Spec : prefixes', () => {
+    expect(stripSpecTitlePrefix('Spec: Auto-update in-game')).toBe('Auto-update in-game');
+    expect(stripSpecTitlePrefix('Spec : Auto-update in-game')).toBe('Auto-update in-game');
   });
 
   it('trims a title it does not strip', () => {

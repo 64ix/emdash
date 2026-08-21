@@ -78,7 +78,9 @@ These conventions connect the `to-spec` / `to-tickets` skills to the runner.
 Skills that publish or consume specs in this repo follow them:
 
 - A spec issue is titled `[Spec] <feature name>` and carries a
-  `## Success Criteria` checklist alongside the usual spec sections.
+  `## Success Criteria` checklist alongside the usual spec sections. The
+  board's Spec detection also recognizes the variants `[Spec #N]`,
+  `Spec:`, and `Spec :` title prefixes.
 - A spec is either **autosufficient** (small enough to implement directly) or
   **split** into child tickets. Decide when publishing: apply the agent-ready
   label to an autosufficient spec; when the spec is split, leave the spec

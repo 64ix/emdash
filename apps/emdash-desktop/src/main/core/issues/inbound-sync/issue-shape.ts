@@ -1,11 +1,19 @@
 /** See docs/adr/0003-board-stages-derived-not-declared.md and CONTEXT.md ("Spec", "Map"). */
-const SPEC_TITLE_PREFIX = '[Spec]';
 const MAP_LABEL = 'wayfinder:map';
 const WAYFINDER_LABEL_PREFIX = 'wayfinder:';
 
-/** Spec-shaped: title starts with `[Spec]`. */
+/**
+ * Accepted spec title prefixes (CONTEXT.md "Spec"): the canonical `[Spec]`,
+ * the fork's numbered `[Spec #N]` form, and the `Spec:` variant —
+ * case-insensitive on the marker word, with optional whitespace before the
+ * colon (`Spec :`). The bracket forms match the full `[...]` group so
+ * stripping removes the whole marker (`[Spec #120] Title` → `Title`).
+ */
+const SPEC_TITLE_PREFIX_PATTERN = /^\[spec(?:\]|\s[^\]]*\])|^spec\s*:/i;
+
+/** Spec-shaped: title starts with a recognized spec prefix (`[Spec]`, `[Spec #N]`, `Spec:`). */
 export function isSpecShapedIssue(title: string): boolean {
-  return title.trimStart().startsWith(SPEC_TITLE_PREFIX);
+  return SPEC_TITLE_PREFIX_PATTERN.test(title.trimStart());
 }
 
 /**
@@ -16,7 +24,7 @@ export function isSpecShapedIssue(title: string): boolean {
 export function stripSpecTitlePrefix(title: string): string {
   const trimmed = title.trim();
   if (!isSpecShapedIssue(trimmed)) return trimmed;
-  const stripped = trimmed.slice(SPEC_TITLE_PREFIX.length).trim();
+  const stripped = trimmed.replace(SPEC_TITLE_PREFIX_PATTERN, '').trim();
   return stripped || trimmed;
 }
 
