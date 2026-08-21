@@ -52,14 +52,18 @@ Views use a registry + parameterized navigation pattern.
 
 - `pty.ts` — `FrontendPty` class; subscribing fetches the main-process ring buffer and
   registers the consumer in one synchronous tick, so there is no renderer-side buffer
-  and no missed output
+  and no missed output. The live stream follows mount state: `unmount()` unsubscribes
+  (hidden terminals must not parse PTY output — dominant CPU cost with redrawing TUIs),
+  `mount()` re-subscribes with a replay cursor and fetches only the missed delta
 - `pty-session.ts` — session lifecycle
 - `pty-pool-provider.tsx` — `TerminalPoolProvider` managing reusable xterm.js instances
 - `pty-pane.tsx` — terminal pane component
 - `prompt-injection.ts`, `pty-input-buffer.ts`, `pty-keybindings.ts`, `pty-clipboard.ts` — input handling
 
 **Rules:**
-- Historical output comes from the main-process ring buffer; do not add renderer-side buffering
+- Historical output comes from the main-process ring buffer; do not add renderer-side buffering.
+  On remount after a ring-buffer gap (`subscribe` returns `truncated`), reset the terminal and
+  replay the full snapshot instead of writing a delta
 - `sessionId` format: `makePtySessionId(projectId, scopeId, leafId)` from
   `src/shared/core/pty/ptySessionId.ts` — deterministic
 - Panel drag pauses resizing to avoid jank (`src/renderer/lib/layout/panel-drag-store.ts`)

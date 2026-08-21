@@ -88,15 +88,130 @@ describe('PtySessionRegistry', () => {
     }
   });
 
-  it('flushes buffered output when unregistering the current PTY before the flush timer fires', () => {
+  it('flushes buffered output to an active consumer when unregistering before the flush timer fires', () => {
     const registry = new PtySessionRegistry();
     const pty = fakePty();
 
     registry.register('session-1', pty);
+    registry.subscribe('session-1');
     pty.emitData('final output');
     registry.unregister('session-1');
 
     expect(events.emit).toHaveBeenCalledWith(ptyDataChannel, 'final output', 'session-1');
+  });
+
+  it('does not emit pty:data without an active consumer but keeps the data for replay', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PtySessionRegistry();
+      const pty = fakePty();
+
+      registry.register('session-1', pty);
+      pty.emitData('hidden output');
+      await vi.advanceTimersByTimeAsync(16);
+
+      // No consumer attached: nothing is emitted over IPC...
+      expect(events.emit).not.toHaveBeenCalledWith(ptyDataChannel, 'hidden output', 'session-1');
+
+      // ...but a late subscriber still replays it from the ring buffer.
+      const result = registry.subscribe('session-1');
+      expect(result).toEqual({ buffer: 'hidden output', totalBytes: 13, truncated: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('emits pty:data to active consumers while they are subscribed', async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PtySessionRegistry();
+      const pty = fakePty();
+
+      registry.register('session-1', pty);
+      registry.subscribe('session-1');
+      pty.emitData('visible output');
+      await vi.advanceTimersByTimeAsync(16);
+
+      expect(events.emit).toHaveBeenCalledWith(ptyDataChannel, 'visible output', 'session-1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe('subscribe with sinceOffset', () => {
+    it('returns the full buffer and cursor when no offset is given', () => {
+      const registry = new PtySessionRegistry();
+      const pty = fakePty();
+
+      registry.register('session-1', pty);
+      pty.emitData('hello');
+
+      expect(registry.subscribe('session-1')).toEqual({
+        buffer: 'hello',
+        totalBytes: 5,
+        truncated: false,
+      });
+    });
+
+    it('returns only the delta after the requested offset', () => {
+      const registry = new PtySessionRegistry();
+      const pty = fakePty();
+
+      registry.register('session-1', pty);
+      pty.emitData('hello ');
+      const first = registry.subscribe('session-1');
+      expect(first).toEqual({ buffer: 'hello ', totalBytes: 6, truncated: false });
+
+      pty.emitData('world');
+      const second = registry.subscribe('session-1', first.totalBytes);
+      expect(second).toEqual({ buffer: 'world', totalBytes: 11, truncated: false });
+    });
+
+    it('flags truncation when the offset scrolled out of the ring buffer', () => {
+      const registry = new PtySessionRegistry();
+      const pty = fakePty();
+
+      registry.register('session-1', pty);
+      // Overflow the 64 KB ring buffer so early data is dropped.
+      pty.emitData('x'.repeat(70 * 1024));
+
+      const result = registry.subscribe('session-1', 0);
+      expect(result.truncated).toBe(true);
+      expect(result.buffer.length).toBe(64 * 1024);
+      expect(result.totalBytes).toBe(70 * 1024);
+    });
+
+    it('flags truncation when the offset predates a respawn of the session', () => {
+      const registry = new PtySessionRegistry();
+      const pty = fakePty();
+
+      registry.register('session-1', pty);
+      pty.emitData('first incarnation');
+      registry.unregister('session-1');
+
+      // Respawn resets the stream history for this session id.
+      const respawned = fakePty();
+      registry.register('session-1', respawned);
+      respawned.emitData('second');
+
+      const result = registry.subscribe('session-1', 17);
+      expect(result.truncated).toBe(true);
+      expect(result.buffer).toBe('second');
+      expect(result.totalBytes).toBe(6);
+    });
+
+    it('accepts a cursor equal to totalBytes (nothing missed)', () => {
+      const registry = new PtySessionRegistry();
+      const pty = fakePty();
+
+      registry.register('session-1', pty);
+      pty.emitData('all seen');
+      const first = registry.subscribe('session-1');
+      registry.unsubscribe('session-1');
+
+      const result = registry.subscribe('session-1', first.totalBytes);
+      expect(result).toEqual({ buffer: '', totalBytes: 8, truncated: false });
+    });
   });
 
   it('emits exit when unregistering the current PTY with exit info', () => {

@@ -373,9 +373,7 @@ export class WorkspaceBootstrapService {
     return resolved;
   }
 
-  private async loadProjectWorkspaceFields(
-    projectId: string
-  ): Promise<
+  private async loadProjectWorkspaceFields(projectId: string): Promise<
     | {
         workspaceProvider: string | null;
         sshConnectionId: string | null;

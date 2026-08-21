@@ -13,10 +13,26 @@ export interface PtySessionMetadata {
 const FLUSH_INTERVAL_MS = 16; // ~60 fps
 const RING_BUFFER_CAP = 64 * 1024; // 64 KB per session
 
+/** Result of {@link PtySessionRegistry.subscribe}. */
+export interface PtySubscribeResult {
+  /** Data to write to the terminal now (full snapshot or delta since sinceOffset). */
+  buffer: string;
+  /** Cumulative length of all data ever produced by this session incarnation. */
+  totalBytes: number;
+  /**
+   * True when the caller's cursor could not be honored (data scrolled out of
+   * the ring buffer, or the cursor predates a respawn of this session id).
+   * The caller must reset its terminal before writing `buffer`.
+   */
+  truncated: boolean;
+}
+
 export class PtySessionRegistry {
   private ptyMap: Map<string, Pty> = new Map();
   private ptyInputSubscriptions: Map<string, () => void> = new Map();
   private ringBuffers: Map<string, string> = new Map();
+  /** Cumulative data length per session — the backend end of the renderer replay cursors. */
+  private totalBytes: Map<string, number> = new Map();
   private activeConsumers: Set<string> = new Set();
   private metadata: Map<string, PtySessionMetadata> = new Map();
   private lastSizes: Map<string, { cols: number; rows: number }> = new Map();
@@ -34,6 +50,7 @@ export class PtySessionRegistry {
     this.ptyInputSubscriptions.delete(sessionId);
     this.pendingFlushes.delete(sessionId);
     this.ringBuffers.delete(sessionId);
+    this.totalBytes.delete(sessionId);
     this.activeConsumers.delete(sessionId);
     this.metadata.delete(sessionId);
     if (options?.metadata) this.metadata.set(sessionId, options.metadata);
@@ -49,10 +66,13 @@ export class PtySessionRegistry {
         flushTimer = null;
         return;
       }
-      if (buffer) {
+      // Only deliver to IPC when a renderer consumer is attached. Hidden
+      // FrontendPtys unsubscribe while off-screen; the ring buffer below keeps
+      // accumulating either way, so replay for late subscribers stays intact.
+      if (buffer && this.activeConsumers.has(sessionId)) {
         events.emit(ptyDataChannel, buffer, sessionId);
-        buffer = '';
       }
+      buffer = '';
       flushTimer = null;
     };
     this.pendingFlushes.set(sessionId, flush);
@@ -60,6 +80,7 @@ export class PtySessionRegistry {
     pty.onData((data) => {
       if (this.ptyMap.get(sessionId) !== pty) return;
       buffer += data;
+      this.totalBytes.set(sessionId, (this.totalBytes.get(sessionId) ?? 0) + data.length);
       if (!flushTimer) {
         flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
       }
@@ -114,6 +135,7 @@ export class PtySessionRegistry {
     this.ptyInputSubscriptions.delete(sessionId);
     this.pendingFlushes.delete(sessionId);
     this.ringBuffers.delete(sessionId);
+    this.totalBytes.delete(sessionId);
     this.activeConsumers.delete(sessionId);
     this.metadata.delete(sessionId);
     this.lastSizes.delete(sessionId);
@@ -125,14 +147,36 @@ export class PtySessionRegistry {
 
   /**
    * Atomically snapshot the ring buffer and register a consumer for future
-   * IPC delivery. Returns the current ring buffer without deleting it.
+   * IPC delivery. Non-destructive — the ring buffer is kept intact.
    * Safe: runs in one synchronous tick — no PTY data can arrive between
    * snapshot and consumer registration.
+   *
+   * With `sinceOffset` (renderer replay cursor, in cumulative data-length
+   * units as reported by a previous call's `totalBytes`), only the delta after
+   * that cursor is returned. If the cursor can no longer be honored — its data
+   * scrolled out of the 64 KB ring buffer, or the session was respawned and
+   * the cursor predates the current incarnation — `truncated` is true and the
+   * full snapshot is returned instead; the caller must reset its terminal.
    */
-  subscribe(sessionId: string): string {
+  subscribe(sessionId: string, sinceOffset?: number): PtySubscribeResult {
     const buf = this.ringBuffers.get(sessionId) ?? '';
+    const total = this.totalBytes.get(sessionId) ?? 0;
+    const startOffset = total - buf.length;
+
+    let buffer = buf;
+    let truncated = false;
+    if (sinceOffset !== undefined) {
+      if (sinceOffset >= startOffset && sinceOffset <= total) {
+        // Cursor still fully retained — deliver only what the caller missed.
+        buffer = buf.slice(sinceOffset - startOffset);
+      } else {
+        // Gap (scrolled out or stale incarnation) — force a full replay.
+        truncated = true;
+      }
+    }
+
     this.activeConsumers.add(sessionId);
-    return buf;
+    return { buffer, totalBytes: total, truncated };
   }
 
   /**
