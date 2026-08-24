@@ -1,4 +1,4 @@
-import { Terminal } from 'lucide-react';
+import { RotateCcw, Terminal } from 'lucide-react';
 import { computed, makeObservable, reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import type {
@@ -17,6 +17,7 @@ import {
   GenericTabDragPreview,
   GenericTabItem,
 } from '@renderer/features/tabs/tab-bar/generic-tab-item';
+import { toast } from '@renderer/lib/hooks/use-toast';
 import type { PtySession } from '@renderer/lib/pty/pty-session';
 import { EmptyState } from '@renderer/lib/ui/empty-state';
 import { terminalRegistry } from '../stores/terminal-registry';
@@ -35,6 +36,8 @@ interface TerminalTabResourceView extends TabResource {
   readonly terminalId: string;
   readonly terminal: TerminalStore | undefined;
   readonly session: PtySession | null;
+  /** "Reload" — kill the shell and spawn a fresh one in its place. */
+  reload(): void;
 }
 
 class TerminalTabResource implements TerminalTabResourceView {
@@ -72,6 +75,16 @@ class TerminalTabResource implements TerminalTabResourceView {
     return this.terminalManager.sessions.get(this.terminalId) ?? null;
   }
 
+  reload(): void {
+    void this.terminalManager.restartTerminal(this.terminalId).catch((error) => {
+      toast({
+        title: 'Reload failed',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      });
+    });
+  }
+
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
@@ -95,6 +108,8 @@ class MissingTerminalTabResource implements TerminalTabResourceView {
     return null;
   }
 
+  reload(): void {}
+
   dispose(): void {}
 
   onActivateIntent(): void {}
@@ -113,7 +128,22 @@ const TerminalTabBarItem = observer(function TerminalTabBarItem({
   const label = terminal?.data.name ?? 'Terminal';
 
   return (
-    <GenericTabItem tab={tab} host={host} ctx={ctx} label={label} preSlot={<TerminalIcon />} />
+    <GenericTabItem
+      tab={tab}
+      host={host}
+      ctx={ctx}
+      label={label}
+      preSlot={<TerminalIcon />}
+      kindCommands={[
+        {
+          id: 'terminal:reload',
+          label: 'Reload',
+          icon: RotateCcw,
+          group: 'edit',
+          run: () => tab.resource.reload(),
+        },
+      ]}
+    />
   );
 });
 

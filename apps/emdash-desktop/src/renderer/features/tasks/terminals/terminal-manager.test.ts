@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { type Terminal } from '@shared/core/terminals/terminals';
 import { TerminalManagerStore } from './terminal-manager';
 
 const createTerminal = vi.hoisted(() => vi.fn());
@@ -6,6 +7,7 @@ const getTerminalsForTask = vi.hoisted(() => vi.fn());
 const hydrateTerminal = vi.hoisted(() => vi.fn());
 const renameTerminal = vi.hoisted(() => vi.fn());
 const deleteTerminal = vi.hoisted(() => vi.fn());
+const stopSession = vi.hoisted(() => vi.fn());
 const frontendConnect = vi.hoisted(() => vi.fn());
 const frontendDispose = vi.hoisted(() => vi.fn());
 const getAppSettingValueSnapshot = vi.hoisted(() => vi.fn());
@@ -34,6 +36,9 @@ vi.mock('@renderer/lib/ipc', () => ({
       getTerminalsForTask,
       hydrateTerminal,
       renameTerminal,
+    },
+    pty: {
+      stopSession,
     },
   },
 }));
@@ -66,6 +71,7 @@ describe('TerminalManagerStore session hydration', () => {
     hydrateTerminal.mockReset();
     renameTerminal.mockReset();
     deleteTerminal.mockReset();
+    stopSession.mockReset();
     frontendConnect.mockReset();
     frontendDispose.mockReset();
     getAppSettingValueSnapshot.mockReset();
@@ -75,6 +81,7 @@ describe('TerminalManagerStore session hydration', () => {
     hydrateTerminal.mockResolvedValue(undefined);
     renameTerminal.mockResolvedValue(undefined);
     deleteTerminal.mockResolvedValue(undefined);
+    stopSession.mockResolvedValue({ success: true });
     frontendConnect.mockResolvedValue(undefined);
     getAppSettingValueSnapshot.mockReturnValue(undefined);
   });
@@ -145,5 +152,101 @@ describe('TerminalManagerStore session hydration', () => {
     expect(store.terminals.get('terminal-1')?.data.shellId).toBe('fish');
     await promise;
     store.dispose();
+  });
+
+  it('restartTerminal stops the shell without deleting the record and swaps in a fresh session', async () => {
+    const record: Terminal = {
+      id: 'terminal-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      shellId: 'system',
+      name: 'Terminal 1',
+    };
+    // Resolve with the record so the resource's demand load doesn't wipe it.
+    getTerminalsForTask.mockResolvedValue([record]);
+    const store = new TerminalManagerStore('project-1', 'task-1');
+    store.list.setValue([record]);
+
+    const originalSession = store.sessions.get('terminal-1');
+    expect(originalSession).toBeDefined();
+    await originalSession?.connect();
+
+    await store.restartTerminal('terminal-1');
+
+    // Backend: stop (kills the shell, keeps the terminal record) then respawn.
+    expect(stopSession).toHaveBeenCalledTimes(1);
+    expect(stopSession).toHaveBeenCalledWith('project-1:task-1:terminal-1');
+    // Once from connect()'s prepare callback, once for the reload's respawn.
+    expect(hydrateTerminal).toHaveBeenCalledTimes(2);
+    expect(hydrateTerminal).toHaveBeenLastCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      terminalId: 'terminal-1',
+    });
+    // The reload's respawn (the last hydrate call) must follow the stop.
+    expect(stopSession.mock.invocationCallOrder[0]).toBeLessThan(
+      hydrateTerminal.mock.invocationCallOrder[hydrateTerminal.mock.invocationCallOrder.length - 1]
+    );
+    expect(deleteTerminal).not.toHaveBeenCalled();
+
+    // Renderer: disposed session replaced with a fresh lazy-connecting one.
+    const replacementSession = store.sessions.get('terminal-1');
+    expect(replacementSession).toBeDefined();
+    expect(replacementSession).not.toBe(originalSession);
+    expect(frontendDispose).toHaveBeenCalled();
+
+    store.dispose();
+  });
+
+  it('restartTerminal still replaces the session when respawning fails', async () => {
+    hydrateTerminal.mockRejectedValue(new Error('spawn failed'));
+    const record: Terminal = {
+      id: 'terminal-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      shellId: 'system',
+      name: 'Terminal 1',
+    };
+    // Resolve with the record so the resource's demand load doesn't wipe it.
+    getTerminalsForTask.mockResolvedValue([record]);
+    const store = new TerminalManagerStore('project-1', 'task-1');
+    store.list.setValue([record]);
+
+    const originalSession = store.sessions.get('terminal-1');
+
+    await expect(store.restartTerminal('terminal-1')).rejects.toThrow('spawn failed');
+
+    const replacementSession = store.sessions.get('terminal-1');
+    expect(replacementSession).toBeDefined();
+    expect(replacementSession).not.toBe(originalSession);
+
+    store.dispose();
+  });
+
+  it('restartTerminal does not create a replacement session after the store is disposed', async () => {
+    let resolveStop!: (value: { success: boolean }) => void;
+    stopSession.mockImplementation(() => new Promise((resolve) => (resolveStop = resolve)));
+    const record: Terminal = {
+      id: 'terminal-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      shellId: 'system',
+      name: 'Terminal 1',
+    };
+    // Resolve with the record so the resource's demand load doesn't wipe it.
+    getTerminalsForTask.mockResolvedValue([record]);
+    const store = new TerminalManagerStore('project-1', 'task-1');
+    store.list.setValue([record]);
+
+    const originalSession = store.sessions.get('terminal-1');
+    expect(originalSession).toBeDefined();
+    const restart = store.restartTerminal('terminal-1');
+    store.dispose();
+    resolveStop({ success: true });
+    await restart;
+
+    // The disposed store must not grow a fresh session that nothing will
+    // ever destroy.
+    expect(store.sessions.has('terminal-1')).toBe(false);
   });
 });

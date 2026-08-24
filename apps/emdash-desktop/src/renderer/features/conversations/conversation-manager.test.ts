@@ -68,4 +68,164 @@ describe('ConversationManagerStore session hydration', () => {
 
     store.dispose();
   });
+
+  it('restartConversation kills the backend session and swaps in a fresh renderer session', async () => {
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const originalSession = store.sessions.get('conversation-1');
+    expect(originalSession).toBeDefined();
+    await originalSession?.connect();
+    expect(dehydrateConversation).not.toHaveBeenCalled();
+
+    await store.restartConversation('conversation-1');
+
+    // Backend: tear down first (kills the PTY), then respawn with resume.
+    expect(dehydrateConversation).toHaveBeenCalledTimes(1);
+    expect(dehydrateConversation).toHaveBeenCalledWith('project-1', 'task-1', 'conversation-1');
+    expect(hydrateConversation).toHaveBeenCalledTimes(1);
+    expect(hydrateConversation).toHaveBeenCalledWith('project-1', 'task-1', 'conversation-1');
+    expect(dehydrateConversation.mock.invocationCallOrder[0]).toBeLessThan(
+      hydrateConversation.mock.invocationCallOrder[0]
+    );
+
+    // Renderer: the disposed session is replaced so the tab reconnects lazily
+    // into a clean xterm instead of replaying into a dead one.
+    const replacementSession = store.sessions.get('conversation-1');
+    expect(replacementSession).toBeDefined();
+    expect(replacementSession).not.toBe(originalSession);
+    expect(originalSession?.status).toBe('disconnected');
+    expect(frontendDispose).toHaveBeenCalled();
+
+    store.dispose();
+  });
+
+  it('restartConversation still replaces the session when hydration fails', async () => {
+    hydrateConversation.mockRejectedValue(new Error('spawn failed'));
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const originalSession = store.sessions.get('conversation-1');
+
+    await expect(store.restartConversation('conversation-1')).rejects.toThrow('spawn failed');
+
+    const replacementSession = store.sessions.get('conversation-1');
+    expect(replacementSession).toBeDefined();
+    expect(replacementSession).not.toBe(originalSession);
+
+    store.dispose();
+  });
+
+  it('restartConversation clears a stale working indicator when the process is killed', async () => {
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const conversation = store.conversations.get('conversation-1');
+    conversation?.setWorking();
+
+    await store.restartConversation('conversation-1');
+
+    // A deliberate kill never emits agentSessionExited, so without this reset
+    // the tab would keep showing "working" while nothing runs.
+    expect(conversation?.status).toBe('idle');
+
+    store.dispose();
+  });
+
+  it('restartConversation does not create a replacement session after the store is disposed', async () => {
+    let resolveDehydrate!: () => void;
+    dehydrateConversation.mockImplementation(
+      () => new Promise<void>((resolve) => (resolveDehydrate = resolve))
+    );
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const originalSession = store.sessions.get('conversation-1');
+    expect(originalSession).toBeDefined();
+    const restart = store.restartConversation('conversation-1');
+    store.dispose();
+    resolveDehydrate();
+    await restart;
+
+    // The disposed store must not grow a fresh session that nothing will
+    // ever destroy.
+    expect(store.sessions.has('conversation-1')).toBe(false);
+  });
+
+  it('restartConversation queues a teardown requested mid-flight behind the respawn', async () => {
+    let resolveRestartDehydrate!: () => void;
+    dehydrateConversation.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (resolveRestartDehydrate = resolve))
+    );
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const restart = store.restartConversation('conversation-1');
+
+    // The tab reconciler tears the session down mid-restart (last tab closed).
+    let teardownSettled = false;
+    const teardown = store.dehydrateConversation('conversation-1').then(() => {
+      teardownSettled = true;
+    });
+
+    resolveRestartDehydrate();
+    await restart;
+
+    // The queued teardown must not run before the reload's respawn completed —
+    // otherwise it would kill nothing and orphan the freshly spawned agent.
+    expect(teardownSettled).toBe(false);
+
+    await teardown;
+    expect(dehydrateConversation).toHaveBeenCalledTimes(2);
+    expect(dehydrateConversation.mock.invocationCallOrder[1]).toBeGreaterThan(
+      hydrateConversation.mock.invocationCallOrder[0]
+    );
+
+    store.dispose();
+  });
 });

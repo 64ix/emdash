@@ -27,6 +27,7 @@ export class ConversationManagerStore implements IDisposable {
   private offSessionExited: (() => void) | null = null;
   private offConversationCreated: (() => void) | null = null;
   private offConversationChanges: (() => void) | null = null;
+  private _disposed = false;
   private readonly _disposeReaction: () => void;
 
   /** Data layer: plain Conversation records loaded from the main process. */
@@ -180,14 +181,85 @@ export class ConversationManagerStore implements IDisposable {
     return conversation;
   }
 
+  /**
+   * Settled-per-id gate held while {@link restartConversation} runs. Hydration
+   * changes requested meanwhile (the tab reconciler dehydrating after the last
+   * tab closed, or re-hydrating) queue behind the restart instead of racing
+   * it — a teardown that ran mid-restart could otherwise land between the
+   * reload's kill and respawn and leave the freshly spawned agent running
+   * with no tab attached.
+   */
+  private _restartLocks = new Map<string, Promise<void>>();
+
   async hydrateConversation(conversationId: string): Promise<void> {
+    await this._restartLocks.get(conversationId);
     await rpc.conversations.hydrateConversation(this.projectId, this.taskId, conversationId);
   }
 
   async dehydrateConversation(conversationId: string): Promise<void> {
+    await this._restartLocks.get(conversationId);
     const session = this.sessions.get(conversationId);
     session?.dispose();
     await rpc.conversations.dehydrateConversation(this.projectId, this.taskId, conversationId);
+  }
+
+  /**
+   * Kill this conversation's PTY and immediately start a fresh session.
+   *
+   * Recovery hatch for glitched TUI display state (broken scroll regions,
+   * garbled redraws): dehydrate tears the backend process down without any
+   * respawn tracking, then hydrate respawns it with resume flags so the agent
+   * session continues where it left off. The renderer-side PtySession is
+   * replaced with a fresh instance so the new process replays into a clean
+   * xterm (the registry resets its ring buffer per incarnation).
+   */
+  async restartConversation(conversationId: string): Promise<void> {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation || this._disposed) return;
+
+    // Hold the per-conversation hydration gate for the whole round-trip; see
+    // _restartLocks. The restart itself calls the RPCs directly — going
+    // through the public wrappers would deadlock on its own lock.
+    const settled = (this._restartLocks.get(conversationId) ?? Promise.resolve()).catch(() => {});
+    let unlock!: () => void;
+    const lock = settled.then(() => new Promise<void>((resolve) => (unlock = resolve)));
+    this._restartLocks.set(conversationId, lock);
+
+    // Drop the old renderer session first so nothing observes a dead xterm
+    // while the backend round-trips run, and so respawned output cannot leak
+    // into the disposed terminal's still-armed data listener.
+    const previousSession = this.sessions.get(conversationId);
+    runInAction(() => {
+      if (previousSession) this.sessions.delete(conversationId);
+      // A deliberate kill is classified as "stopped" by the supervisor, so it
+      // never emits agentSessionExited — clear the working/awaiting-input
+      // indicator here, since the resumed TUI starts out idle.
+      conversation.clearWorking();
+    });
+    previousSession?.dispose();
+
+    try {
+      await rpc.conversations.dehydrateConversation(this.projectId, this.taskId, conversationId);
+      await rpc.conversations.hydrateConversation(this.projectId, this.taskId, conversationId);
+    } finally {
+      unlock();
+      if (this._restartLocks.get(conversationId) === lock) {
+        this._restartLocks.delete(conversationId);
+      }
+      runInAction(() => {
+        // Destroy whatever occupies the slot: besides our own previous session,
+        // the list-data reaction or a conversation-created event may have
+        // re-added a session while we awaited — overwriting it without
+        // destroying would leak its event subscriptions.
+        this.sessions.get(conversationId)?.destroy();
+        if (!this._disposed) {
+          // A fresh session lazy-connects on first observation; even when the
+          // respawn failed this recovers to an empty terminal instead of a
+          // permanently dead one, and a retry can pick up from there.
+          this.sessions.set(conversationId, this.createSession(conversation.data));
+        }
+      });
+    }
   }
 
   async deleteConversation(conversationId: string): Promise<void> {
@@ -233,6 +305,7 @@ export class ConversationManagerStore implements IDisposable {
   }
 
   dispose(): void {
+    this._disposed = true;
     this._disposeReaction();
     this.offAgentStatusChanged?.();
     this.offAgentStatusChanged = null;

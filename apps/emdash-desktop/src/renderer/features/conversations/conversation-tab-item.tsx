@@ -1,3 +1,4 @@
+import { RotateCcw } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import type { TabBarItemProps, ResolvedTab } from '@renderer/features/tabs/core/tab-provider';
 import {
@@ -32,6 +33,13 @@ export const ConversationTabBarItem = observer(function ConversationTabBarItem({
         </span>
       }
       kindCommands={[
+        {
+          id: 'conversation:reload',
+          label: 'Reload',
+          icon: RotateCcw,
+          group: 'edit',
+          run: () => tab.resource.reload(),
+        },
         {
           id: 'conversation:rename',
           label: 'Rename',
