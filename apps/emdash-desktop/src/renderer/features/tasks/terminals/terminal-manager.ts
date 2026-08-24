@@ -5,6 +5,7 @@ import { makeFileLinkHandlers } from '@renderer/features/tasks/stores/open-file-
 import { rpc } from '@renderer/lib/ipc';
 import { PtySession } from '@renderer/lib/pty/pty-session';
 import { Resource } from '@renderer/lib/stores/resource';
+import { log } from '@renderer/utils/logger';
 import { makePtySessionId } from '@shared/core/pty/ptySessionId';
 import type { TerminalShellId } from '@shared/core/terminals/terminal-settings';
 import { type CreateTerminalParams, type Terminal } from '@shared/core/terminals/terminals';
@@ -155,6 +156,42 @@ export class TerminalManagerStore implements IDisposable {
       taskId: this.taskId,
       terminalId,
     });
+  }
+
+  /**
+   * Kill this terminal's shell and spawn a fresh one in its place.
+   *
+   * Recovery hatch for glitched display state (broken scroll regions, garbled
+   * redraws): stopSession tears the PTY down without deleting the terminal
+   * record (and without lifecycle-script respawn tracking), then hydrate
+   * spawns a new shell. The renderer-side PtySession is replaced with a fresh
+   * instance so the new process replays into a clean xterm.
+   */
+  async restartTerminal(terminalId: string): Promise<void> {
+    const terminal = this.terminals.get(terminalId);
+    if (!terminal) return;
+    const sessionId = makePtySessionId(this.projectId, this.taskId, terminalId);
+
+    // Drop the old renderer session first so nothing observes a dead xterm
+    // while the backend round-trips run.
+    const previousSession = this.sessions.get(terminalId);
+    runInAction(() => {
+      if (previousSession) this.sessions.delete(terminalId);
+    });
+    previousSession?.dispose();
+
+    try {
+      // not_found simply means the shell had already exited — still fine to respawn.
+      const stopped = await rpc.pty.stopSession(sessionId);
+      if (!stopped.success) {
+        log.warn('restartTerminal: stopSession failed', { sessionId, error: stopped.error });
+      }
+      await this.hydrateTerminal(terminalId);
+    } finally {
+      runInAction(() => {
+        this.sessions.set(terminalId, this.createSession(terminal.data));
+      });
+    }
   }
 
   dispose(): void {

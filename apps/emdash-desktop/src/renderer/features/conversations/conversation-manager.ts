@@ -190,6 +190,42 @@ export class ConversationManagerStore implements IDisposable {
     await rpc.conversations.dehydrateConversation(this.projectId, this.taskId, conversationId);
   }
 
+  /**
+   * Kill this conversation's PTY and immediately start a fresh session.
+   *
+   * Recovery hatch for glitched TUI display state (broken scroll regions,
+   * garbled redraws): dehydrate tears the backend process down without any
+   * respawn tracking, then hydrate respawns it with resume flags so the agent
+   * session continues where it left off. The renderer-side PtySession is
+   * replaced with a fresh instance so the new process replays into a clean
+   * xterm (the registry resets its ring buffer per incarnation).
+   */
+  async restartConversation(conversationId: string): Promise<void> {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return;
+
+    // Drop the old renderer session first so nothing observes a dead xterm
+    // while the backend round-trips run, and so respawned output cannot leak
+    // into the disposed terminal's still-armed data listener.
+    const previousSession = this.sessions.get(conversationId);
+    runInAction(() => {
+      if (previousSession) this.sessions.delete(conversationId);
+    });
+    previousSession?.dispose();
+
+    try {
+      await this.dehydrateConversation(conversationId);
+      await this.hydrateConversation(conversationId);
+    } finally {
+      runInAction(() => {
+        // A fresh session lazy-connects on first observation; even when the
+        // respawn failed this recovers to an empty terminal instead of a
+        // permanently dead one, and a retry can pick up from there.
+        this.sessions.set(conversationId, this.createSession(conversation.data));
+      });
+    }
+  }
+
   async deleteConversation(conversationId: string): Promise<void> {
     const store = this.conversations.get(conversationId);
     const session = this.sessions.get(conversationId);

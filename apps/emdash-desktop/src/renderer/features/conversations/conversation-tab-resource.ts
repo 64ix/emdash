@@ -1,5 +1,6 @@
 import { reaction } from 'mobx';
 import type { TabHandle, TabResource } from '@renderer/features/tabs/core/tab-provider';
+import { toast } from '@renderer/lib/hooks/use-toast';
 import { setTelemetryConversationScope } from '@renderer/utils/telemetry-scope';
 import type { ConversationStore } from './conversation-manager';
 import { conversationRegistry } from './stores/conversation-registry';
@@ -50,5 +51,23 @@ export class ConversationTabResource implements TabResource {
 
   rename(name: string): void {
     void conversationRegistry.get(this._taskId)?.renameConversation(this.store.data.id, name);
+  }
+
+  /**
+   * "Reload" — kill the TUI's PTY and start a fresh session (resume).
+   * Recovery for glitched terminal display state that scrolling/redrawing
+   * cannot fix.
+   */
+  reload(): void {
+    void conversationRegistry
+      .get(this._taskId)
+      ?.restartConversation(this.store.data.id)
+      .catch((error) => {
+        toast({
+          title: 'Reload failed',
+          description: error instanceof Error ? error.message : String(error),
+          variant: 'destructive',
+        });
+      });
   }
 }
