@@ -181,11 +181,23 @@ export class ConversationManagerStore implements IDisposable {
     return conversation;
   }
 
+  /**
+   * Settled-per-id gate held while {@link restartConversation} runs. Hydration
+   * changes requested meanwhile (the tab reconciler dehydrating after the last
+   * tab closed, or re-hydrating) queue behind the restart instead of racing
+   * it — a teardown that ran mid-restart could otherwise land between the
+   * reload's kill and respawn and leave the freshly spawned agent running
+   * with no tab attached.
+   */
+  private _restartLocks = new Map<string, Promise<void>>();
+
   async hydrateConversation(conversationId: string): Promise<void> {
+    await this._restartLocks.get(conversationId);
     await rpc.conversations.hydrateConversation(this.projectId, this.taskId, conversationId);
   }
 
   async dehydrateConversation(conversationId: string): Promise<void> {
+    await this._restartLocks.get(conversationId);
     const session = this.sessions.get(conversationId);
     session?.dispose();
     await rpc.conversations.dehydrateConversation(this.projectId, this.taskId, conversationId);
@@ -203,7 +215,15 @@ export class ConversationManagerStore implements IDisposable {
    */
   async restartConversation(conversationId: string): Promise<void> {
     const conversation = this.conversations.get(conversationId);
-    if (!conversation) return;
+    if (!conversation || this._disposed) return;
+
+    // Hold the per-conversation hydration gate for the whole round-trip; see
+    // _restartLocks. The restart itself calls the RPCs directly — going
+    // through the public wrappers would deadlock on its own lock.
+    const settled = (this._restartLocks.get(conversationId) ?? Promise.resolve()).catch(() => {});
+    let unlock!: () => void;
+    const lock = settled.then(() => new Promise<void>((resolve) => (unlock = resolve)));
+    this._restartLocks.set(conversationId, lock);
 
     // Drop the old renderer session first so nothing observes a dead xterm
     // while the backend round-trips run, and so respawned output cannot leak
@@ -219,9 +239,13 @@ export class ConversationManagerStore implements IDisposable {
     previousSession?.dispose();
 
     try {
-      await this.dehydrateConversation(conversationId);
-      await this.hydrateConversation(conversationId);
+      await rpc.conversations.dehydrateConversation(this.projectId, this.taskId, conversationId);
+      await rpc.conversations.hydrateConversation(this.projectId, this.taskId, conversationId);
     } finally {
+      unlock();
+      if (this._restartLocks.get(conversationId) === lock) {
+        this._restartLocks.delete(conversationId);
+      }
       runInAction(() => {
         // Destroy whatever occupies the slot: besides our own previous session,
         // the list-data reaction or a conversation-created event may have

@@ -187,4 +187,45 @@ describe('ConversationManagerStore session hydration', () => {
     // ever destroy.
     expect(store.sessions.has('conversation-1')).toBe(false);
   });
+
+  it('restartConversation queues a teardown requested mid-flight behind the respawn', async () => {
+    let resolveRestartDehydrate!: () => void;
+    dehydrateConversation.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (resolveRestartDehydrate = resolve))
+    );
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const restart = store.restartConversation('conversation-1');
+
+    // The tab reconciler tears the session down mid-restart (last tab closed).
+    let teardownSettled = false;
+    const teardown = store.dehydrateConversation('conversation-1').then(() => {
+      teardownSettled = true;
+    });
+
+    resolveRestartDehydrate();
+    await restart;
+
+    // The queued teardown must not run before the reload's respawn completed —
+    // otherwise it would kill nothing and orphan the freshly spawned agent.
+    expect(teardownSettled).toBe(false);
+
+    await teardown;
+    expect(dehydrateConversation).toHaveBeenCalledTimes(2);
+    expect(dehydrateConversation.mock.invocationCallOrder[1]).toBeGreaterThan(
+      hydrateConversation.mock.invocationCallOrder[0]
+    );
+
+    store.dispose();
+  });
 });
