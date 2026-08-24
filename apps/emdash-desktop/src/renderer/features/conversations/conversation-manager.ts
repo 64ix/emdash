@@ -27,6 +27,7 @@ export class ConversationManagerStore implements IDisposable {
   private offSessionExited: (() => void) | null = null;
   private offConversationCreated: (() => void) | null = null;
   private offConversationChanges: (() => void) | null = null;
+  private _disposed = false;
   private readonly _disposeReaction: () => void;
 
   /** Data layer: plain Conversation records loaded from the main process. */
@@ -210,6 +211,10 @@ export class ConversationManagerStore implements IDisposable {
     const previousSession = this.sessions.get(conversationId);
     runInAction(() => {
       if (previousSession) this.sessions.delete(conversationId);
+      // A deliberate kill is classified as "stopped" by the supervisor, so it
+      // never emits agentSessionExited — clear the working/awaiting-input
+      // indicator here, since the resumed TUI starts out idle.
+      conversation.clearWorking();
     });
     previousSession?.dispose();
 
@@ -218,10 +223,17 @@ export class ConversationManagerStore implements IDisposable {
       await this.hydrateConversation(conversationId);
     } finally {
       runInAction(() => {
-        // A fresh session lazy-connects on first observation; even when the
-        // respawn failed this recovers to an empty terminal instead of a
-        // permanently dead one, and a retry can pick up from there.
-        this.sessions.set(conversationId, this.createSession(conversation.data));
+        // Destroy whatever occupies the slot: besides our own previous session,
+        // the list-data reaction or a conversation-created event may have
+        // re-added a session while we awaited — overwriting it without
+        // destroying would leak its event subscriptions.
+        this.sessions.get(conversationId)?.destroy();
+        if (!this._disposed) {
+          // A fresh session lazy-connects on first observation; even when the
+          // respawn failed this recovers to an empty terminal instead of a
+          // permanently dead one, and a retry can pick up from there.
+          this.sessions.set(conversationId, this.createSession(conversation.data));
+        }
       });
     }
   }
@@ -269,6 +281,7 @@ export class ConversationManagerStore implements IDisposable {
   }
 
   dispose(): void {
+    this._disposed = true;
     this._disposeReaction();
     this.offAgentStatusChanged?.();
     this.offAgentStatusChanged = null;

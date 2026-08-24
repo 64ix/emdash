@@ -20,6 +20,7 @@ export class TerminalManagerStore implements IDisposable {
   terminals = observable.map<string, TerminalStore>();
   /** Session layer keyed by terminal id — created alongside data, connected lazily. */
   sessions = observable.map<string, PtySession>();
+  private _disposed = false;
   private readonly _disposeReaction: () => void;
 
   constructor(projectId: string, taskId: string) {
@@ -189,12 +190,19 @@ export class TerminalManagerStore implements IDisposable {
       await this.hydrateTerminal(terminalId);
     } finally {
       runInAction(() => {
-        this.sessions.set(terminalId, this.createSession(terminal.data));
+        // Destroy whatever occupies the slot: the list-data reaction may have
+        // re-added a session while we awaited — overwriting it without
+        // destroying would leak its event subscriptions.
+        this.sessions.get(terminalId)?.destroy();
+        if (!this._disposed) {
+          this.sessions.set(terminalId, this.createSession(terminal.data));
+        }
       });
     }
   }
 
   dispose(): void {
+    this._disposed = true;
     this._disposeReaction();
     for (const session of this.sessions.values()) {
       session.destroy();

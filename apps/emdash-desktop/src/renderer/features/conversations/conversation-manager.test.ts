@@ -133,4 +133,58 @@ describe('ConversationManagerStore session hydration', () => {
 
     store.dispose();
   });
+
+  it('restartConversation clears a stale working indicator when the process is killed', async () => {
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const conversation = store.conversations.get('conversation-1');
+    conversation?.setWorking();
+
+    await store.restartConversation('conversation-1');
+
+    // A deliberate kill never emits agentSessionExited, so without this reset
+    // the tab would keep showing "working" while nothing runs.
+    expect(conversation?.status).toBe('idle');
+
+    store.dispose();
+  });
+
+  it('restartConversation does not create a replacement session after the store is disposed', async () => {
+    let resolveDehydrate!: () => void;
+    dehydrateConversation.mockImplementation(
+      () => new Promise<void>((resolve) => (resolveDehydrate = resolve))
+    );
+    const store = new ConversationManagerStore('project-1', 'task-1', [
+      {
+        id: 'conversation-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        providerId: 'codex',
+        title: 'Conversation 1',
+        lastInteractedAt: null,
+        isInitialConversation: false,
+      },
+    ]);
+
+    const originalSession = store.sessions.get('conversation-1');
+    expect(originalSession).toBeDefined();
+    const restart = store.restartConversation('conversation-1');
+    store.dispose();
+    resolveDehydrate();
+    await restart;
+
+    // The disposed store must not grow a fresh session that nothing will
+    // ever destroy.
+    expect(store.sessions.has('conversation-1')).toBe(false);
+  });
 });

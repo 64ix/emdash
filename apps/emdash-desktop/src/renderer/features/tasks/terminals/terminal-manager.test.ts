@@ -222,4 +222,31 @@ describe('TerminalManagerStore session hydration', () => {
 
     store.dispose();
   });
+
+  it('restartTerminal does not create a replacement session after the store is disposed', async () => {
+    let resolveStop!: (value: { success: boolean }) => void;
+    stopSession.mockImplementation(() => new Promise((resolve) => (resolveStop = resolve)));
+    const record: Terminal = {
+      id: 'terminal-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      shellId: 'system',
+      name: 'Terminal 1',
+    };
+    // Resolve with the record so the resource's demand load doesn't wipe it.
+    getTerminalsForTask.mockResolvedValue([record]);
+    const store = new TerminalManagerStore('project-1', 'task-1');
+    store.list.setValue([record]);
+
+    const originalSession = store.sessions.get('terminal-1');
+    expect(originalSession).toBeDefined();
+    const restart = store.restartTerminal('terminal-1');
+    store.dispose();
+    resolveStop({ success: true });
+    await restart;
+
+    // The disposed store must not grow a fresh session that nothing will
+    // ever destroy.
+    expect(store.sessions.has('terminal-1')).toBe(false);
+  });
 });
