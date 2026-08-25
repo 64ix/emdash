@@ -35,6 +35,9 @@ export type StageAuthorityFact =
   | { kind: 'open-spec'; issue: LinkedIssue }
   | { kind: 'provisioned-implementation' }
   | { kind: 'open-pr'; pr: StageHoldingPr }
+  /** An open *draft* PR — holds the task in Implementing until marked ready
+   * for review (same derivation as `open-pr`, different stage and copy). */
+  | { kind: 'draft-pr'; pr: StageHoldingPr }
   | { kind: 'merged-pr'; pr: StageHoldingPr }
   | {
       kind: 'triage-contradiction';
@@ -50,14 +53,15 @@ export type StageAuthority = {
   /**
    * `true` while `fact` is a GitHub fact the very next sync pass will
    * (re)assert into at least one destination if disturbed — `open-map`,
-   * `open-spec`, `open-pr`, `merged-pr`, and `triage-contradiction` (a fact
-   * that has not yet swept the persisted stage to `triage`, but will).
-   * `manual` and `provisioned-implementation` are always `false`: nothing
-   * re-derives either continuously (provisioning runs once; nothing is
-   * governed until a link/PR fact exists), so a manual move away from them is
-   * never silently overwritten. Callers use `governs` to decide whether a
-   * card must consult {@link isStageDestinationSafe} before allowing a
-   * cross-stage move; same-column reordering is always safe regardless.
+   * `open-spec`, `open-pr`, `draft-pr`, `merged-pr`, and
+   * `triage-contradiction` (a fact that has not yet swept the persisted
+   * stage to `triage`, but will). `manual` and `provisioned-implementation`
+   * are always `false`: nothing re-derives either continuously
+   * (provisioning runs once; nothing is governed until a link/PR fact
+   * exists), so a manual move away from them is never silently overwritten.
+   * Callers use `governs` to decide whether a card must consult
+   * {@link isStageDestinationSafe} before allowing a cross-stage move;
+   * same-column reordering is always safe regardless.
    */
   governs: boolean;
 };
@@ -147,7 +151,10 @@ export function deriveStageAuthority<T extends StageHoldingPr>(
 
   if (prAuthority?.isCurrentStageGithubProven && holdingPr) {
     if (holdingPr.status === 'open') {
-      return { fact: { kind: 'open-pr', pr: holdingPr }, governs: true };
+      return {
+        fact: { kind: holdingPr.isDraft ? 'draft-pr' : 'open-pr', pr: holdingPr },
+        governs: true,
+      };
     }
     if (holdingPr.status === 'merged') {
       return { fact: { kind: 'merged-pr', pr: holdingPr }, governs: true };
@@ -222,10 +229,12 @@ export function isStageDestinationSafe(
     case 'open-spec':
       return destination !== null && stageRank(destination) > stageRank('spec');
     case 'open-pr':
+    case 'draft-pr':
     case 'merged-pr':
       // `BoardSyncService.syncProject` reasserts its derived stage on every
       // non-`triage` current stage, unconditionally — no destination but
-      // `triage` escapes it.
+      // `triage` escapes it. (`draft-pr` reasserts `implementing` the same
+      // way `open-pr` reasserts `review`.)
       return false;
     case 'triage-contradiction':
       if (fact.reason.kind === 'closed-spec') {
@@ -292,6 +301,12 @@ export function describeStageAuthorityFact(fact: StageAuthorityFact): StageAutho
       return {
         fact: `Held in Review by an open PR referencing the Spec: ${prLabel(fact.pr)}.`,
         action: `This will remain in Review until ${prLabel(fact.pr)} closes or merges.`,
+        link: { url: fact.pr.url, label: prLabel(fact.pr) },
+      };
+    case 'draft-pr':
+      return {
+        fact: `In Implementing while its pull request is still a draft: ${prLabel(fact.pr)}.`,
+        action: `Mark ${prLabel(fact.pr)} ready for review to move this task to Review.`,
         link: { url: fact.pr.url, label: prLabel(fact.pr) },
       };
     case 'merged-pr':

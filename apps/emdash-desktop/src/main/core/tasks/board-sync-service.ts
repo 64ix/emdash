@@ -72,12 +72,13 @@ function specRepositoryUrlOf(linkedIssues: { spec?: { url?: string } } | null): 
  *   'done' events instead of running its own timer) and is also called directly by
  *   the `tasks.syncBoardStages` RPC when the Feature Board opens.
  * - `applyProvisionedStage` — the task-provisioned hook, which sets `implementing`
- *   for a Spec-linked task unless a stronger open/merged PR fact already proves
- *   `review`/`shipped`.
+ *   for a Spec-linked task unless a stronger PR fact already proves
+ *   `implementing` (open draft) / `review` (ready open) / `shipped` (merged).
  *
  * Every entry point honors the task's Assigned PR (CONTEXT.md "Assigned PR",
  * docs/adr/0009) as the holding fact when one is set: its own status derives
- * the stage — open → `review`, merged → `shipped`, closed-without-merge →
+ * the stage — open draft → `implementing`, ready open → `review`, merged →
+ * `shipped`, closed-without-merge →
  * `triage` — ahead of the Spec-derived matches, and unassigning falls back to
  * the Spec-derived path unchanged.
  *
@@ -231,16 +232,15 @@ export class BoardSyncService implements IInitializable, IDisposable {
       derived = derivePrStage(matches);
     }
 
-    // A current `review`/`shipped` stage is a GitHub-proven fact; the transient
-    // absence of a matching PR row (PR facts not yet synced, renamed branch)
-    // must not downgrade it to `implementing` on re-provisioning.
+    // A derived PR fact wins outright — including `implementing` from an open
+    // draft, exactly what the next `syncProject` pass would write over these
+    // same facts. A current `review`/`shipped` stage survives only when
+    // derivation found *nothing* — the transient absence of a matching PR row
+    // (facts not yet synced, renamed branch) must not downgrade it.
     const currentStage = row.workflowStage as WorkflowStage | null;
     const nextStage: WorkflowStage =
-      derived === 'review' || derived === 'shipped'
-        ? derived
-        : currentStage === 'review' || currentStage === 'shipped'
-          ? currentStage
-          : 'implementing';
+      derived ??
+      (currentStage === 'review' || currentStage === 'shipped' ? currentStage : 'implementing');
 
     await writeTaskWorkflowStage(row.id, nextStage);
   }
@@ -253,8 +253,7 @@ export class BoardSyncService implements IInitializable, IDisposable {
    * the Spec-derived match — and whether that fact currently governs the
    * *persisted* stage. Reuses the exact same matching and precedence rules
    * `syncProject`/`applyProvisionedStage` use, so the panel never derives a
-   * second, divergeable answer — including an open *draft* assignment deriving
-   * nothing and falling back to the Spec-derived matches.
+   * second, divergeable answer.
    */
   async getStageAuthority(taskId: string): Promise<TaskStageAuthority> {
     const none: TaskStageAuthority = { holdingPr: null, isCurrentStageGithubProven: false };
@@ -277,10 +276,10 @@ export class BoardSyncService implements IInitializable, IDisposable {
 
     // Assigned-PR override (CONTEXT.md "Assigned PR", docs/adr/0009): the
     // user's explicit assignment is the holding fact while it derives a stage
-    // — ready-open → `review`, merged → `shipped`, closed-without-merge →
-    // `triage`. An open *draft* derives nothing, and the Spec-derived fallback
-    // `syncProject` performs decides instead — hence the facts below load even
-    // when an assignment is set. A dangling URL (the FK's ON DELETE SET NULL
+    // — open draft → `implementing`, ready-open → `review`, merged →
+    // `shipped`, closed-without-merge → `triage`. The facts below load even
+    // when an assignment is set, so the shared derivation sees the same
+    // picture `syncProject` does. A dangling URL (the FK's ON DELETE SET NULL
     // should prevent it) reads as unassigned.
     const assignedPr = row.assignedPrUrl ? await this._prFactByUrl(row.assignedPrUrl) : null;
     if (!assignedPr && specIssueNumber == null) {

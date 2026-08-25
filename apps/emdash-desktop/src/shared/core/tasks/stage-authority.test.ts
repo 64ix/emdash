@@ -205,6 +205,28 @@ describe('deriveStageAuthority — open PR (direction-independent, mirrors deriv
   });
 });
 
+describe('deriveStageAuthority — draft PR (Implementing until ready for review)', () => {
+  it('governs Implementing through a draft-pr fact for an open draft', () => {
+    const draft = pr({ status: 'open', isDraft: true, identifier: '#80' });
+    const result = deriveStageAuthority({
+      currentStage: 'implementing',
+      prAuthority: prAuthority({ holdingPr: draft, isCurrentStageGithubProven: true }),
+      hasWorkspace: false,
+    });
+    expect(result).toEqual({ fact: { kind: 'draft-pr', pr: draft }, governs: true });
+  });
+
+  it('keeps the open-pr fact for a ready open PR', () => {
+    const ready = pr({ status: 'open', isDraft: false, identifier: '#81' });
+    const result = deriveStageAuthority({
+      currentStage: 'review',
+      prAuthority: prAuthority({ holdingPr: ready, isCurrentStageGithubProven: true }),
+      hasWorkspace: false,
+    });
+    expect(result).toEqual({ fact: { kind: 'open-pr', pr: ready }, governs: true });
+  });
+});
+
 describe('deriveStageAuthority — merged PR', () => {
   it('governs Shipped for a merged Spec-referencing PR', () => {
     const merged = pr({ status: 'merged', identifier: '#78' });
@@ -308,6 +330,7 @@ describe('isStageDestinationSafe', () => {
       { kind: 'open-map', issue: issue() },
       { kind: 'open-spec', issue: issue() },
       { kind: 'open-pr', pr: pr({ status: 'open' }) },
+      { kind: 'draft-pr', pr: pr({ status: 'open', isDraft: true }) },
       { kind: 'merged-pr', pr: pr({ status: 'merged' }) },
       { kind: 'triage-contradiction', reason: { kind: 'closed-pr', pr: pr({ status: 'closed' }) } },
     ];
@@ -328,6 +351,15 @@ describe('isStageDestinationSafe', () => {
 
   it('open-pr: no destination is safe except Triage', () => {
     const fact: StageAuthorityFact = { kind: 'open-pr', pr: pr({ status: 'open' }) };
+    const safe = allStages.filter((s) => isStageDestinationSafe(fact, s));
+    expect(safe).toEqual(['triage']);
+  });
+
+  it('draft-pr: no destination is safe except Triage (the sync reasserts Implementing)', () => {
+    const fact: StageAuthorityFact = {
+      kind: 'draft-pr',
+      pr: pr({ status: 'open', isDraft: true }),
+    };
     const safe = allStages.filter((s) => isStageDestinationSafe(fact, s));
     expect(safe).toEqual(['triage']);
   });
@@ -376,6 +408,18 @@ describe('describeStageAuthorityFact', () => {
     expect(description?.fact).toContain('#77');
     expect(description?.action).toContain('#77');
     expect(description?.link).toEqual({ url: 'https://github.com/acme/repo/pull/1', label: '#77' });
+  });
+
+  it('names the draft PR and the ready-for-review action for Implementing', () => {
+    const description = describeStageAuthorityFact({
+      kind: 'draft-pr',
+      pr: pr({ isDraft: true, identifier: '#80' }),
+    });
+    expect(description?.fact).toContain('draft');
+    expect(description?.fact).toContain('Implementing');
+    expect(description?.fact).toContain('#80');
+    expect(description?.action).toContain('ready for review');
+    expect(description?.link).toEqual({ url: 'https://github.com/acme/repo/pull/1', label: '#80' });
   });
 
   it('names the merged PR for Shipped, with no reversible action', () => {

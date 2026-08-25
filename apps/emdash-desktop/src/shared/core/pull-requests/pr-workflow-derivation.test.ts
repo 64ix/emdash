@@ -247,20 +247,26 @@ describe('derivePrStage', () => {
     expect(derivePrStage([pr({ status: 'closed' }), pr({ status: 'open' })])).toBe('review');
   });
 
-  it('does not return review for a draft PR that is not ready for review', () => {
-    expect(derivePrStage([pr({ status: 'open', isDraft: true })])).toBeNull();
+  it('returns implementing for a draft PR that is not ready for review', () => {
+    expect(derivePrStage([pr({ status: 'open', isDraft: true })])).toBe('implementing');
   });
 
   it('returns review once the draft has been marked ready (isDraft false)', () => {
     expect(derivePrStage([pr({ status: 'open', isDraft: false })])).toBe('review');
   });
 
-  it('ignores an open draft but still derives from the remaining facts', () => {
-    // The draft cannot hold the task in Review, so the older merged PR's
-    // `shipped` fact is the current truth.
+  it('an open draft still outranks an older merged PR (open beats merged)', () => {
+    // The draft is open, so it is the current truth — held in Implementing
+    // until it is marked ready for review.
     expect(derivePrStage([pr({ status: 'merged' }), pr({ status: 'open', isDraft: true })])).toBe(
-      'shipped'
+      'implementing'
     );
+  });
+
+  it('a ready open PR outranks a draft one when both are open', () => {
+    expect(
+      derivePrStage([pr({ status: 'open', isDraft: true }), pr({ status: 'open', isDraft: false })])
+    ).toBe('review');
   });
 
   it('returns shipped when a PR merged and none are open', () => {
@@ -372,7 +378,7 @@ describe('deriveTaskStageAuthorityFact', () => {
     expect(holdingPr).toBe(open);
   });
 
-  it('holds no PR while the only Spec-referencing PR is an open draft', () => {
+  it('holds the open draft — proving Implementing — while it is not ready', () => {
     const draft = pr({
       headRefName: 'feature/1',
       status: 'open',
@@ -386,10 +392,10 @@ describe('deriveTaskStageAuthorityFact', () => {
         taskBranch: null,
         prFacts: [draft],
       })
-    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
+    ).toEqual({ holdingPr: draft, isCurrentStageGithubProven: true });
   });
 
-  it('picks the ready open PR — never the draft — as the holding PR', () => {
+  it('picks the ready open PR — never an open draft — when the derived stage is review', () => {
     const draft = pr({
       headRefName: 'feature/1',
       status: 'open',
@@ -405,6 +411,25 @@ describe('deriveTaskStageAuthorityFact', () => {
         prFacts: [draft, ready],
       })
     ).toEqual({ holdingPr: ready, isCurrentStageGithubProven: true });
+  });
+
+  it('picks the open draft as the holding PR once every other match is merged or closed', () => {
+    // With no ready open PR present, the draft is what proves Implementing.
+    const draft = pr({
+      headRefName: 'spec/42-draft',
+      status: 'open',
+      isDraft: true,
+      description: null,
+    });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'shipped',
+        specIssueNumber: 42,
+        specRepositoryUrl: SPEC_REPO,
+        taskBranch: null,
+        prFacts: [pr({ headRefName: 'feature/2', status: 'merged', description: 'Re #42' }), draft],
+      })
+    ).toEqual({ holdingPr: draft, isCurrentStageGithubProven: true });
   });
 
   it('holds no PR when the only candidate lives in another repository', () => {
@@ -504,7 +529,7 @@ describe('deriveTaskStageAuthorityFact — Assigned PR override (ticket #101)', 
     ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: true });
   });
 
-  it('an assigned open draft is not ready for review — the Spec-derived fact decides instead', () => {
+  it('an assigned open draft holds Implementing — ahead of a ready Spec-derived PR', () => {
     const assignedDraft = pr({
       headRefName: 'fork-flow/branch',
       status: 'open',
@@ -520,10 +545,10 @@ describe('deriveTaskStageAuthorityFact — Assigned PR override (ticket #101)', 
         taskBranch: null,
         prFacts: [specReady],
       })
-    ).toEqual({ holdingPr: specReady, isCurrentStageGithubProven: true });
+    ).toEqual({ holdingPr: assignedDraft, isCurrentStageGithubProven: true });
   });
 
-  it('an assigned open draft on a link-less task proves nothing (declarative)', () => {
+  it('an assigned open draft is the holding fact even for a link-less task (Implementing)', () => {
     const assignedDraft = pr({
       headRefName: 'fork-flow/branch',
       status: 'open',
@@ -538,7 +563,7 @@ describe('deriveTaskStageAuthorityFact — Assigned PR override (ticket #101)', 
         taskBranch: null,
         prFacts: [],
       })
-    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
+    ).toEqual({ holdingPr: assignedDraft, isCurrentStageGithubProven: true });
   });
 
   it('is the holding fact even for a link-less task (no Spec link needed)', () => {

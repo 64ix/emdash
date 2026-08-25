@@ -166,12 +166,12 @@ describe('BoardSyncService', () => {
       expect(await stageOf(fixture.db, 'task-shipped')).toBe('shipped');
     });
 
-    // A draft is not ready for review — the task must stay where it is until
-    // the PR is marked ready.
-    it('leaves a Spec-linked task untouched while its PR is an open draft', async () => {
+    // A draft is not ready for review — the task sits in Implementing while
+    // the PR is a draft, and only reaches Review once it is marked ready.
+    it('holds a Spec-linked task in implementing while its PR is an open draft', async () => {
       await insertTask(fixture.db, {
         id: 'task-draft',
-        workflowStage: 'implementing',
+        workflowStage: 'spec',
         linkedIssues: specLink('#103'),
       });
       await insertPr(fixture.db, {
@@ -185,10 +185,25 @@ describe('BoardSyncService', () => {
       await service.syncProject(PROJECT_ID);
 
       expect(await stageOf(fixture.db, 'task-draft')).toBe('implementing');
-      expect(mocks.emit).not.toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'task:workflow-stage-updated' }),
-        expect.objectContaining({ taskId: 'task-draft' })
-      );
+    });
+
+    it('pulls a Review task back to implementing when its PR is converted back to draft', async () => {
+      await insertTask(fixture.db, {
+        id: 'task-redrafted',
+        workflowStage: 'review',
+        linkedIssues: specLink('#105'),
+      });
+      await insertPr(fixture.db, {
+        url: `${REPOSITORY_URL}/pull/7`,
+        headRefName: 'feature/7',
+        status: 'open',
+        description: 'Closes #105',
+        isDraft: true,
+      });
+
+      await service.syncProject(PROJECT_ID);
+
+      expect(await stageOf(fixture.db, 'task-redrafted')).toBe('implementing');
     });
 
     it('puts a Spec-linked task in review once its draft PR is marked ready', async () => {
@@ -409,10 +424,10 @@ describe('BoardSyncService', () => {
       expect(await stageOf(fixture.db, 'task-assigned-closed')).toBe('triage');
     });
 
-    // An assigned *draft* is not ready for review — it derives nothing, and
-    // the Spec-derived fact (here: none) decides, exactly like syncProject's
-    // own fallback.
-    it('leaves a task untouched when its assigned PR is still an open draft', async () => {
+    // An assigned *draft* is not ready for review — it holds the task in
+    // Implementing (its own GitHub-proven fact), exactly like the periodic
+    // pass.
+    it('puts a task in implementing when its assigned PR is still an open draft', async () => {
       await insertTask(fixture.db, { id: 'task-assigned-draft', linkedIssues: null });
       await insertPr(fixture.db, {
         url: `${REPOSITORY_URL}/pull/26`,
@@ -428,7 +443,7 @@ describe('BoardSyncService', () => {
 
       await service.syncProject(PROJECT_ID);
 
-      expect(await stageOf(fixture.db, 'task-assigned-draft')).toBeNull();
+      expect(await stageOf(fixture.db, 'task-assigned-draft')).toBe('implementing');
     });
 
     it('derives a stage for a link-less task once a PR is assigned to it', async () => {
