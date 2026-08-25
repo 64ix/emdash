@@ -63,10 +63,10 @@ Board.
 
 Stage authority is hybrid: GitHub is authoritative for every stage it can
 prove (`exploring` = open Map, `spec` = open Spec issue, `review` = open
-PR — the task's [Assigned PR](#assigned-pr) when one is set, else one
-referencing the Spec, `shipped` = that PR merged); the agent or user
-declares the rest (`idea`, `implementing`). A GitHub fact always wins over
-a manual placement.
+ready-for-review PR, `implementing` = open PR still in draft — the task's
+[Assigned PR](#assigned-pr) when one is set, else one referencing the Spec,
+`shipped` = that PR merged); the agent or user declares the rest (`idea`).
+A GitHub fact always wins over a manual placement.
 
 ## Triage
 
@@ -168,12 +168,12 @@ derivation (see [Assigned PR](#assigned-pr)).
 The Pull Request a user has explicitly attached to a task. Persisted on
 the task, at most one per task. When set, it overrides every derived PR
 (branch match or Spec reference) for display and for the Workflow Stage:
-an open Assigned PR proves `review`, a merged one proves `shipped`, a
-closed unmerged one sends the task to Triage — the same semantics as the
-Spec-derived PR. Unassigning reverts to derivation. Any PR synced for the
-task's project can be assigned; it need not reference the Spec nor match
-the task's branch, and it stays displayed even when derivation finds
-nothing.
+a ready open Assigned PR proves `review`, an open draft one proves
+`implementing`, a merged one proves `shipped`, a closed unmerged one
+sends the task to Triage — the same semantics as the Spec-derived PR.
+Unassigning reverts to derivation. Any PR synced for the task's project
+can be assigned; it need not reference the Spec nor match the task's
+branch, and it stays displayed even when derivation finds nothing.
 
 ## Unstaged
 
