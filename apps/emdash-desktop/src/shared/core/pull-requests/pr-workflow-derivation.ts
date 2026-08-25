@@ -23,6 +23,13 @@ export type PrWorkflowFact = {
   headRefName: string;
   status: PullRequestStatus;
   description: string | null;
+  /**
+   * Whether the PR is still a GitHub draft. A draft is not yet ready for
+   * review, so an open draft proves nothing about the `review` stage — only
+   * a ready (non-draft) open PR holds a task there. Load-bearing for
+   * derivation, not display: callers must load the column, never guess it.
+   */
+  isDraft: boolean;
 };
 
 /** The PR-provable stages this ticket derives. `exploring`/`spec` are derived elsewhere (issue sync). */
@@ -200,11 +207,13 @@ export function findSpecMatchingPrs<T extends PrWorkflowFact>(
 /**
  * Derives the single most decisive PR-provable stage from a task's matching PRs.
  * Open beats merged beats closed — an open PR (e.g. a follow-up) is the current
- * truth even if an earlier matching PR was merged or closed. Returns `null` when
- * no matching PR proves anything (caller must leave the task's stage untouched).
+ * truth even if an earlier matching PR was merged or closed. A draft open PR is
+ * *not* ready for review, so it proves nothing about `review` — the stage waits
+ * for the ready-for-review flip (`isDraft` → false). Returns `null` when no
+ * matching PR proves anything (caller must leave the task's stage untouched).
  */
 export function derivePrStage(prs: readonly PrWorkflowFact[]): PrDerivedStage | null {
-  if (prs.some((pr) => pr.status === 'open')) return 'review';
+  if (prs.some((pr) => pr.status === 'open' && !pr.isDraft)) return 'review';
   if (prs.some((pr) => pr.status === 'merged')) return 'shipped';
   if (prs.some((pr) => pr.status === 'closed')) return 'triage';
   return null;
@@ -256,12 +265,13 @@ export function deriveTaskStageAuthorityFact<T extends PrWorkflowFact>(input: {
   currentStage: WorkflowStage | null;
   /**
    * The task's Assigned PR fact (CONTEXT.md "Assigned PR", docs/adr/0009):
-   * when set it is the holding fact — open proves `review`, merged proves
-   * `shipped`, closed-without-merge proves `triage` — ahead of every
+   * when set it is the holding fact — a ready open PR proves `review`, merged
+   * proves `shipped`, closed-without-merge proves `triage` — ahead of every
    * Spec-derived match, with the same "proven unless the persisted stage is
-   * `triage`" rule. Independent of the Spec link: a link-less task with an
-   * assigned PR still has an authority fact. `null`/`undefined` reads as
-   * unassigned, in which case the Spec-derived authority applies unchanged.
+   * `triage`" rule. An open *draft* derives nothing, so the Spec-derived
+   * authority applies unchanged (the same fallback `syncProject` performs).
+   * Independent of the Spec link: a link-less task with an assigned PR still
+   * has an authority fact. `null`/`undefined` reads as unassigned.
    */
   assignedPr?: T | null;
   specIssueNumber: number | null;
@@ -270,11 +280,17 @@ export function deriveTaskStageAuthorityFact<T extends PrWorkflowFact>(input: {
   taskBranch?: string | null;
   prFacts: readonly T[];
 }): TaskStageAuthorityFact<T> {
-  if (input.assignedPr) {
-    // `PullRequestStatus` is always one of open/merged/closed, so a single
-    // assigned PR always derives a stage — the same mapping and the same
-    // "never proven while persisted `triage`" rule as the Spec-derived path
-    // below (the periodic pass never revisits a triaged task).
+  if (
+    input.assignedPr &&
+    // An assigned PR is the holding fact only while it derives a stage: an
+    // open *draft* is not ready for review yet, so — exactly like
+    // `syncProject`'s own fallback — the Spec-derived matches get their say.
+    derivePrStage([input.assignedPr])
+  ) {
+    // `PullRequestStatus` is always one of open/merged/closed, so the assigned
+    // PR derives a stage here — the same mapping and the same "never proven
+    // while persisted `triage`" rule as the Spec-derived path below (the
+    // periodic pass never revisits a triaged task).
     return {
       holdingPr: input.assignedPr,
       isCurrentStageGithubProven: input.currentStage !== 'triage',
@@ -297,7 +313,13 @@ export function deriveTaskStageAuthorityFact<T extends PrWorkflowFact>(input: {
 
   const holdingStatus: PullRequestStatus =
     derivedStage === 'review' ? 'open' : derivedStage === 'shipped' ? 'merged' : 'closed';
-  const holdingPr = matches.find((pr) => pr.status === holdingStatus) ?? null;
+  // The holding PR must satisfy the exact predicate the stage was proven with:
+  // for `review` that is a *ready* open PR — a draft in `matches` never
+  // derived the stage, so it must not be picked as the fact that holds it.
+  const holdingPr =
+    matches.find(
+      (pr) => pr.status === holdingStatus && (holdingStatus !== 'open' || !pr.isDraft)
+    ) ?? null;
 
   return {
     holdingPr,

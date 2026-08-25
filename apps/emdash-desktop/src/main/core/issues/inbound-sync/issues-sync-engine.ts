@@ -339,6 +339,7 @@ export class IssuesSyncEngine {
         headRefName: pullRequests.headRefName,
         status: pullRequests.status,
         description: pullRequests.description,
+        isDraft: pullRequests.isDraft,
       })
       .from(pullRequests)
       .where(and(eq(pullRequests.repositoryUrl, repositoryUrl), eq(pullRequests.status, 'merged')));
@@ -347,6 +348,7 @@ export class IssuesSyncEngine {
       headRefName: row.headRefName,
       status: row.status as PrWorkflowFact['status'],
       description: row.description ?? null,
+      isDraft: Boolean(row.isDraft),
     }));
   }
 }

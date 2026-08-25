@@ -19,6 +19,7 @@ function pr(overrides: Partial<PrWorkflowFact> = {}): PrWorkflowFact {
     headRefName: 'feature/default',
     status: 'open',
     description: null,
+    isDraft: false,
     ...overrides,
   };
 }
@@ -246,6 +247,22 @@ describe('derivePrStage', () => {
     expect(derivePrStage([pr({ status: 'closed' }), pr({ status: 'open' })])).toBe('review');
   });
 
+  it('does not return review for a draft PR that is not ready for review', () => {
+    expect(derivePrStage([pr({ status: 'open', isDraft: true })])).toBeNull();
+  });
+
+  it('returns review once the draft has been marked ready (isDraft false)', () => {
+    expect(derivePrStage([pr({ status: 'open', isDraft: false })])).toBe('review');
+  });
+
+  it('ignores an open draft but still derives from the remaining facts', () => {
+    // The draft cannot hold the task in Review, so the older merged PR's
+    // `shipped` fact is the current truth.
+    expect(derivePrStage([pr({ status: 'merged' }), pr({ status: 'open', isDraft: true })])).toBe(
+      'shipped'
+    );
+  });
+
   it('returns shipped when a PR merged and none are open', () => {
     expect(derivePrStage([pr({ status: 'closed' }), pr({ status: 'merged' })])).toBe('shipped');
   });
@@ -355,6 +372,41 @@ describe('deriveTaskStageAuthorityFact', () => {
     expect(holdingPr).toBe(open);
   });
 
+  it('holds no PR while the only Spec-referencing PR is an open draft', () => {
+    const draft = pr({
+      headRefName: 'feature/1',
+      status: 'open',
+      isDraft: true,
+      description: 'Closes #42',
+    });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [draft],
+      })
+    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
+  });
+
+  it('picks the ready open PR — never the draft — as the holding PR', () => {
+    const draft = pr({
+      headRefName: 'feature/1',
+      status: 'open',
+      isDraft: true,
+      description: 'Closes #42',
+    });
+    const ready = pr({ headRefName: 'feature/2', status: 'open', description: 'Re #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [draft, ready],
+      })
+    ).toEqual({ holdingPr: ready, isCurrentStageGithubProven: true });
+  });
+
   it('holds no PR when the only candidate lives in another repository', () => {
     const foreign = pr({ repositoryUrl: OTHER_REPO, status: 'merged', description: 'Closes #42' });
     expect(
@@ -450,6 +502,43 @@ describe('deriveTaskStageAuthorityFact — Assigned PR override (ticket #101)', 
         prFacts: [specMerged],
       })
     ).toEqual({ holdingPr: assigned, isCurrentStageGithubProven: true });
+  });
+
+  it('an assigned open draft is not ready for review — the Spec-derived fact decides instead', () => {
+    const assignedDraft = pr({
+      headRefName: 'fork-flow/branch',
+      status: 'open',
+      isDraft: true,
+      description: null,
+    });
+    const specReady = pr({ headRefName: 'feature/1', status: 'open', description: 'Closes #42' });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        assignedPr: assignedDraft,
+        specIssueNumber: 42,
+        taskBranch: null,
+        prFacts: [specReady],
+      })
+    ).toEqual({ holdingPr: specReady, isCurrentStageGithubProven: true });
+  });
+
+  it('an assigned open draft on a link-less task proves nothing (declarative)', () => {
+    const assignedDraft = pr({
+      headRefName: 'fork-flow/branch',
+      status: 'open',
+      isDraft: true,
+      description: null,
+    });
+    expect(
+      deriveTaskStageAuthorityFact({
+        currentStage: 'implementing',
+        assignedPr: assignedDraft,
+        specIssueNumber: null,
+        taskBranch: null,
+        prFacts: [],
+      })
+    ).toEqual({ holdingPr: null, isCurrentStageGithubProven: false });
   });
 
   it('is the holding fact even for a link-less task (no Spec link needed)', () => {
